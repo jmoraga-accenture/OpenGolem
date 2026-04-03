@@ -104,3 +104,22 @@ These feed PSYCHE.md's drift detection thresholds. A `security_failures_per_call
 **Rationale:** NanoClaw's container isolation, filesystem IPC, and SQLite patterns are proven. The OpenGolem-specific additions (Token Broker, Call Inspector, agents, governance) are the unknowns. Proving those unknowns in TypeScript first — where iteration is fast — reduces the risk of discovering design flaws after a full Rust rewrite.
 
 The Rust rewrite (Phase 2) proceeds crate-by-crate, replacing TypeScript components at the Unix socket boundary, with shadow validation before each switch.
+
+---
+
+## Decision 8: Credential Backends
+
+**Question:** Must OpenGolem commit to a single secret store (e.g. Bitwarden only), or support multiple provisioning models?
+
+**Decision:** Support **three** selectable credential backends, all behind the Token Broker:
+
+1. **`.env` / file** — development and minimal installs; clearly labeled as weak for multi-tenant or high-threat deployments.
+2. **Bitwarden** — **recommended default** for production self-host (user-owned vault, auditable access patterns).
+3. **OneCLI** ([Agent Vault](https://github.com/onecli/onecli)) — **optional**, for users who already run OneCLI or want NanoClaw-equivalent proxy injection. Enabled only when the gateway meets documented security constraints (local bind, network isolation, TLS where appropriate). Tools sold under similar names (“OpenCLI”) are **not** the same product; they require a separate ADR before inclusion.
+
+**Rationale:** One backend forces migration pain and excludes valid operator preferences. The broker + inspector remain the consistent enforcement layer; only the *source* of long-lived secrets varies.
+
+**Implications:**
+- Configuration surface: one active backend per deployment (`OPENGOLEM_CREDENTIAL_BACKEND` or equivalent — exact name to be fixed in M2).
+- Documentation must state default recommendation (Bitwarden) and threat model for each mode.
+- M2 implements the interface and at least stub/tests for all three paths.

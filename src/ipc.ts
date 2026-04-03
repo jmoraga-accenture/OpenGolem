@@ -214,6 +214,12 @@ export async function processTaskIpc(
 
         const scheduleType = data.schedule_type as 'cron' | 'interval' | 'once';
 
+        // SECURITY: Reject oversized schedule strings before handing to parsers.
+        if (typeof data.schedule_value === 'string' && data.schedule_value.length > 200) {
+          logger.warn({ length: data.schedule_value.length }, 'Schedule value too long — rejected');
+          return;
+        }
+
         let nextRun: string | null = null;
         if (scheduleType === 'cron') {
           try {

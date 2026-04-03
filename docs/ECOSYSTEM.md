@@ -30,7 +30,7 @@ OpenGolem draws architectural DNA from both NanoClaw and MicroClaw, but is not a
 - Single Node.js orchestrator process
 - Agents run in Linux containers (Docker or Apple Container) — one container per agent group
 - Filesystem-based IPC: host writes commands to a file; container reads, executes, writes result back
-- Sentinel protocol: stdout wrapped in `---NANOCLAW_OUTPUT_START---` / `---NANOCLAW_OUTPUT_END---` markers containing JSON `ContainerOutput` objects
+- Sentinel protocol: stdout wrapped in marker lines around JSON `ContainerOutput` objects (NanoClaw historically used `---NANOCLAW_OUTPUT_*---`; **OpenGolem** uses `---OPENGOLEM_OUTPUT_START---` / `---OPENGOLEM_OUTPUT_END---`)
 - Per-group `CLAUDE.md` memory files mounted read-only into containers
 - SQLite (`better-sqlite3`) for messages, sessions, state
 - Uses Anthropic Claude Agent SDK directly inside containers (not a custom agent loop)
@@ -40,7 +40,7 @@ OpenGolem draws architectural DNA from both NanoClaw and MicroClaw, but is not a
 
 NanoClaw's key security innovation: credentials never enter containers. The **OneCLI** external proxy intercepts HTTPS traffic from within the container and injects API keys at the proxy level, with per-agent rate limits and access policies. The container holds only a gateway URL, not a real API key.
 
-OpenGolem internalizes this concept as the **Token Broker** — same principle (agents never hold raw credentials), but implemented natively in Rust rather than relying on an external service.
+OpenGolem internalizes this principle as the **Token Broker** plus **Call Inspector** — agents never hold raw credentials. The broker can source secrets from **Bitwarden**, a **`.env`** file (dev), or optionally **reuse OneCLI’s Agent Vault** when configured securely (local gateway), so NanoClaw operators are not forced to migrate vaults on day one.
 
 ### Channels
 
@@ -118,7 +118,7 @@ Built-in React+Vite UI embedded in the binary, served at `127.0.0.1:10961`. Open
 |---|---|---|---|
 | Language | TypeScript | Rust | Rust (Phase 2); TypeScript fork (Phase 1) |
 | Agent runtime | Claude Agent SDK in containers | Own agentic loop | Claude Agent SDK in containers (Phase 1) |
-| Credential model | OneCLI external proxy | env vars / config | Token Broker (internal, native) |
+| Credential model | OneCLI external proxy | env vars / config | Token Broker + backends (`.env` / Bitwarden / OneCLI) |
 | Channels | Skills-based (not in core) | Built-in adapters | TUI, Teams, Telegram, WhatsApp |
 | Memory | Per-group CLAUDE.md | AGENTS.md 3-tier + SQLite | CLAUDE.md + semantic graph (SQLite+vec) |
 | Config model | Fork-and-own, no config files | YAML config file | Fork-and-own, no config files |

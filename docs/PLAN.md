@@ -1,5 +1,22 @@
 # OpenGolem — Implementation Plan
-*Produced: April 2026*
+*Produced: April 2026 | Last updated: 2026-04-03 | Tracks SPECS.md v0.4*
+
+---
+
+## Status
+
+| Milestone | Status | Notes |
+|---|---|---|
+| M1 — Repository Scaffold | ✅ Complete | NanoClaw copied, stripped, security-hardened, builds clean (246 tests pass) |
+| M2 — Token Broker | 🔲 Not started | |
+| M3 — Call Inspector | 🔲 Not started | |
+| M4 — Channel Adapters (TUI + Teams) | 🔲 Not started | |
+| M5 — Jiminy Cricket + SOUL.md | 🔲 Not started | |
+| M6 — Safety Agent + Security Agent + dao_score | 🔲 Not started | |
+| M7 — TUI Health Dashboard | 🔲 Not started | |
+| M8 — Skill Schema | 🔲 Not started | |
+| M9 — Integration + Hardening | 🔲 Not started | |
+| **Phase 2 — OpenGolem-RS** | 🔲 Not started | Begins after M9 |
 
 ---
 
@@ -25,12 +42,12 @@ The NanoClaw fork lives in `.background/repos/nanoclaw`. It is excluded from ver
 | SQLite for messages/sessions/state | Keep | Schema extended, not replaced |
 | Anthropic Claude Agent SDK in containers | Keep | Agents unchanged inside containers |
 | Skills via Claude Code slash commands | Keep | Schema extended with `.intent.md` |
-| OneCLI credential proxy | **Replace** | Token Broker replaces this entirely |
+| OneCLI-only credential proxy | **Replace** | Token Broker + Call Inspector own mediation; **OneCLI remains optional** as a credential *backend* (Agent Vault), same security model as NanoClaw when configured locally |
 | Discord channel | **Remove** | Out of scope |
 | Slack channel | **Remove** | Out of scope |
 | Gmail channel | **Remove** | Out of scope |
 | Call Inspector | **New** | No NanoClaw equivalent |
-| Token Broker | **New** | Replaces OneCLI |
+| Token Broker | **New** | Issues opaque tokens; resolves real secrets via user-chosen backend: `.env`, Bitwarden CLI, or OneCLI |
 | Security Modes | **New** | No NanoClaw equivalent |
 | TUI channel | **New** | No NanoClaw equivalent |
 | Microsoft Teams channel | **New** | No NanoClaw equivalent |
@@ -78,7 +95,9 @@ The Call Inspector is middleware inside the orchestrator's outbound call path �
 
 ---
 
-### Milestone 1: Repository Scaffold and NanoClaw Fork Baseline
+### Milestone 1: Repository Scaffold and NanoClaw Fork Baseline ✅ Complete
+
+**Completed:** April 2026 — 246 tests passing, clean build.
 
 **Goal:** Establish the OpenGolem-TS codebase from the NanoClaw fork. Remove out-of-scope channels. Add empty module stubs for new components.
 
@@ -100,11 +119,32 @@ The Call Inspector is middleware inside the orchestrator's outbound call path �
 
 **Gate:** `npm run build` passes; Telegram and WhatsApp adapters initialize; no Discord/Slack/Gmail references in `src/`.
 
+**What was actually done (deviations from plan):**
+- Security audit of NanoClaw source performed before copy; all Tier 1 and most Tier 2 findings fixed during M1 rather than deferred to M9. See `docs/SECURITY_AUDIT.md`.
+- OneCLI replaced immediately (was planned for M2) with a native credential proxy (`src/credential-proxy.ts`) to unblock local testing. The Token Broker in M2 will replace this proxy.
+- Sentinel markers rebranded from `NANOCLAW_OUTPUT_*` to `OPENGOLEM_OUTPUT_*` in both host and container.
+- All `nanoclaw` references in service names, config paths, container names, and log files rebranded to `opengolem`.
+- `src/broker/`, `src/inspector/`, `src/audit/`, `src/agents/`, `src/tui/`, `src/dao/` stub directories not yet created — deferred to respective milestones rather than adding empty files.
+- `SOUL.md` and `PSYCHE.md` placeholder files not yet created — deferred to M5/M6.
+
+**Credential path in M1:**
+`src/credential-proxy.ts` is the only active credential mechanism. It reads `CLAUDE_CODE_OAUTH_TOKEN` (preferred), then `ANTHROPIC_AUTH_TOKEN`, then `ANTHROPIC_API_KEY` from `.env` and injects the auth header into every outbound call before passing it upstream. It starts automatically on `npm start`. **`.env` is the only supported credential backend in M1.** OneCLI Agent Vault backend support lands in M2 as one of the three pluggable `CredentialBackend` implementations.
+
+**No channel adapters are active in M1.** All channel imports in `src/channels/index.ts` are commented out — channels are skills, not bundled core code. The TUI channel (M4) is not yet built. To route real messages through OpenGolem, apply a channel skill (`/add-telegram` is the fastest path for testing; it fetches `src/channels/telegram.ts` from the NanoClaw-Telegram repo and adapts it).
+
 ---
 
-### Milestone 2: Token Broker (Node.js)
+### Milestone 2: Token Broker (Node.js) 🔲 Not started
 
-**Goal:** Internal Node.js process on a Unix socket. Holds raw credentials (Bitwarden CLI). Issues scoped opaque tokens. Replaces OneCLI entirely.
+**Goal:** Internal Node.js process on a Unix socket. Issues scoped opaque tokens. Resolves API credentials through a **pluggable backend** (see below). Call Inspector + broker still mediate every outbound path; agents never hold raw secrets.
+
+**Credential backends (exactly one active via config):**
+
+| Backend | Use case | Security notes |
+|---|---|---|
+| **`.env` / file** | Local dev, minimal setup | Secrets on disk; acceptable only in trusted single-user environments. Document as non-default for production. |
+| **Bitwarden** | Recommended default for self-host | User-owned vault; broker invokes `bw` (or equivalent) to fetch items; no vendor-hosted secret store required beyond Bitwarden’s normal sync. |
+| **OneCLI** (Agent Vault) | Parity with NanoClaw / existing installs | [onecli/onecli](https://github.com/onecli/onecli) gateway injects credentials at the proxy; containers never see raw keys. **Supported only when** the gateway is bound to loopback (or an equivalently vetted network posture), TLS where applicable, and a short security checklist in `docs/` is satisfied — same bar as NanoClaw’s model. *Unrelated tools marketed as “OpenCLI” are out of scope unless explicitly evaluated and adopted later.* |
 
 **Token structure (JWT payload, internal to broker):**
 ```json
@@ -129,9 +169,9 @@ Tokens are HMAC-SHA256 signed. The signing key is generated fresh at each broker
 **Key files:**
 - `src/broker/server.ts` — Unix socket listener
 - `src/broker/token.ts` — HMAC-SHA256 JWT encode/sign/verify
-- `src/broker/credentials.ts` — Bitwarden CLI integration; `.env` fallback for local dev
+- `src/broker/credentials/` — `CredentialBackend` interface; `env.ts`, `bitwarden.ts`, `onecli.ts` implementations; factory from `OPENGOLEM_CREDENTIAL_BACKEND` (names TBD; align with `src/config.ts`)
 
-**Gate:** Issue/verify/revoke unit tests pass. Budget exhaustion and container-binding rejection tested. Zero `ANTHROPIC_API_KEY` references outside `src/broker/credentials.ts`.
+**Gate:** Issue/verify/revoke unit tests pass. Budget exhaustion and container-binding rejection tested. Zero `ANTHROPIC_API_KEY` references outside `src/broker/credentials/`. Each backend has at least one integration or contract test (OneCLI may use mocked gateway).
 
 ---
 

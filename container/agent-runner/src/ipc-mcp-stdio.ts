@@ -1,5 +1,5 @@
 /**
- * Stdio MCP Server for NanoClaw
+ * Stdio MCP Server for OpenGolem
  * Standalone process that agent teams subagents can inherit.
  * Reads context from environment variables, writes IPC files for the host.
  */
@@ -16,9 +16,14 @@ const MESSAGES_DIR = path.join(IPC_DIR, 'messages');
 const TASKS_DIR = path.join(IPC_DIR, 'tasks');
 
 // Context from environment variables (set by the agent runner)
-const chatJid = process.env.NANOCLAW_CHAT_JID!;
-const groupFolder = process.env.NANOCLAW_GROUP_FOLDER!;
-const isMain = process.env.NANOCLAW_IS_MAIN === '1';
+const chatJid = process.env.OPENGOLEM_CHAT_JID;
+const groupFolder = process.env.OPENGOLEM_GROUP_FOLDER;
+const isMain = process.env.OPENGOLEM_IS_MAIN === '1';
+if (!chatJid || !groupFolder) {
+  throw new Error(
+    'OPENGOLEM_CHAT_JID and OPENGOLEM_GROUP_FOLDER environment variables are required',
+  );
+}
 
 function writeIpcFile(dir: string, data: object): string {
   fs.mkdirSync(dir, { recursive: true });
@@ -35,7 +40,7 @@ function writeIpcFile(dir: string, data: object): string {
 }
 
 const server = new McpServer({
-  name: 'nanoclaw',
+  name: 'opengolem',
   version: '1.0.0',
 });
 

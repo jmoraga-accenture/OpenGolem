@@ -1,5 +1,5 @@
-# OpenGolem — Architecture Specification v0.3
-*Last updated: April 2026*
+# OpenGolem — Architecture Specification v0.4
+*Last updated: 2026-04-03 07:00*
 
 ---
 
@@ -40,7 +40,7 @@ SOUL.md (identity and guardrails) and PSYCHE.md (self-improvement contract) are 
 | Core runtime | Rust | Auditability, memory safety, no GC pauses, concrete ecosystem advantages over alternatives |
 | Plugin system | Python plugins via FFI | Rich ML/AI ecosystem without contaminating the core |
 | Container runtime | Docker Sandboxes (micro-VM) / Apple Container (macOS) | OS-level isolation, not application-level checks |
-| Credential store | Bitwarden | User-owned, auditable, no vendor lock-in |
+| Credential store | Pluggable (see §5.1) | `.env` (dev), **Bitwarden** (recommended production default), or **OneCLI** Agent Vault (NanoClaw-compatible; only when configured to a vetted local gateway). Unrelated “OpenCLI” products are not assumed — the supported third option is [OneCLI](https://github.com/onecli/onecli). |
 | Memory persistence | SQLite + semantic graph | Lightweight, transparent, no message brokers |
 | IPC | Filesystem-based | Simple, inspectable, no hidden state |
 | Memory sync | Optional Obsidian vault | Power-user integration, not a dependency |
@@ -89,7 +89,13 @@ Contexts cannot access each other's data. This is enforced by the OS, not by the
 
 ### 5.1 Token Broker
 
-The Token Broker is the smallest, most auditable component in the codebase. It is pure Rust, no plugins, no dynamic loading. It holds raw API credentials in Bitwarden and never exposes them outside the broker process.
+The Token Broker is the smallest, most auditable component in the codebase. Phase 2 targets pure Rust with no dynamic loading. It **never gives agents raw API credentials**; it obtains secrets through exactly one configured **credential backend**:
+
+1. **`.env` / file** — for development and trusted single-user machines. Lowest assurance; must not be the documented default for production.
+2. **Bitwarden** — recommended for self-hosted production: user-owned vault, broker retrieves items via CLI (or later, a narrowed integration), secrets stay out of container filesystems and agent prompts.
+3. **OneCLI** (Agent Vault) — optional: same architecture as NanoClaw (outbound HTTPS via local gateway, injection at the proxy). **Admissible only** when the deployment satisfies a short security checklist (e.g. loopback-bound gateway, TLS as required, no exposure of the vault API to untrusted networks). If those conditions are not met, the operator must use Bitwarden or `.env` on an isolated host.
+
+The broker process (and the OneCLI gateway process, if used) are the only components that ever see long-lived secrets; agents hold derivative tokens only.
 
 At task instantiation, the broker issues a derivative token encoding:
 
@@ -98,7 +104,7 @@ At task instantiation, the broker issues a derivative token encoding:
 - **Permitted data scopes** — which memory partitions are readable/writable
 - **Originating container ID** — token is bound to the container that requested it
 
-The broker is the only process that ever makes a real API call. Agents hold derivative tokens that are valid only for the declared task window.
+Outbound API calls are executed only after broker (and Call Inspector) authorization. With the Bitwarden or `.env` backends, the broker attaches credentials at the last hop. With the OneCLI backend, credential injection may occur in the OneCLI gateway while the broker still issues and enforces derivative tokens. Agents hold derivative tokens that are valid only for the declared task window.
 
 ### 5.2 Call Inspector
 
@@ -241,7 +247,7 @@ OpenGolem's differentiators are: the Token Broker and mediated execution layer (
 
 ## 13. Open Questions (v0.3)
 
-- Token broker key management: Bitwarden CLI integration vs. native secrets manager — needs spike
+- Credential backends: spike Bitwarden CLI session UX (`bw unlock`) vs. OS keychain helpers; spike OneCLI SDK contract vs. HTTP-only integration for the broker
 - Semantic graph implementation: sqlite-vec vs. dedicated embedding store — evaluate MicroClaw's approach
 - dao_score schema: define initial KPI set before PSYCHE.md is written
 - Assertiveness dial: interaction pattern for moving between security modes needs UX design

@@ -4,8 +4,8 @@
  */
 import fs from 'fs';
 import path from 'path';
-import os from 'os';
 
+import { MOUNT_ALLOWLIST_PATH } from '../src/config.js';
 import { logger } from '../src/logger.js';
 import { isRoot } from './platform.js';
 import { emitStatus } from './status.js';
@@ -27,8 +27,7 @@ function parseArgs(args: string[]): { empty: boolean; json: string; force: boole
 
 export async function run(args: string[]): Promise<void> {
   const { empty, json, force } = parseArgs(args);
-  const homeDir = os.homedir();
-  const configDir = path.join(homeDir, '.config', 'nanoclaw');
+  const configDir = path.dirname(MOUNT_ALLOWLIST_PATH);
   const configFile = path.join(configDir, 'mount-allowlist.json');
 
   if (isRoot()) {

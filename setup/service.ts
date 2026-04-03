@@ -264,7 +264,7 @@ WantedBy=${runningAsRoot ? 'multi-user.target' : 'default.target'}`;
     );
   }
 
-  // Kill orphaned nanoclaw processes to avoid channel connection conflicts
+  // Kill orphaned OpenGolem processes to avoid channel connection conflicts
   killOrphanedProcesses(projectRoot);
 
   // Enable lingering so the user service survives SSH logout.
@@ -333,12 +333,12 @@ function setupNohupFallback(
 ): void {
   logger.warn('No systemd detected — generating nohup wrapper script');
 
-  const wrapperPath = path.join(projectRoot, 'start-nanoclaw.sh');
-  const pidFile = path.join(projectRoot, 'nanoclaw.pid');
+  const wrapperPath = path.join(projectRoot, 'start-opengolem.sh');
+  const pidFile = path.join(projectRoot, 'opengolem.pid');
 
   const lines = [
     '#!/bin/bash',
-    '# start-nanoclaw.sh — Start NanoClaw without systemd',
+    '# start-opengolem.sh — Start OpenGolem without systemd',
     `# To stop: kill \\$(cat ${pidFile})`,
     '',
     'set -euo pipefail',
@@ -349,19 +349,19 @@ function setupNohupFallback(
     `if [ -f ${JSON.stringify(pidFile)} ]; then`,
     `  OLD_PID=$(cat ${JSON.stringify(pidFile)} 2>/dev/null || echo "")`,
     '  if [ -n "$OLD_PID" ] && kill -0 "$OLD_PID" 2>/dev/null; then',
-    '    echo "Stopping existing NanoClaw (PID $OLD_PID)..."',
+    '    echo "Stopping existing OpenGolem (PID $OLD_PID)..."',
     '    kill "$OLD_PID" 2>/dev/null || true',
     '    sleep 2',
     '  fi',
     'fi',
     '',
-    'echo "Starting NanoClaw..."',
+    'echo "Starting OpenGolem..."',
     `nohup ${JSON.stringify(nodePath)} ${JSON.stringify(projectRoot + '/dist/index.js')} \\`,
     `  >> ${JSON.stringify(projectRoot + '/logs/opengolem.log')} \\`,
     `  2>> ${JSON.stringify(projectRoot + '/logs/opengolem.error.log')} &`,
     '',
     `echo $! > ${JSON.stringify(pidFile)}`,
-    'echo "NanoClaw started (PID $!)"',
+    'echo "OpenGolem started (PID $!)"',
     `echo "Logs: tail -f ${projectRoot}/logs/opengolem.log"`,
   ];
   const wrapper = lines.join('\n') + '\n';
