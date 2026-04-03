@@ -5,6 +5,54 @@ import path from 'path';
 import { describe, expect, it, vi } from 'vitest';
 
 describe('database migrations', () => {
+  it('assertiveness_level column is added and defaults to 10', async () => {
+    const repoRoot = process.cwd();
+    const tempDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), 'opengolem-db-assertiveness-'),
+    );
+    try {
+      process.chdir(tempDir);
+      fs.mkdirSync(path.join(tempDir, 'store'), { recursive: true });
+
+      // Create legacy DB without assertiveness_level column
+      const dbPath = path.join(tempDir, 'store', 'messages.db');
+      const legacyDb = new Database(dbPath);
+      legacyDb.exec(`
+        CREATE TABLE registered_groups (
+          jid TEXT PRIMARY KEY,
+          name TEXT NOT NULL,
+          folder TEXT NOT NULL UNIQUE,
+          trigger_pattern TEXT NOT NULL,
+          added_at TEXT NOT NULL,
+          container_config TEXT,
+          requires_trigger INTEGER DEFAULT 1
+        );
+      `);
+      legacyDb
+        .prepare(
+          `INSERT INTO registered_groups (jid, name, folder, trigger_pattern, added_at)
+           VALUES (?, ?, ?, ?, ?)`,
+        )
+        .run('tui:main', 'Main', 'main', '@Alef', '2026-01-01T00:00:00.000Z');
+      legacyDb.close();
+
+      vi.resetModules();
+      const { initDatabase, getRegisteredGroup, _closeDatabase } =
+        await import('./db.js');
+
+      initDatabase();
+
+      const group = getRegisteredGroup('tui:main');
+      expect(group).toBeDefined();
+      // assertivenessLevel should default to 10 after migration
+      expect(group?.assertivenessLevel).toBe(10);
+
+      _closeDatabase();
+    } finally {
+      process.chdir(repoRoot);
+    }
+  });
+
   it('defaults Telegram backfill chats to direct messages', async () => {
     const repoRoot = process.cwd();
     const tempDir = fs.mkdtempSync(

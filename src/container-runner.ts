@@ -43,6 +43,7 @@ export interface ContainerInput {
   isScheduledTask?: boolean;
   assistantName?: string;
   script?: string;
+  soulMd?: string; // SOUL.md content with assertiveness_level interpolated (M5)
 }
 
 export interface ContainerOutput {
@@ -295,6 +296,15 @@ async function buildContainerArgs(
   return args;
 }
 
+// Load SOUL.md from the project root and interpolate assertiveness_level.
+// Returns undefined if SOUL.md does not exist (graceful degradation during dev).
+function loadSoulMd(assertivenessLevel: number): string | undefined {
+  const soulMdPath = path.join(process.cwd(), 'SOUL.md');
+  if (!fs.existsSync(soulMdPath)) return undefined;
+  const raw = fs.readFileSync(soulMdPath, 'utf-8');
+  return raw.replace('{{assertiveness_level}}', String(assertivenessLevel));
+}
+
 export async function runContainerAgent(
   group: RegisteredGroup,
   input: ContainerInput,
@@ -305,6 +315,13 @@ export async function runContainerAgent(
 
   const groupDir = resolveGroupFolderPath(group.folder);
   fs.mkdirSync(groupDir, { recursive: true });
+
+  // Inject SOUL.md with assertiveness_level interpolated (M5)
+  const assertivenessLevel = group.assertivenessLevel ?? 10;
+  const inputWithSoul: ContainerInput = {
+    ...input,
+    soulMd: input.soulMd ?? loadSoulMd(assertivenessLevel),
+  };
 
   const mounts = buildVolumeMounts(group, input.isMain);
   const safeName = group.folder.replace(/[^a-zA-Z0-9-]/g, '-');
@@ -379,7 +396,7 @@ export async function runContainerAgent(
     let stdoutTruncated = false;
     let stderrTruncated = false;
 
-    container.stdin.write(JSON.stringify(input));
+    container.stdin.write(JSON.stringify(inputWithSoul));
     container.stdin.end();
 
     // Streaming output: parse OUTPUT_START/END marker pairs as they arrive

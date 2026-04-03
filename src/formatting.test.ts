@@ -3,6 +3,7 @@ import { describe, it, expect } from 'vitest';
 import {
   ASSISTANT_NAME,
   getTriggerPattern,
+  messageSatisfiesGroupTrigger,
   TRIGGER_PATTERN,
 } from './config.js';
 import {
@@ -243,6 +244,44 @@ describe('getTriggerPattern', () => {
   });
 });
 
+describe('messageSatisfiesGroupTrigger', () => {
+  const tg = 'tg:-100123';
+  const wa = 'group@g.us';
+
+  it('Telegram: any line may start with the trigger', () => {
+    expect(
+      messageSatisfiesGroupTrigger(
+        tg,
+        `hey team\n@${ASSISTANT_NAME} status?`,
+        undefined,
+      ),
+    ).toBe(true);
+  });
+
+  it('Telegram: mid-line @Assistant does not count', () => {
+    expect(
+      messageSatisfiesGroupTrigger(
+        tg,
+        `we should ask @${ASSISTANT_NAME} later`,
+        undefined,
+      ),
+    ).toBe(false);
+  });
+
+  it('non-Telegram: only whole-message trim start counts', () => {
+    expect(
+      messageSatisfiesGroupTrigger(
+        wa,
+        `hey\n@${ASSISTANT_NAME} hi`,
+        undefined,
+      ),
+    ).toBe(false);
+    expect(
+      messageSatisfiesGroupTrigger(wa, `@${ASSISTANT_NAME} hi`, undefined),
+    ).toBe(true);
+  });
+});
+
 // --- Outbound formatting (internal tag stripping + prefix) ---
 
 describe('stripInternalTags', () => {
@@ -304,8 +343,9 @@ describe('trigger gating (requiresTrigger interaction)', () => {
     messages: NewMessage[],
   ): boolean {
     if (!shouldRequireTrigger(isMainGroup, requiresTrigger)) return true;
-    const triggerPattern = getTriggerPattern(trigger);
-    return messages.some((m) => triggerPattern.test(m.content.trim()));
+    return messages.some((m) =>
+      messageSatisfiesGroupTrigger(m.chat_jid, m.content, trigger),
+    );
   }
 
   it('main group always processes (no trigger needed)', () => {
@@ -346,5 +386,15 @@ describe('trigger gating (requiresTrigger interaction)', () => {
   it('non-main group with requiresTrigger=false always processes (no trigger needed)', () => {
     const msgs = [makeMsg({ content: 'hello no trigger' })];
     expect(shouldProcess(false, false, undefined, msgs)).toBe(true);
+  });
+
+  it('Telegram non-main: trigger on its own line after preamble invokes', () => {
+    const msgs = [
+      makeMsg({
+        chat_jid: 'tg:-100',
+        content: `quick question\n@${ASSISTANT_NAME} ping`,
+      }),
+    ];
+    expect(shouldProcess(false, true, undefined, msgs)).toBe(true);
   });
 });

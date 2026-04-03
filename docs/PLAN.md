@@ -11,7 +11,7 @@
 | M2 — Token Broker | ✅ Complete | 328 tests; HMAC tokens; env/bitwarden/onecli backends; broker wired into orchestrator and container-runner |
 | M3 — Call Inspector | ✅ Complete | 5 checks; audit.db append-only; golem_guard/supervised/power modes |
 | M4 — Channel Adapters | ✅ Complete | TUI + Telegram tested; DM-only; TELEGRAM_VALID_USERS allowlist; Teams dropped (see note) |
-| M5 — SOUL.md (Alef's character + assertiveness) | 🔲 Not started | First protection layer: personality-based, [FLAG] protocol, assertiveness dial |
+| M5 — SOUL.md (Alef's character + assertiveness) | ✅ Complete | SOUL.md prepended as system prompt; assertiveness_level per group; [FLAG] logged to audit |
 | M6 — Cato (hard oversight) + PSYCHE.md + dao_score | 🔲 Not started | Second protection layer: overrules user and Alef; feedback loop via dao_score |
 | M7 — TUI Health Dashboard | 🔲 Not started | |
 | M8 — Skill Schema | 🔲 Not started | |
@@ -277,6 +277,12 @@ Three bugs in the main happy path were not caught by the test suite. All were fi
 
 4. **`data/extra/` shared read-only mount:** A host directory (`data/extra/`) is now bind-mounted at `/workspace/extra` (read-only) inside every agent container — main and non-main alike. Agents and subagents can read shared context files (reference docs, shared instructions, datasets) without any per-group configuration. The host owns the directory and its contents; containers have no write access. The directory is created automatically on first container spawn if absent. Implemented in `src/container-runner.ts` (`buildVolumeMounts`); `EXTRA_DIR` constant in `src/config.ts`. See Decision 11 in `docs/DECISIONS.md`.
 
+5. **Telegram group chat support (2026-04-03):** Groups and supergroups now work end-to-end.
+   - **Auto-registration:** Groups register automatically on first contact (first text message or `/chatid` command) — no manual IPC registration. `onAutoRegisterGroup` callback in `ChannelOpts` drives this; folder names derived from JID (`tg:-1001234567` → `tg-g-1001234567`).
+   - **Trigger for groups:** Auto-registered groups get `requiresTrigger: true`. The `@Alef` trigger must appear anywhere in the message (on its own line or inline). If the user @mentions the bot by its Telegram username, the content is automatically prefixed with `@Alef` by `shouldPrependAssistantTriggerForBotMention`.
+   - **Root cause of original failure:** Telegram's default bot privacy mode silently prevents bots from receiving non-command group messages. Disabling it via BotFather (`/mybots` → Bot Settings → Group Privacy → Turn off) is a required setup step for groups. Documented in `docs/INTERNALS.md`.
+   - **`/chatid` bootstraps registration:** The `/chatid` command handler now calls `onAutoRegisterGroup` before replying, so groups are registered the moment a user runs `/chatid` — before any `@Alef` message.
+
 ---
 
 ### Note: Microsoft Teams — not a packaged skill
@@ -314,6 +320,17 @@ Alef is assertive by default. It pushes back on self-damaging instructions, resi
 - Hard limits: unconditional refusals that no instruction or assertiveness setting can override.
 
 **Gate:** New group initializes with `assertiveness_level = 10`. Prompt containing a clearly self-damaging instruction produces a `[FLAG]`-prefixed response. SOUL.md is present and non-empty in every container run's context. Flag event appears in `audit.db` after a flagged response.
+
+**What was actually done (M5 complete — 2026-04-03):**
+- `SOUL.md` — ~70-line character document at project root. Identity, core commitments, assertiveness calibration table with `{{assertiveness_level}}` placeholder, [FLAG] protocol, hard limits.
+- `src/types.ts` — `assertivenessLevel?: number` added to `RegisteredGroup`. Default 10 everywhere it is absent.
+- `src/db.ts` — `assertiveness_level INTEGER DEFAULT 10` migration on `registered_groups`; read/write paths updated in `getRegisteredGroup`, `setRegisteredGroup`, `getAllRegisteredGroups`. Migration test added (2 tests).
+- `src/inspector/audit.ts` — `flag_events` table with append-only trigger; `logFlagEvent()` and `getRecentFlagEvents()` functions. Cato will query this table in M6 for its scheduled audits and `behavioral_change_rate` KPI. 5 new tests (total audit tests: 16).
+- `src/container-runner.ts` — `soulMd?: string` added to `ContainerInput`; `loadSoulMd(assertivenessLevel)` reads `SOUL.md` from the project root and interpolates `{{assertiveness_level}}`; `runContainerAgent` injects `soulMd` into `ContainerInput` before spawning.
+- `container/agent-runner/src/index.ts` — `soulMd` field added to local `ContainerInput` type; system prompt append is now `soulMd + globalClaudeMd` (SOUL.md first, shared context second, separated by `---`).
+- `src/index.ts` — streaming output callback detects `text.trimStart().startsWith('[FLAG]')`, calls `logFlagEvent()`, logs at INFO level. The `[FLAG]` text is delivered to the user as-is — it is Alef's own voice.
+- Container image rebuilt (`opengolem-agent:latest`).
+- Total: 451 tests passing.
 
 ---
 

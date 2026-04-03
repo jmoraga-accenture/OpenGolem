@@ -37,6 +37,20 @@ export function initAuditDb(dbPath?: string): Database.Database {
     BEGIN
       SELECT RAISE(ABORT, 'audit log is append-only');
     END;
+
+    CREATE TABLE IF NOT EXISTS flag_events (
+      id                  INTEGER PRIMARY KEY,
+      ts                  INTEGER NOT NULL,
+      group_jid           TEXT    NOT NULL,
+      group_folder        TEXT    NOT NULL,
+      assertiveness_level INTEGER NOT NULL,
+      response_snippet    TEXT    NOT NULL
+    );
+    CREATE TRIGGER IF NOT EXISTS prevent_delete_flags
+    BEFORE DELETE ON flag_events
+    BEGIN
+      SELECT RAISE(ABORT, 'audit log is append-only');
+    END;
   `);
   return db;
 }
@@ -83,6 +97,48 @@ export function logCall(record: AuditRecord): void {
 
 export function hashPayload(body: string): string {
   return crypto.createHash('sha256').update(body, 'utf8').digest('hex');
+}
+
+export interface FlagEvent {
+  groupJid: string;
+  groupFolder: string;
+  assertivenessLevel: number;
+  responseSnippet: string; // first 200 chars of the flagged response
+}
+
+export function logFlagEvent(event: FlagEvent): void {
+  getAuditDb()
+    .prepare(
+      `INSERT INTO flag_events (ts, group_jid, group_folder, assertiveness_level, response_snippet)
+       VALUES (?, ?, ?, ?, ?)`,
+    )
+    .run(
+      Date.now(),
+      event.groupJid,
+      event.groupFolder,
+      event.assertivenessLevel,
+      event.responseSnippet,
+    );
+}
+
+export function getRecentFlagEvents(limit = 10): FlagEvent[] {
+  return (
+    getAuditDb()
+      .prepare(
+        'SELECT * FROM flag_events ORDER BY ts DESC LIMIT ?',
+      )
+      .all(limit) as Array<{
+        group_jid: string;
+        group_folder: string;
+        assertiveness_level: number;
+        response_snippet: string;
+      }>
+  ).map((row) => ({
+    groupJid: row.group_jid,
+    groupFolder: row.group_folder,
+    assertivenessLevel: row.assertiveness_level,
+    responseSnippet: row.response_snippet,
+  }));
 }
 
 type CallRow = {

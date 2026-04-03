@@ -111,4 +111,4 @@ OpenGolem incorporates **NanoClaw** code as its TypeScript baseline and reflects
 
 ---
 
-*Last updated: 3 April 2026 — M4 complete + refactor sprint (bootstrap pattern, seed-groups, env circular dep fix); 445 tests green.*
+*Last updated: 3 April 2026 — M5 complete (SOUL.md, assertiveness dial, [FLAG] audit); 451 tests green.*

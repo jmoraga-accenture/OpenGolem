@@ -334,20 +334,22 @@ You get an `opengolem> ` prompt. Everything you type is routed to the `tui:conso
    ```
    For groups, also set `TELEGRAM_ALLOW_GROUPS=1` and ensure explicit allowlist rules as above.
 
-2. Restart OpenGolem. The Telegram channel connects via Grammy long-polling.
+2. **If using groups/supergroups — disable bot privacy mode in BotFather first:**
+   Message `@BotFather` → `/mybots` → select your bot → `Bot Settings` → `Group Privacy` → `Turn off`.
+   By default Telegram only forwards group messages that start with `/` or @mention the bot by its Telegram username (`@yourbot`). With privacy mode off, the bot receives all group messages and the `@Alef` trigger works as expected.
 
-3. Send `/chatid` in the chat you want (private, or group if groups are enabled) to obtain the JID for registration.
+3. Restart OpenGolem. The Telegram channel connects via Grammy long-polling.
 
-4. Register via setup or IPC, for example (private):
-   ```json
-   {"type":"register_group","jid":"tg:123456789","name":"Alice DM","folder":"telegram_main","trigger":"@Alef"}
-   ```
-   Or supergroup (when `TELEGRAM_ALLOW_GROUPS` is on and allowlist configured):
+4. **Chats auto-register on first contact** — no manual IPC registration required.
+   - **DMs:** seeded automatically at startup from `TELEGRAM_VALID_USERS`.
+   - **Groups:** registered the first time the bot receives a message or `/chatid` command from the group.
+
+   To bootstrap a group registration, send `/chatid` in the group. The bot replies with the JID and registers the group. After that, messages containing `@Alef` (anywhere in the message, including on their own line) will reach the agent.
+
+   You can still register manually via IPC if you need to set custom options (different trigger, non-default folder, etc.):
    ```json
    {"type":"register_group","jid":"tg:-1001234567890","name":"Team","folder":"telegram_team","trigger":"@Alef"}
    ```
-
-**Group privacy:** for the main bot to see all messages in a group (not only commands), disable **Group Privacy** for that bot in @BotFather if you use groups.
 
 **`/remote-control` in Telegram** is restricted to allowlisted senders when `TELEGRAM_VALID_USERS` or sender-allowlist rules apply.
 

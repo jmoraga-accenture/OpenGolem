@@ -8,8 +8,11 @@ import {
   hashPayload,
   initAuditDb,
   logCall,
+  logFlagEvent,
   getRecentCalls,
+  getRecentFlagEvents,
   type AuditRecord,
+  type FlagEvent,
 } from './audit.js';
 
 let tmpDir: string;
@@ -125,6 +128,55 @@ describe('logCall', () => {
       securityMode: 'golem_guard',
     });
     expect(getRecentCalls(10)).toHaveLength(2);
+  });
+});
+
+describe('logFlagEvent', () => {
+  const makeFlag = (overrides: Partial<FlagEvent> = {}): FlagEvent => ({
+    groupJid: 'tg:12345',
+    groupFolder: 'tg-12345',
+    assertivenessLevel: 10,
+    responseSnippet: '[FLAG] I need to push back on this.',
+    ...overrides,
+  });
+
+  it('inserts a flag event with correct fields', () => {
+    logFlagEvent(makeFlag());
+    const rows = getRecentFlagEvents(1);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].groupJid).toBe('tg:12345');
+    expect(rows[0].groupFolder).toBe('tg-12345');
+    expect(rows[0].assertivenessLevel).toBe(10);
+    expect(rows[0].responseSnippet).toBe('[FLAG] I need to push back on this.');
+  });
+
+  it('stores assertiveness_level correctly', () => {
+    logFlagEvent(makeFlag({ assertivenessLevel: 5 }));
+    expect(getRecentFlagEvents(1)[0].assertivenessLevel).toBe(5);
+  });
+
+  it('can insert multiple flag events', () => {
+    logFlagEvent(makeFlag({ responseSnippet: '[FLAG] first' }));
+    logFlagEvent(makeFlag({ responseSnippet: '[FLAG] second' }));
+    expect(getRecentFlagEvents(10)).toHaveLength(2);
+  });
+
+  it('returns most recent first', () => {
+    logFlagEvent(makeFlag({ responseSnippet: '[FLAG] older' }));
+    logFlagEvent(makeFlag({ responseSnippet: '[FLAG] newer' }));
+    const rows = getRecentFlagEvents(2);
+    expect(rows[0].responseSnippet).toBe('[FLAG] newer');
+  });
+
+  it('blocks DELETE on flag_events table', () => {
+    const db = initAuditDb(path.join(tmpDir, 'flag-audit.db'));
+    db.prepare(
+      `INSERT INTO flag_events (ts, group_jid, group_folder, assertiveness_level, response_snippet)
+       VALUES (?, ?, ?, ?, ?)`,
+    ).run(Date.now(), 'tg:1', 'tg-1', 10, '[FLAG] test');
+    expect(() =>
+      db.prepare('DELETE FROM flag_events WHERE id=1').run(),
+    ).toThrow('append-only');
   });
 });
 

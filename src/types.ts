@@ -40,6 +40,7 @@ export interface RegisteredGroup {
   containerConfig?: ContainerConfig;
   requiresTrigger?: boolean; // Default: true for groups, false for solo chats
   isMain?: boolean; // True for the main control group (no trigger, elevated privileges)
+  assertivenessLevel?: number; // 0–10, default 10. Controls Alef's assertiveness dial (SOUL.md)
 }
 
 export interface NewMessage {

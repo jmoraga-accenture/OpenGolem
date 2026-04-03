@@ -6,10 +6,12 @@ import path from 'path';
 import {
   ASSISTANT_NAME,
   DEFAULT_TRIGGER,
-  getTriggerPattern,
+  getTelegramValidUserSet,
   GROUPS_DIR,
   IDLE_TIMEOUT,
+  isTelegramAllowGroupsEnabled,
   MAX_MESSAGES_PER_PROMPT,
+  messageSatisfiesGroupTrigger,
   POLL_INTERVAL,
   TIMEZONE,
 } from './config.js';
@@ -51,15 +53,12 @@ import { GroupQueue } from './group-queue.js';
 import { resolveGroupFolderPath } from './group-folder.js';
 import { startIpcWatcher } from './ipc.js';
 import { findChannel, formatMessages, formatOutbound } from './router.js';
+import { logFlagEvent } from './inspector/audit.js';
 import {
   restoreRemoteControl,
   startRemoteControl,
   stopRemoteControl,
 } from './remote-control.js';
-import {
-  getTelegramValidUserSet,
-  isTelegramAllowGroupsEnabled,
-} from './config.js';
 import { seedTelegramDmGroups } from './seed-groups.js';
 import {
   filterMessagesForTelegramAllowlist,
@@ -248,10 +247,9 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
 
   // For non-main groups, check if trigger is required and present
   if (!isMainGroup && group.requiresTrigger !== false) {
-    const triggerPattern = getTriggerPattern(group.trigger);
     const hasTrigger = toProcess.some(
       (m) =>
-        triggerPattern.test(m.content.trim()) &&
+        messageSatisfiesGroupTrigger(chatJid, m.content, group.trigger) &&
         (m.is_from_me || isTriggerAllowed(chatJid, m.sender, allowlistCfg)),
     );
     if (!hasTrigger) return true;
@@ -301,6 +299,19 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
       const text = raw.replace(/<internal>[\s\S]*?<\/internal>/g, '').trim();
       logger.info({ group: group.name }, `Agent output: ${raw.length} chars`);
       if (text) {
+        // Detect [FLAG] — Alef asserting against a user instruction (M5 / SOUL.md)
+        if (text.trimStart().startsWith('[FLAG]')) {
+          logFlagEvent({
+            groupJid: chatJid,
+            groupFolder: group.folder,
+            assertivenessLevel: group.assertivenessLevel ?? 10,
+            responseSnippet: text.slice(0, 200),
+          });
+          logger.info(
+            { group: group.name, assertivenessLevel: group.assertivenessLevel ?? 10 },
+            '[FLAG] response detected and logged to audit',
+          );
+        }
         await channel.sendMessage(chatJid, text);
         outputSentToUser = true;
       }
@@ -525,10 +536,9 @@ async function startMessageLoop(): Promise<void> {
           // Non-trigger messages accumulate in DB and get pulled as
           // context when a trigger eventually arrives.
           if (needsTrigger) {
-            const triggerPattern = getTriggerPattern(group.trigger);
             const hasTrigger = groupMessagesAllowed.some(
               (m) =>
-                triggerPattern.test(m.content.trim()) &&
+                messageSatisfiesGroupTrigger(chatJid, m.content, group.trigger) &&
                 (m.is_from_me ||
                   isTriggerAllowed(chatJid, m.sender, allowlistCfg)),
             );
@@ -754,8 +764,23 @@ async function main(): Promise<void> {
         }
       }
 
-      // Remote control commands — intercept before storage
+      // /new and /reset — clear session for this chat, reply with confirmation
       const trimmed = msg.content.trim();
+      if (trimmed === '/new' || trimmed === '/reset') {
+        const group = registeredGroups[chatJid];
+        if (group) {
+          deleteSession(group.folder);       // persist: remove from DB
+          delete sessions[group.folder];    // in-memory: clear so next runAgent starts fresh
+          logger.info({ chatJid, folder: group.folder }, 'Session reset via /new');
+          const channel = channels.find((c) => c.ownsJid(chatJid) && c.isConnected());
+          channel
+            ?.sendMessage(chatJid, `Session cleared. Next message starts a fresh conversation with ${ASSISTANT_NAME}.`)
+            .catch((err) => logger.error({ err, chatJid }, '/new reply failed'));
+        }
+        return;
+      }
+
+      // Remote control commands — intercept before storage
       if (trimmed === '/remote-control' || trimmed === '/remote-control-end') {
         if (chatJid.startsWith('tg:')) {
           const rcCfg = loadSenderAllowlist();
@@ -801,6 +826,28 @@ async function main(): Promise<void> {
       isGroup?: boolean,
     ) => storeChatMetadata(chatJid, timestamp, name, channel, isGroup),
     registeredGroups: () => registeredGroups,
+    onAutoRegisterGroup: (jid: string, name: string, isGroup: boolean) => {
+      if (registeredGroups[jid]) return; // already registered, race condition
+      // Derive a valid folder name from the JID.
+      // tg:7448431705  → tg-7448431705  (DM)
+      // tg:-1001234567 → tg-g-1001234567 (group — strip leading '-', prefix with 'g-')
+      const numericPart = jid.startsWith('tg:') ? jid.slice(3) : jid;
+      const folderSuffix = numericPart.startsWith('-')
+        ? `g-${numericPart.slice(1)}`
+        : numericPart;
+      const folder = `tg-${folderSuffix}`;
+      const group: RegisteredGroup = {
+        name: name || jid,
+        folder,
+        trigger: DEFAULT_TRIGGER,
+        added_at: new Date().toISOString(),
+        requiresTrigger: isGroup, // groups require trigger, DMs do not
+        isMain: false,
+        assertivenessLevel: 10,
+      };
+      registerGroup(jid, group);
+      logger.info({ jid, folder, name, isGroup }, 'Auto-registered Telegram chat');
+    },
   };
 
   // Create and connect all registered channels.

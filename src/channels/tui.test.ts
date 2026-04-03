@@ -13,6 +13,7 @@ function makeOpts(): ChannelOpts {
     onMessage: vi.fn(),
     onChatMetadata: vi.fn(),
     registeredGroups: () => ({}),
+    onAutoRegisterGroup: vi.fn(),
   };
 }
 

@@ -83,6 +83,7 @@ vi.mock('grammy', () => ({
 import fs from 'fs';
 import {
   isTelegramPrivateChatId,
+  shouldPrependAssistantTriggerForBotMention,
   TelegramChannel,
   TelegramChannelOpts,
 } from './telegram.js';
@@ -104,6 +105,7 @@ function createTestOpts(
         added_at: '2024-01-01T00:00:00.000Z',
       },
     })),
+    onAutoRegisterGroup: vi.fn(),
     ...overrides,
   };
 }
@@ -314,7 +316,7 @@ describe('TelegramChannel', () => {
       );
     });
 
-    it('only emits metadata for unregistered chats', async () => {
+    it('auto-registers and delivers messages from previously unregistered chats', async () => {
       const opts = createTestOpts();
       const channel = new TelegramChannel('test-token', opts);
       await channel.connect();
@@ -322,14 +324,13 @@ describe('TelegramChannel', () => {
       const ctx = createTextCtx({ chatId: 999999, text: 'Unknown chat' });
       await triggerTextMessage(ctx);
 
-      expect(opts.onChatMetadata).toHaveBeenCalledWith(
+      // Auto-registration should fire
+      expect(opts.onAutoRegisterGroup).toHaveBeenCalledWith('tg:999999', 'Alice', false);
+      // Message should be delivered (not dropped)
+      expect(opts.onMessage).toHaveBeenCalledWith(
         'tg:999999',
-        expect.any(String),
-        'Alice',
-        'telegram',
-        false,
+        expect.objectContaining({ content: 'Unknown chat' }),
       );
-      expect(opts.onMessage).not.toHaveBeenCalled();
     });
 
     it('skips bot commands (/chatid, /ping) but passes other / messages through', async () => {
@@ -911,7 +912,7 @@ describe('TelegramChannel', () => {
       );
     });
 
-    it('ignores non-text messages from unregistered chats', async () => {
+    it('auto-registers and delivers media from previously unregistered chats', async () => {
       const opts = createTestOpts();
       const channel = new TelegramChannel('test-token', opts);
       await channel.connect();
@@ -920,7 +921,8 @@ describe('TelegramChannel', () => {
       await triggerMediaMessage('message:photo', ctx);
       await flushPromises();
 
-      expect(opts.onMessage).not.toHaveBeenCalled();
+      expect(opts.onAutoRegisterGroup).toHaveBeenCalledWith('tg:999999', expect.any(String), false);
+      expect(opts.onMessage).toHaveBeenCalled();
     });
 
     it('stores document with fallback name when filename missing', async () => {
@@ -1320,6 +1322,85 @@ describe('TelegramChannel', () => {
         reply: vi.fn().mockRejectedValue(replyError),
       };
       await expect(handler(ctx)).rejects.toThrow('timeout');
+    });
+  });
+
+  describe('shouldPrependAssistantTriggerForBotMention', () => {
+    const me = { id: 42, username: 'alef-mark-01' };
+
+    it('returns false when message already starts with assistant trigger', () => {
+      expect(
+        shouldPrependAssistantTriggerForBotMention('@Alef hi', [], me),
+      ).toBe(false);
+      expect(
+        shouldPrependAssistantTriggerForBotMention('@alef ping', [], me),
+      ).toBe(false);
+    });
+
+    it('returns true when mention entity matches bot username', () => {
+      const text = 'hi @alef-mark-01 there';
+      const at = text.indexOf('@');
+      const len = '@alef-mark-01'.length;
+      const entities = [{ type: 'mention', offset: at, length: len }];
+      expect(
+        shouldPrependAssistantTriggerForBotMention(text, entities, me),
+      ).toBe(true);
+    });
+
+    it('returns true for text_mention with same bot user id', () => {
+      const entities = [
+        {
+          type: 'text_mention',
+          offset: 0,
+          length: 4,
+          user: { id: 42 },
+        },
+      ];
+      expect(
+        shouldPrependAssistantTriggerForBotMention('Alef do x', entities, me),
+      ).toBe(true);
+    });
+
+    it('returns true when plain @username appears in text', () => {
+      expect(
+        shouldPrependAssistantTriggerForBotMention(
+          'yo @alef-mark-01 please',
+          [],
+          me,
+        ),
+      ).toBe(true);
+    });
+
+    it('returns false without me username when only plain @handle in text', () => {
+      expect(
+        shouldPrependAssistantTriggerForBotMention(
+          'yo @alef-mark-01',
+          [],
+          { id: 42 },
+        ),
+      ).toBe(false);
+    });
+
+    it('returns true for text_mention when username omitted but id matches', () => {
+      const entities = [
+        {
+          type: 'text_mention',
+          offset: 0,
+          length: 4,
+          user: { id: 42 },
+        },
+      ];
+      expect(
+        shouldPrependAssistantTriggerForBotMention('Nick', entities, {
+          id: 42,
+        }),
+      ).toBe(true);
+    });
+
+    it('returns false when me is undefined', () => {
+      expect(
+        shouldPrependAssistantTriggerForBotMention('hi @alef-mark-01', []),
+      ).toBe(false);
     });
   });
 

@@ -25,6 +25,56 @@ export interface TelegramChannelOpts {
   onMessage: OnInboundMessage;
   onChatMetadata: OnChatMetadata;
   registeredGroups: () => Record<string, RegisteredGroup>;
+  onAutoRegisterGroup: (jid: string, name: string, isGroup: boolean) => void;
+}
+
+function escapeTriggerRegexSegment(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/**
+ * Non-main Telegram groups require the trigger at the **start** of the message
+ * (after trim). Bot @username mentions are often mid-sentence — normalize by
+ * prepending @ASSISTANT_NAME when the user clearly addressed this bot via
+ * `mention`, `text_mention` (same user id), or plain @bot_username text.
+ */
+export function shouldPrependAssistantTriggerForBotMention(
+  content: string,
+  entities: ReadonlyArray<{ type: string; offset: number; length: number; user?: { id: number } }> | undefined,
+  me?: { id: number; username?: string },
+): boolean {
+  const trimmed = content.trim();
+  if (TRIGGER_PATTERN.test(trimmed)) return false;
+
+  const botUsername = me?.username?.toLowerCase();
+  const botId = me?.id;
+  if (!botUsername && botId === undefined) return false;
+
+  for (const entity of entities ?? []) {
+    if (entity.type === 'mention' && botUsername) {
+      const mentionText = content
+        .substring(entity.offset, entity.offset + entity.length)
+        .toLowerCase();
+      if (mentionText === `@${botUsername}`) return true;
+    }
+    if (
+      entity.type === 'text_mention' &&
+      botId !== undefined &&
+      entity.user?.id === botId
+    ) {
+      return true;
+    }
+  }
+
+  if (botUsername) {
+    const re = new RegExp(
+      `@${escapeTriggerRegexSegment(botUsername)}\\b`,
+      'i',
+    );
+    if (re.test(content)) return true;
+  }
+
+  return false;
 }
 
 /** Telegram private chats use positive numeric chat ids; groups/supergroups are negative. */
@@ -91,6 +141,8 @@ export class TelegramChannel implements Channel {
   name = 'telegram';
 
   private bot: Bot | null = null;
+  /** Filled in `bot.start` onStart — fallback if `ctx.me` is missing on an update. */
+  private botIdentity: { id: number; username?: string } | null = null;
   private opts: TelegramChannelOpts;
   private botToken: string;
 
@@ -172,6 +224,14 @@ export class TelegramChannel implements Channel {
         chatType === 'private'
           ? ctx.from?.first_name || 'Private'
           : (ctx.chat as { title?: string }).title || 'Unknown';
+      const chatJid = `tg:${chatId}`;
+      const isGroup = chatType === 'group' || chatType === 'supergroup';
+
+      // Auto-register on first /chatid so groups bootstrap without needing a text message
+      if (!this.opts.registeredGroups()[chatJid]) {
+        this.opts.onAutoRegisterGroup(chatJid, chatName, isGroup);
+        logger.info({ chatJid, chatName, isGroup }, 'Telegram chat auto-registered via /chatid');
+      }
 
       await ctx.reply(
         `Chat ID: \`tg:${chatId}\`\nName: ${chatName}\nType: ${chatType}`,
@@ -191,9 +251,29 @@ export class TelegramChannel implements Channel {
       await ctx.reply(`${ASSISTANT_NAME} is online.`);
     });
 
+    // /new and /reset — pass through to onMessage so orchestrator can clear the session
+    // and reply. We register them here only so they are listed in the bot command menu.
+    // The general handler forwards them to onMessage which does the actual work.
+    this.bot.command('new', async (ctx) => {
+      if (!acceptTelegramInboundChat(ctx.chat)) return;
+      // Forward to onMessage — orchestrator handles session deletion and reply
+      const chatJid = `tg:${ctx.chat.id}`;
+      const ts = new Date().toISOString();
+      this.opts.onChatMetadata(chatJid, ts);
+      this.opts.onMessage(chatJid, {
+        id: `tg-cmd-new-${Date.now()}`,
+        chat_jid: chatJid,
+        sender: ctx.from?.id.toString() || '',
+        sender_name: ctx.from?.first_name || 'User',
+        content: '/new',
+        timestamp: ts,
+        is_from_me: false,
+      });
+    });
+
     // Telegram bot commands handled above — skip them in the general handler
     // so they don't also get stored as messages. All other /commands flow through.
-    const TELEGRAM_BOT_COMMANDS = new Set(['chatid', 'ping']);
+    const TELEGRAM_BOT_COMMANDS = new Set(['chatid', 'ping', 'new']);
 
     this.bot.on('message:text', async (ctx) => {
       if (ctx.message.text.startsWith('/')) {
@@ -202,12 +282,16 @@ export class TelegramChannel implements Channel {
       }
 
       if (!acceptTelegramInboundChat(ctx.chat)) {
-        logger.debug(
+        logger.warn(
           { chatId: ctx.chat.id, type: ctx.chat.type },
           'Telegram: ignoring message (unsupported chat type or groups disabled)',
         );
         return;
       }
+      logger.debug(
+        { chatId: ctx.chat.id, type: ctx.chat.type },
+        'Telegram: message:text handler reached',
+      );
 
       const chatJid = `tg:${ctx.chat.id}`;
       let content = ctx.message.text;
@@ -236,24 +320,18 @@ export class TelegramChannel implements Channel {
           ? senderName
           : (ctx.chat as { title?: string }).title || chatJid;
 
-      // Translate Telegram @bot_username mentions into TRIGGER_PATTERN format.
-      // Telegram @mentions (e.g., @andy_ai_bot) won't match TRIGGER_PATTERN
-      // (e.g., ^@Alefb), so we prepend the trigger when the bot is @mentioned.
-      const botUsername = ctx.me?.username?.toLowerCase();
-      if (botUsername) {
-        const entities = ctx.message.entities || [];
-        const isBotMentioned = entities.some((entity) => {
-          if (entity.type === 'mention') {
-            const mentionText = content
-              .substring(entity.offset, entity.offset + entity.length)
-              .toLowerCase();
-            return mentionText === `@${botUsername}`;
-          }
-          return false;
-        });
-        if (isBotMentioned && !TRIGGER_PATTERN.test(content)) {
-          content = `@${ASSISTANT_NAME} ${content}`;
-        }
+      // Optional: when the user @mentions this bot (entity or @username), prepend
+      // @ASSISTANT_NAME so orchestrator line-based trigger detection sees a call.
+      // Prefer @ASSISTANT_NAME on its own line in groups; see messageSatisfiesGroupTrigger.
+      const me = ctx.me ?? this.botIdentity ?? undefined;
+      if (
+        shouldPrependAssistantTriggerForBotMention(
+          content,
+          ctx.message.entities,
+          me,
+        )
+      ) {
+        content = `@${ASSISTANT_NAME} ${content}`;
       }
 
       const isGroup =
@@ -266,14 +344,10 @@ export class TelegramChannel implements Channel {
         isGroup,
       );
 
-      // Only deliver full message for registered groups
-      const group = this.opts.registeredGroups()[chatJid];
-      if (!group) {
-        logger.debug(
-          { chatJid, chatName },
-          'Message from unregistered Telegram chat',
-        );
-        return;
+      // Auto-register on first contact if not yet registered
+      if (!this.opts.registeredGroups()[chatJid]) {
+        this.opts.onAutoRegisterGroup(chatJid, chatName, isGroup);
+        logger.info({ chatJid, chatName }, 'Telegram chat auto-registered on first message');
       }
 
       // Deliver message — startMessageLoop() will pick it up
@@ -311,8 +385,15 @@ export class TelegramChannel implements Channel {
         return;
       }
       const chatJid = `tg:${ctx.chat.id}`;
-      const group = this.opts.registeredGroups()[chatJid];
-      if (!group) return;
+      const isGroup =
+        ctx.chat.type === 'group' || ctx.chat.type === 'supergroup';
+      if (!this.opts.registeredGroups()[chatJid]) {
+        const chatName =
+          isGroup
+            ? (ctx.chat as { title?: string }).title || 'Unknown'
+            : ctx.from?.first_name || 'Unknown';
+        this.opts.onAutoRegisterGroup(chatJid, chatName, isGroup);
+      }
 
       const timestamp = new Date(ctx.message.date * 1000).toISOString();
       const senderName =
@@ -321,9 +402,6 @@ export class TelegramChannel implements Channel {
         ctx.from?.id?.toString() ||
         'Unknown';
       const caption = ctx.message.caption ? ` ${ctx.message.caption}` : '';
-
-      const isGroup =
-        ctx.chat.type === 'group' || ctx.chat.type === 'supergroup';
       this.opts.onChatMetadata(
         chatJid,
         timestamp,
@@ -350,7 +428,8 @@ export class TelegramChannel implements Channel {
         const filename =
           opts.filename ||
           `${placeholder.replace(/[\[\] ]/g, '').toLowerCase()}_${msgId}`;
-        this.downloadFile(opts.fileId, group.folder, filename).then(
+        const groupFolder = this.opts.registeredGroups()[chatJid]?.folder ?? chatJid.replace(':', '-');
+        this.downloadFile(opts.fileId, groupFolder, filename).then(
           (filePath) => {
             if (filePath) {
               deliver(`${placeholder} (${filePath})${caption}`);
@@ -420,6 +499,10 @@ export class TelegramChannel implements Channel {
     return new Promise<void>((resolve) => {
       this.bot!.start({
         onStart: (botInfo) => {
+          this.botIdentity = {
+            id: botInfo.id,
+            username: botInfo.username,
+          };
           logger.info(
             { username: botInfo.username, id: botInfo.id },
             'Telegram bot connected',
@@ -493,6 +576,7 @@ export class TelegramChannel implements Channel {
     if (this.bot) {
       this.bot.stop();
       this.bot = null;
+      this.botIdentity = null;
       logger.info('Telegram bot stopped');
     }
   }

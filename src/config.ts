@@ -85,6 +85,26 @@ export function getTriggerPattern(trigger?: string): RegExp {
 
 export const TRIGGER_PATTERN = buildTriggerPattern(DEFAULT_TRIGGER);
 
+/**
+ * Whether an inbound message counts as invoking the agent (trigger present).
+ * Telegram (`tg:`) groups often put `@Assistant` on its own line after a preamble;
+ * other channels keep the original rule: trigger only at the start after trim.
+ */
+export function messageSatisfiesGroupTrigger(
+  chatJid: string,
+  content: string,
+  trigger?: string,
+): boolean {
+  const pattern = getTriggerPattern(trigger);
+  if (chatJid.startsWith('tg:')) {
+    for (const line of content.split(/\r?\n/)) {
+      if (pattern.test(line.trimStart())) return true;
+    }
+    return false;
+  }
+  return pattern.test(content.trim());
+}
+
 // Timezone for scheduled tasks, message formatting, etc.
 // Validates each candidate is a real IANA identifier before accepting.
 function resolveConfigTimezone(): string {
