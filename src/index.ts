@@ -60,6 +60,8 @@ import {
   shouldDropMessage,
 } from './sender-allowlist.js';
 import { startSchedulerLoop } from './task-scheduler.js';
+import { isChannelEnabled } from './channels/channel-enabled.js';
+import { TUI_CONSOLE_JID } from './channels/tui.js';
 import { Channel, NewMessage, RegisteredGroup } from './types.js';
 import { logger } from './logger.js';
 
@@ -74,7 +76,6 @@ let messageLoopRunning = false;
 
 const channels: Channel[] = [];
 const queue = new GroupQueue();
-
 
 function loadState(): void {
   lastTimestamp = getRouterState('last_timestamp') || '';
@@ -542,11 +543,31 @@ function ensureContainerSystemRunning(): void {
   cleanupOrphans();
 }
 
+/**
+ * If the TUI channel is enabled and tui:console has never been registered,
+ * register it automatically so `npm run dev` works without a setup step.
+ * requiresTrigger=false means every line typed routes to the agent.
+ */
+function seedTuiGroupIfNeeded(): void {
+  if (!isChannelEnabled('tui')) return;
+  if (registeredGroups[TUI_CONSOLE_JID]) return;
+  logger.info('TUI enabled — auto-registering tui:console as default console group');
+  registerGroup(TUI_CONSOLE_JID, {
+    name: 'Console',
+    folder: 'tui',
+    trigger: DEFAULT_TRIGGER,
+    added_at: new Date().toISOString(),
+    requiresTrigger: false,
+    isMain: true,
+  });
+}
+
 async function main(): Promise<void> {
   ensureContainerSystemRunning();
   initDatabase();
   logger.info('Database initialized');
   loadState();
+  seedTuiGroupIfNeeded();
 
   // Start the native credential proxy. Containers are configured with
   // ANTHROPIC_BASE_URL pointing to this proxy; it injects credentials

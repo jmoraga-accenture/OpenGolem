@@ -215,8 +215,14 @@ export async function processTaskIpc(
         const scheduleType = data.schedule_type as 'cron' | 'interval' | 'once';
 
         // SECURITY: Reject oversized schedule strings before handing to parsers.
-        if (typeof data.schedule_value === 'string' && data.schedule_value.length > 200) {
-          logger.warn({ length: data.schedule_value.length }, 'Schedule value too long — rejected');
+        if (
+          typeof data.schedule_value === 'string' &&
+          data.schedule_value.length > 200
+        ) {
+          logger.warn(
+            { length: data.schedule_value.length },
+            'Schedule value too long — rejected',
+          );
           return;
         }
 
@@ -271,8 +277,7 @@ export async function processTaskIpc(
         // SECURITY: crypto.randomBytes for task IDs — Math.random() is not
         // cryptographically secure and is predictable given a known timestamp.
         const taskId =
-          data.taskId ||
-          `task-${Date.now()}-${randomBytes(8).toString('hex')}`;
+          data.taskId || `task-${Date.now()}-${randomBytes(8).toString('hex')}`;
         const contextMode =
           data.context_mode === 'group' || data.context_mode === 'isolated'
             ? data.context_mode
@@ -477,11 +482,17 @@ export async function processTaskIpc(
             safeContainerConfig === null ||
             Array.isArray(safeContainerConfig)
           ) {
-            logger.warn({ sourceGroup }, 'register_group: containerConfig must be an object — ignoring');
+            logger.warn(
+              { sourceGroup },
+              'register_group: containerConfig must be an object — ignoring',
+            );
             safeContainerConfig = undefined;
           } else if (safeContainerConfig.additionalMounts !== undefined) {
             if (!Array.isArray(safeContainerConfig.additionalMounts)) {
-              logger.warn({ sourceGroup }, 'register_group: containerConfig.additionalMounts must be an array — ignoring config');
+              logger.warn(
+                { sourceGroup },
+                'register_group: containerConfig.additionalMounts must be an array — ignoring config',
+              );
               safeContainerConfig = undefined;
             } else {
               // Each mount must have string hostPath and containerPath; no empty strings
@@ -491,11 +502,15 @@ export async function processTaskIpc(
                   typeof m === 'object' &&
                   typeof (m as Record<string, unknown>).hostPath === 'string' &&
                   (m as Record<string, unknown>).hostPath !== '' &&
-                  typeof (m as Record<string, unknown>).containerPath === 'string' &&
+                  typeof (m as Record<string, unknown>).containerPath ===
+                    'string' &&
                   (m as Record<string, unknown>).containerPath !== '',
               );
               if (!validMounts) {
-                logger.warn({ sourceGroup }, 'register_group: invalid mount entry in containerConfig — ignoring config');
+                logger.warn(
+                  { sourceGroup },
+                  'register_group: invalid mount entry in containerConfig — ignoring config',
+                );
                 safeContainerConfig = undefined;
               }
             }
