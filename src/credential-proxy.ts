@@ -203,3 +203,17 @@ export function stopCredentialProxy(): void {
 export function getContainerProxyUrl(port: number): string {
   return `http://host.docker.internal:${port}`;
 }
+
+/**
+ * Which auth header the proxy will inject.
+ * Containers must set a matching placeholder so Claude Code passes its
+ * local "not logged in" check before making any API call.
+ */
+export type AuthMode = 'api-key' | 'oauth';
+
+export function detectAuthMode(): AuthMode {
+  const env = readEnvFile(['ANTHROPIC_API_KEY']);
+  return env.ANTHROPIC_API_KEY || process.env.ANTHROPIC_API_KEY
+    ? 'api-key'
+    : 'oauth';
+}

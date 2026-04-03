@@ -24,7 +24,7 @@ import {
   readonlyMountArgs,
   stopContainer,
 } from './container-runtime.js';
-import { getContainerProxyUrl } from './credential-proxy.js';
+import { getContainerProxyUrl, detectAuthMode } from './credential-proxy.js';
 import { validateAdditionalMounts } from './mount-security.js';
 import { RegisteredGroup } from './types.js';
 
@@ -237,7 +237,19 @@ async function buildContainerArgs(
   // API calls. In M2 this will be replaced by the Token Broker.
   const proxyUrl = getContainerProxyUrl(CREDENTIAL_PROXY_PORT);
   args.push('-e', `ANTHROPIC_BASE_URL=${proxyUrl}`);
-  logger.debug({ containerName, proxyUrl }, 'Credential proxy configured for container');
+  // Inject a placeholder credential matching the host's auth mode so Claude
+  // Code passes its local "not logged in" check. The proxy strips this and
+  // injects the real credential before forwarding to Anthropic.
+  const authMode = detectAuthMode();
+  if (authMode === 'api-key') {
+    args.push('-e', 'ANTHROPIC_API_KEY=proxied');
+  } else {
+    args.push('-e', 'CLAUDE_CODE_OAUTH_TOKEN=proxied');
+  }
+  logger.debug(
+    { containerName, proxyUrl, authMode },
+    'Credential proxy configured for container',
+  );
 
   // Runtime-specific args for host gateway resolution
   args.push(...hostGatewayArgs());

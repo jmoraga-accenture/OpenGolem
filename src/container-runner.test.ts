@@ -62,6 +62,7 @@ vi.mock('./container-runtime.js', () => ({
 // Mock credential-proxy
 vi.mock('./credential-proxy.js', () => ({
   getContainerProxyUrl: (port: number) => `http://host.docker.internal:${port}`,
+  detectAuthMode: () => 'oauth',
 }));
 
 // Create a controllable fake ChildProcess
