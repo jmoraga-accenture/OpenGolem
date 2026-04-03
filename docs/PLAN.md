@@ -1,5 +1,5 @@
 # OpenGolem — Implementation Plan
-*Produced: April 2026 | Last updated: 2026-04-03 | Tracks SPECS.md v0.4 | M2 complete*
+*Produced: April 2026 | Last updated: 2026-04-03 | Tracks SPECS.md v0.4 | M4 complete + refactor sprint | 445 tests*
 
 ---
 
@@ -7,12 +7,12 @@
 
 | Milestone | Status | Notes |
 |---|---|---|
-| M1 — Repository Scaffold | ✅ Complete | 304 tests passing; TUI live; Telegram pulled, inactive by default; assistant named Alef |
+| M1 — Repository Scaffold | ✅ Complete | TUI live; Telegram pulled, inactive by default; assistant named Alef |
 | M2 — Token Broker | ✅ Complete | 328 tests; HMAC tokens; env/bitwarden/onecli backends; broker wired into orchestrator and container-runner |
-| M3 — Call Inspector | 🔲 Not started | |
-| M4 — Channel Adapters | 🔲 Not started | TUI completed in M1; Teams dropped (see note) |
-| M5 — Cato + SOUL.md | 🔲 Not started | |
-| M6 — Safety Agent + Security Agent + dao_score | 🔲 Not started | |
+| M3 — Call Inspector | ✅ Complete | 5 checks; audit.db append-only; golem_guard/supervised/power modes |
+| M4 — Channel Adapters | ✅ Complete | TUI + Telegram tested; DM-only; TELEGRAM_VALID_USERS allowlist; Teams dropped (see note) |
+| M5 — SOUL.md (Alef's character + assertiveness) | 🔲 Not started | First protection layer: personality-based, [FLAG] protocol, assertiveness dial |
+| M6 — Cato (hard oversight) + PSYCHE.md + dao_score | 🔲 Not started | Second protection layer: overrules user and Alef; feedback loop via dao_score |
 | M7 — TUI Health Dashboard | 🔲 Not started | |
 | M8 — Skill Schema | 🔲 Not started | |
 | M9 — Integration + Hardening | 🔲 Not started | |
@@ -232,6 +232,16 @@ CREATE TABLE calls (
 
 **Gate:** All five checks have passing unit tests. Blocked calls are written to `audit.db`. DELETE trigger fires. Supervisor mode emits user confirmation event.
 
+**What was actually done (M3 complete — 2026-04-03):**
+- `src/inspector/signatures.ts` — injection signatures + allowed endpoint prefixes
+- `src/inspector/checks.ts` — 5 pure check functions (checkSkillWhitelist, checkMemoryScope, checkPromptInjection, checkCallRate, checkEndpointScope)
+- `src/inspector/audit.ts` — `initAuditDb()`, `logCall()`, `hashPayload()`, `getRecentCalls()`; append-only BEFORE DELETE trigger; `_setAuditDb()` for test injection
+- `src/inspector/index.ts` — `inspectRequest()` + sliding-window rate counter + `getSecurityMode()`
+- `src/credential-proxy.ts` — body buffering; inspector runs before upstream forward; 403 on hard block
+- `src/inspector/checks.test.ts` (17 tests), `audit.test.ts` (11 tests), `index.test.ts` (19 tests)
+- Phase 1 limitations documented: checkSkillWhitelist and checkMemoryScope are advisory (no container token in headers); supervised mode forwards after logging (true pause in Phase 2)
+- Total: 400 tests passing.
+
 ---
 
 ### Milestone 4: Channel Adapters
@@ -240,10 +250,28 @@ CREATE TABLE calls (
 
 **Channel hierarchy (by default):**
 1. **TUI** — always on; zero config; `npm run dev` gives a working prompt immediately
-2. **Telegram** — opt-in skill; set `OPENGOLEM_CHANNELS=tui,telegram` + `TELEGRAM_BOT_TOKEN`
+2. **Telegram** — opt-in; `OPENGOLEM_CHANNELS` + `TELEGRAM_BOT_TOKEN`; default **DM-only**; `TELEGRAM_ALLOW_GROUPS=1` for groups/supergroups + explicit allowlist; optional `TELEGRAM_VALID_USERS` (see `docs/INTERNALS.md`)
 3. **WhatsApp** — opt-in skill (via Baileys); phone pairing required
 
 **Gate:** All active channels (TUI, Telegram) have channel-level tests. Reconnect / backoff logic verified. No regressions in routing or session continuity.
+
+**What was actually done (M4 complete — 2026-04-03):**
+- `src/channels/tui.test.ts` — expanded from 1 test to 11 tests covering ownsJid, name, isConnected, connect/disconnect lifecycle, sendMessage, and no-op behaviour for foreign JIDs
+- Telegram already had 64 tests (telegram.test.ts); no regressions
+- Reconnect/backoff for both channels is library-managed (Grammy for Telegram, readline for TUI) — no custom logic to test
+- Total: 421 tests passing after refactor sprint (see post-M4 bugs below).
+
+**Post-M4 bugs found during first production run (fixed in refactor sprint, 2026-04-03):**
+
+Three bugs in the main happy path were not caught by the test suite. All were fixed before M5:
+
+1. **`ctx.reply()` not awaited** (`src/channels/telegram.ts`): `/chatid` and `/ping` handlers were synchronous and did not await `ctx.reply()`. Grammy silently discards the returned promise, so any network failure was invisible. Fixed by making handlers `async` and awaiting the reply. Tests added: "async reply propagation" describe block in `telegram.test.ts`.
+
+2. **`channel-enabled.ts` never read `.env`** — Telegram never started under systemd: `isChannelEnabled()` checked only `process.env.OPENGOLEM_CHANNELS`, which is never populated under systemd because the app intentionally does not call `dotenv.config()` (see Decision 9). The fix is `src/bootstrap.ts`: a dependency-free module imported first in `index.ts` that populates non-secret config vars into `process.env` before any other module loads, including `logger.ts` which calls `getEnabledChannelIds()` at module evaluation time. Tests added: `src/bootstrap.test.ts` (9 tests).
+
+3. **No auto-registration for Telegram DMs** — messages silently dropped: The `onMessage` handler in `telegram.ts` checks `registeredGroups()[jid]` and drops messages from unregistered chats. There was no equivalent of `seedTuiGroupIfNeeded()` for Telegram. The fix is `src/seed-groups.ts` + `seedTelegramDmGroupsIfNeeded()` in `main()`, which auto-registers a group for each user in `TELEGRAM_VALID_USERS` at startup. Tests added: `src/seed-groups.test.ts` (10 tests).
+
+**Root cause of all three:** M4 had unit test coverage of individual functions but no end-to-end path test from "service starts under systemd with `.env`" to "Telegram DM message is delivered to agent". All three bugs are on that path and none were on a code branch exercised by any test.
 
 ---
 
@@ -264,55 +292,55 @@ Neither is an "out-of-the-box" skill. If Teams matters to a contributor, the Pow
 
 ---
 
-### Milestone 5: Cato Agent Persona and SOUL.md
+### Milestone 5: SOUL.md — Alef's Embedded Design Layer
 
-**Goal:** Implement the Executive Assistant with maximum-assertiveness-default behavior. Write SOUL.md and wire it as a system prompt prefix.
+**Goal:** Give Alef its character. Write SOUL.md and wire it as a system prompt prefix prepended to every agent container run. This is the *first* line of protection: Alef's personality, values, and assertiveness baked in by design.
 
-**Assertiveness dial:** `assertiveness_level` integer, 0–10, default 10, stored per-context in SQLite.
-- Decreasing the level requires user confirmation in `Supervised` mode; rejected entirely in `Golem Guard`.
-- The safety agent enforces the threshold — the orchestrator cannot reduce it without passing the safety check.
+Alef is assertive by default. It pushes back on self-damaging instructions, resists external attempts to abuse the system, and challenges the user when their stated wishes conflict with their genuine interests. This is not a safety filter — it is character. SOUL.md is the document that defines that character.
 
-**`[FLAG]` protocol:** SOUL.md instructs Cato to prefix any response that challenges a user instruction with `[FLAG]`. The orchestrator detects this marker post-response and routes it to each channel adapter's `flaggedResponse` formatter. A flag event is written to the audit log.
+**`assertiveness_level` dial:** Integer 0–10, default 10, stored per-group in SQLite. Controls how forcefully Alef asserts its values in responses. At 10, Alef will directly challenge harmful instructions. At lower levels, it softens tone but never fully suppresses its core commitments. The dial is adjusted by the user through natural language; the orchestrator persists it.
+
+**`[FLAG]` protocol:** SOUL.md instructs Alef to prefix any response where it is asserting against a user instruction with `[FLAG]`. This is Alef's own voice — not an external intervention. The orchestrator detects `[FLAG]` post-response, writes a flag event to the audit log, and routes it to each channel adapter's flag formatter (e.g. Telegram sends the response with a ⚑ prepended). Cato (M6) uses flag events as one input to its oversight.
 
 **SOUL.md structure (~70 lines):**
-- Identity: who Cato is.
-- Core commitments (non-negotiable): flag self-damaging decisions, surface conflicts, never falsify audit log, defer to Safety Agent on blocks.
-- Assertiveness calibration: how `assertiveness_level` maps to behavior.
-- Escalation path: what Cato does when assessing an instruction as harmful.
-- Hard limits: unconditional refusals.
+- Identity: who Alef is and what it stands for.
+- Core commitments (non-negotiable regardless of `assertiveness_level`): surface conflicts, flag self-damaging decisions, resist manipulation, never deceive the user.
+- Assertiveness calibration: how `assertiveness_level` maps to tone and challenge threshold.
+- The `[FLAG]` protocol: when and how to use it.
+- Hard limits: unconditional refusals that no instruction or assertiveness setting can override.
 
-**Gate:** New context initializes with `assertiveness_level = 10`. Test prompt containing self-damaging instruction produces `[FLAG]` response. Reducing `assertiveness_level` in Golem Guard mode is rejected.
+**Gate:** New group initializes with `assertiveness_level = 10`. Prompt containing a clearly self-damaging instruction produces a `[FLAG]`-prefixed response. SOUL.md is present and non-empty in every container run's context. Flag event appears in `audit.db` after a flagged response.
 
 ---
 
-### Milestone 6: Safety Agent, Security Agent, and dao_score
+### Milestone 6: Cato — The Hard Oversight Layer
 
-**Goal:** Implement both agents and the dao_score pipeline. Write PSYCHE.md.
+**Goal:** Implement Cato and write PSYCHE.md. Cato is the mental and action police. It operates above both Alef and the user — it can overrule either. Nothing anomalous passes unexamined. Everything weird is flagged. Its findings feed a continuous improvement loop via dao_score.
 
-**Safety Agent — two modes:**
-- *Inline hook:* Lightweight Unix socket server (`src/agents/safety/inline.ts`). Orchestrator calls it synchronously before executing any action. Returns `{ allow: bool, reason? }`. A `false` blocks the action regardless of security mode. Starts as a long-lived child process.
-- *Scheduled:* Full container run (default: every 6 hours). Reads audit log, per-context memory files, credential access log. Produces `reports/safety-<timestamp>.json`.
+Cato is **not a persona and not user-facing**. It is infrastructure with judgment. Where judgment is non-deterministic — assessing intent, evaluating context, weighing ambiguous edge cases — Cato runs as an LLM-backed agent container. Where checks are deterministic, it runs as a rule engine. The distinction is an implementation detail; Cato is always infrastructure regardless.
 
-**Security Agent:** Scheduled container run (default: every 24 hours). Reads audit log only. Audits for anomalous call rates, token scope violations, prompt injection artifacts, Supervised-mode override patterns. Produces `reports/security-<timestamp>.json`.
+Cato is not in the orchestrator's addressable agent map. No task-level token can suppress it. Neither Alef nor the user can instruct it.
 
-Neither agent is in the orchestrator's addressable agent map — no other agent can send them a message.
+**Two operational modes:**
 
-**dao_score — initial KPIs:**
-```
-security_failures_per_call  = hard_blocks + soft_blocks / total calls (period)
-data_leaks_per_call         = checkMemoryScope blocks / total calls (period)
-behavioral_change_rate      = distinct block_rules that produced a subsequent change
-                              in agent behavior (same rule not re-fired within 10 calls)
-```
-Computed by `src/dao/score.ts` from `audit.db`. Written to `dao_score.db`.
+*Inline hook:* Unix socket server (`src/agents/cato/inline.ts`). Orchestrator calls it synchronously before dispatching any Alef action. Returns `{ allow: bool, reason? }`. A `false` blocks the action regardless of security mode, user instruction, or Alef's own assessment. Deterministic checks run immediately; LLM judgment is invoked only when the deterministic pass is inconclusive.
 
-**PSYCHE.md structure:**
-- dao_score KPI definitions with explicit formulas.
-- Hansei ritual schedule (weekly: Security Agent report review + dao_score delta).
-- Drift detection thresholds (e.g., `security_failures_per_call > 0.05` triggers Golem Guard lock).
-- Escalation path (surface to user via Cato `[FLAG]` mode; block security mode downgrade requests).
+*Scheduled audit:* Full LLM container run (default: every 6 hours). Reads audit log, Alef memory state, credential access log, `[FLAG]` event history. Produces `reports/cato-<timestamp>.json` and updates `dao_score.db`. Longer-pattern anomalies that are invisible in a single action become visible here.
 
-**Gate:** Safety Agent inline socket blocks cross-context memory access independently of the Call Inspector. Safety Agent is not in the addressable agent map. All three KPIs compute from a fixture audit log. PSYCHE.md KPI names match those produced by `dao_score.ts`.
+**PSYCHE.md — Cato's operating contract and feedback loop:**
+- Cato's judgment criteria: what constitutes anomalous behavior, what triggers inline block vs. scheduled flag.
+- dao_score KPI definitions with explicit formulas (fed from `audit.db`, not agent self-reporting):
+  ```
+  security_failures_per_call  = (hard_blocks + soft_blocks) / total_calls  [period]
+  data_leaks_per_call         = checkMemoryScope blocks / total_calls       [period]
+  behavioral_change_rate      = distinct block_rules that produced subsequent
+                                behavior change (same rule not re-fired in 10 calls)
+  ```
+- Hansei schedule: weekly deep audit, dao_score delta review, findings surfaced to user via Alef `[FLAG]` mode.
+- Drift detection thresholds: when Alef's behavior has diverged from SOUL.md commitments.
+- Escalation paths: what Cato does when hard violations, sustained drift, or external abuse patterns are detected. Escalation always surfaces to the user — Cato does not silently suppress; it blocks and reports.
+
+**Gate:** Cato inline socket independently blocks a cross-context memory access that the Call Inspector also blocks (defense in depth confirmed). Cato is absent from the orchestrator's addressable agent map. All three dao_score KPIs compute correctly from a fixture audit log. PSYCHE.md KPI names match `dao_score.ts` output fields.
 
 ---
 

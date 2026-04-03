@@ -1,13 +1,37 @@
 ---
 name: add-telegram-swarm
-description: Add Agent Swarm (Teams) support to Telegram. Each subagent gets its own bot identity in the group. Requires Telegram channel to be set up first (use /add-telegram). Triggers on "agent swarm", "agent teams telegram", "telegram swarm", "bot pool".
+description: Add Agent Swarm (Teams) on Telegram via IPC + bot pool — extra bots send subagent lines in the same group. Requires TELEGRAM_ALLOW_GROUPS=1, explicit allowlists for that tg: group, and TELEGRAM_BOT_POOL. Triggers on "agent swarm", "agent teams telegram", "telegram swarm", "bot pool".
 ---
 
 # Add Agent Swarm to Telegram
 
-This skill adds Agent Teams (Swarm) support to an existing Telegram channel. Each subagent in a team gets its own bot identity in the Telegram group, so users can visually distinguish which agent is speaking.
+## Policy — read before any implementation
 
-**Prerequisite**: Telegram must already be set up via the `/add-telegram` skill. If `src/telegram.ts` does not exist or `TELEGRAM_BOT_TOKEN` is not configured, tell the user to run `/add-telegram` first.
+**Group Telegram is opt-in in OpenGolem.** Set `TELEGRAM_ALLOW_GROUPS=1` and configure who may drive the bot:
+
+- `TELEGRAM_VALID_USERS` (comma-separated `from.id` values), and/or  
+- Per-chat rules in `~/.config/opengolem/sender-allowlist.json` for that **`tg:-100…`** JID with `allow` **not** `*` (e.g. a list of numeric user ids, `mode: drop`).
+
+Only allowlisted users have messages stored; the agent does not respond to random group members. See `docs/INTERNALS.md` (Telegram).
+
+**This skill** adds **pool bots** (separate tokens) that **send only** into the same conversation so subagents appear under different bot names. That increases operational complexity (more secrets, Group Privacy for pool bots, etc.).
+
+### User acknowledgment (required)
+
+Before implementing, confirm the user accepts responsibility for:
+
+- **`TELEGRAM_ALLOW_GROUPS` + allowlists** already in place (or they will add them before relying on the swarm).
+- **Multiple bot tokens** (`TELEGRAM_BOT_POOL`) and Group Privacy / membership steps for pool bots as in this skill.
+
+If they want swarms **without** groups, say that this skill is written for **group** UX; DM-only multi-bot flows are not covered here.
+
+---
+
+## What this skill does
+
+Swarm behavior is driven by the **main agent loop and IPC**: subagents call `send_message` with an optional `sender`, and the host routes some Telegram deliveries through **pool** `Api` instances. The **main** bot still receives inbound per `TelegramChannel` (with `TELEGRAM_ALLOW_GROUPS` on for supergroups).
+
+**Prerequisite**: `/add-telegram` done, `src/channels/telegram.ts` present, `TELEGRAM_BOT_TOKEN` set, **`TELEGRAM_ALLOW_GROUPS=1`**, and explicit allowlist for the registered supergroup JID.
 
 ## How It Works
 
@@ -27,6 +51,8 @@ Subagent calls send_message(text: "Found 3 results", sender: "Researcher")
 ```
 
 ## Prerequisites
+
+**Only after policy opt-in above.**
 
 ### 1. Create Pool Bots
 
@@ -70,7 +96,7 @@ export const TELEGRAM_BOT_POOL = (process.env.TELEGRAM_BOT_POOL || '')
 
 ### Step 2: Add Bot Pool to Telegram Module
 
-Read `src/telegram.ts` and add the following:
+Read `src/channels/telegram.ts` (not `src/telegram.ts`) and add the following. **Note:** pool `api.sendMessage(numericId, …)` uses the raw chat id; if your channel refuses group ids on the **main** `sendMessage` path, pool sends are separate `Api` calls — they can still target groups **if** your deployment allows those ids in IPC. Align this with your customized Telegram policy.
 
 1. **Update imports** — add `Api` to the Grammy import:
 
@@ -225,7 +251,7 @@ if (data.sender && data.chatJid.startsWith('tg:')) {
 
 Note: The assistant name prefix is handled by `formatOutbound()` in the router — Telegram channels have `prefixAssistantName = false` so no prefix is added for `tg:` JIDs.
 
-3. **Initialize pool in `main()` in `src/index.ts`** — after creating the Telegram channel, add:
+3. **Initialize pool in `main()` in `src/index.ts`** — after channels connect (or after Telegram is ready), add:
 
 ```typescript
 if (TELEGRAM_BOT_POOL.length > 0) {
@@ -261,7 +287,7 @@ In any group CLAUDE.md that has a "WhatsApp Formatting" section (e.g. `groups/ma
 
 #### 5c. Add Agent Teams instructions to Telegram groups
 
-For each Telegram group that will use agent teams, create or update its `groups/{folder}/CLAUDE.md` with these instructions. Read the existing CLAUDE.md first (or `groups/global/CLAUDE.md` as a base) and add the Agent Teams section:
+For each registered **Telegram supergroup/group** that will use agent teams, create or update its `groups/{folder}/CLAUDE.md` with these instructions. Read the existing CLAUDE.md first (or `groups/global/CLAUDE.md` as a base) and add the Agent Teams section:
 
 ```markdown
 ## Agent Teams
@@ -334,7 +360,7 @@ Must use `unload/load` (macOS) or `restart` (Linux) because the service env vars
 
 Tell the user:
 
-> Send a message in your Telegram group asking for a multi-agent task, e.g.:
+> Send a message in your Telegram group (from an **allowlisted** user) asking for a multi-agent task, e.g.:
 > "Assemble a team of a researcher and a coder to build me a hello world app"
 >
 > You should see:
@@ -375,8 +401,8 @@ Check the group's `CLAUDE.md` has the Agent Teams instructions. The lead agent r
 To remove Agent Swarm support while keeping basic Telegram:
 
 1. Remove `TELEGRAM_BOT_POOL` from `src/config.ts`
-2. Remove pool code from `src/telegram.ts` (`poolApis`, `senderBotMap`, `initBotPool`, `sendPoolMessage`)
-3. Remove pool routing from IPC handler in `src/index.ts` (revert to plain `sendMessage`)
+2. Remove pool code from `src/channels/telegram.ts` (`poolApis`, `senderBotMap`, `initBotPool`, `sendPoolMessage`)
+3. Remove pool routing from IPC handler in `src/ipc.ts` (revert to plain `sendMessage`)
 4. Remove `initBotPool` call from `main()`
 5. Remove `sender` param from MCP tool in `container/agent-runner/src/ipc-mcp-stdio.ts`
 6. Remove Agent Teams section from group CLAUDE.md files

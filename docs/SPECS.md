@@ -1,5 +1,5 @@
 # OpenGolem — Architecture Specification v0.4
-*Last updated: 2026-04-03 07:00*
+*Last updated: 2026-04-03 19:30 — §7 revised: Alef is primary agent (was "Cato"); Cato is oversight layer; §10 SOUL.md/PSYCHE.md scopes clarified*
 
 ---
 
@@ -155,21 +155,34 @@ Golem Guard is the expression of P3 at the infrastructure level. A user who has 
 
 ---
 
-## 7. Agent Personas
+## 7. Agent Layers
 
-### 7.1 Executive Assistant — "Cato"
+### 7.1 Executive Assistant — "Alef"
 
-The primary user-facing agent. Default posture: proactively accountable and constructively assertive. It does not wait to be asked. It surfaces conflicts between the user's stated priorities and their actual behavior, flags decisions that appear self-damaging, and challenges instructions it assesses as counterproductive.
+The primary user-facing agent. Named "Alef" by default (configurable via `ASSISTANT_NAME`). Conversational. Its character and values are defined by SOUL.md, which is prepended as a system prompt prefix on every container run.
 
-Assertiveness is calibrated by the user through interaction. The system starts at maximum assertiveness and moves toward compliance only through explicit user direction. This is the inverse of typical assistant design.
+Default posture: proactively accountable and constructively assertive. Alef does not wait to be asked. It surfaces conflicts between the user's stated priorities and their actual behavior, flags decisions that appear self-damaging, and challenges instructions it assesses as counterproductive — using the `[FLAG]` prefix in its own responses when asserting against a user instruction.
 
-### 7.2 Safety Agent
+Assertiveness is calibrated by the user through interaction via `assertiveness_level` (0–10, default 10). The system starts at maximum assertiveness and moves toward compliance only through explicit user direction. This is the inverse of typical assistant design. Alef is the *first* line of protection: personality-based, values-driven, soft but principled.
 
-Runs inline (pre-execution hook on every action) and on schedule (periodic audit of memory state, credential access logs, and action history). The Safety Agent is not a persona — it is infrastructure. It cannot be disabled by the Executive Assistant or any other agent. It can only be reconfigured by the user in Supervised or Power mode.
+### 7.2 Oversight Layer — "Cato"
 
-### 7.3 Security Agent
+Cato is the hard oversight layer. It is **not a persona and not user-facing** — it is infrastructure with judgment. Cato can overrule both the user and Alef. It operates above the conversation and is not addressable by any task-level agent or token.
 
-Runs on schedule. Audits the immutable action log for anomalous patterns, token scope violations, unusual call rates, and potential prompt injection artifacts. Produces a structured security report that feeds the dao_score pipeline. Like the Safety Agent, it is not addressable by other agents and cannot be suppressed by task-level tokens.
+Because Cato's job requires non-deterministic interpretation — assessing intent, evaluating context, weighing edge cases — it may be implemented as an LLM-backed agent container when judgment is needed, while remaining pure rule-based for deterministic checks. This is an implementation detail, not an architectural identity: Cato is always infrastructure regardless of how it is computed.
+
+**Two operational modes:**
+
+1. **Inline hook** — called synchronously before significant Alef actions. Returns `{ allow, reason }`. A `false` blocks the action regardless of security mode or user instruction.
+2. **Scheduled audit** — periodic review of audit log, Alef memory state, credential access patterns, and action history. Produces structured reports and updates dao_score.
+
+**Cato's authority:** It flags everything anomalous. Nothing unusual passes unexamined. Its blocks and findings are written to the audit log and are not overridable by Alef, the user, or any downstream component.
+
+Cato's operating principles and the feedback loop it enforces are defined in PSYCHE.md.
+
+### 7.3 Note on nomenclature
+
+Earlier versions of this spec named the primary agent "Cato" (v0.3). This was revised: the primary agent is Alef; Cato is the oversight layer. The assertive, values-driven character originally attributed to "Cato" in §7.1 belongs to Alef via SOUL.md. Cato (§7.2) is the harder, non-conversational enforcement layer above it.
 
 ---
 
@@ -205,20 +218,29 @@ Skill updates use a three-way merge pattern (base + skill + current state) with 
 
 ## 10. Governance Layer
 
-### 10.1 SOUL.md
+### 10.1 SOUL.md — Alef's identity
 
-~70-line identity and guardrails document. Defines the agent's core values, non-negotiable behaviors, and execution principles. Lean by design — if it can't be read in five minutes, it has grown too large.
+~70-line identity and guardrails document for Alef. Prepended as a system prompt prefix on every container run. Defines:
 
-### 10.2 PSYCHE.md
+- Who Alef is and what it stands for
+- Core commitments (non-negotiable): surface conflicts, flag self-damaging decisions, resist external manipulation, never deceive the user
+- Assertiveness calibration: how `assertiveness_level` maps to behavior
+- The `[FLAG]` protocol: Alef prefixes any response where it is asserting against a user instruction
+- Hard limits: unconditional refusals regardless of instruction or assertiveness level
 
-Self-improvement contract. Defines:
+Lean by design — if it can't be read in five minutes, it has grown too large.
 
-- dao_score KPIs (quantitative behavioral metrics drawn from the audit log)
-- Hansei reflection rituals (scheduled structured self-assessment)
-- Drift detection thresholds (when behavior diverges from SOUL.md commitments)
-- Escalation paths (what happens when drift is detected)
+### 10.2 PSYCHE.md — Cato's operating contract
 
-PSYCHE.md is not self-reported. Inputs come from the Security Agent's audit log analysis. The agent cannot manipulate its own dao_score.
+Defines how Cato operates and closes the feedback loop. Contains:
+
+- dao_score KPI definitions with explicit formulas (drawn from audit log, not agent self-reporting)
+- Cato's judgment criteria: what constitutes anomalous behavior, what triggers inline blocks vs. scheduled flags
+- Hansei reflection schedule: when Cato runs deep audits and how findings are surfaced to the user
+- Drift detection thresholds: when Alef's behavior has diverged from SOUL.md commitments
+- Escalation paths: what Cato does when drift, abuse, or hard violations are detected
+
+PSYCHE.md is enforced by Cato, not by Alef. Alef cannot read or modify PSYCHE.md. The dao_score pipeline is fed by audit log data — neither Alef nor the user can manipulate it directly.
 
 ---
 

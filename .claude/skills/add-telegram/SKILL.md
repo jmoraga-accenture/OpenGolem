@@ -1,6 +1,6 @@
 ---
 name: add-telegram
-description: Add Telegram as a channel. Can replace WhatsApp entirely or run alongside it. Also configurable as a control-only channel (triggers actions) or passive channel (receives notifications only).
+description: Add Telegram as a channel. Defaults to DMs only; TELEGRAM_ALLOW_GROUPS=1 enables supergroups/groups with required allowlists. Uses TELEGRAM_BOT_TOKEN, optional TELEGRAM_VALID_USERS, TELEGRAM_ALLOW_GROUPS in .env.
 ---
 
 # Add Telegram Channel
@@ -89,7 +89,15 @@ Add to `.env`:
 TELEGRAM_BOT_TOKEN=<their-token>
 ```
 
-Channels auto-enable when their credentials are present — no extra configuration needed.
+Optional — only allow specific Telegram user ids (numeric `from.id`, comma-separated):
+
+```bash
+TELEGRAM_VALID_USERS=123456789,987654321
+```
+
+When set, other users cannot have messages stored; see `docs/INTERNALS.md` (Telegram section).
+
+Channels auto-enable when their credentials are present — add `OPENGOLEM_CHANNELS=tui,telegram` (or `telegram` alone) if needed.
 
 Sync to container environment:
 
@@ -99,17 +107,15 @@ mkdir -p data/env && cp .env data/env/env
 
 The container reads environment from `data/env/env`, not `.env` directly.
 
-### Disable Group Privacy (for group chats)
+### Direct messages by default; groups are opt-in
 
 Tell the user:
 
-> **Important for group chats**: By default, Telegram bots only see @mentions and commands in groups. To let the bot see all messages:
+> **Default:** only **private** chats with the bot are processed. Groups and supergroups are ignored unless you set **`TELEGRAM_ALLOW_GROUPS=1`** in `.env`.
 >
-> 1. Open Telegram and search for `@BotFather`
-> 2. Send `/mybots` and select your bot
-> 3. Go to **Bot Settings** > **Group Privacy** > **Turn off**
+> **If you enable groups:** you must also set **`TELEGRAM_VALID_USERS`** (comma-separated `from.id` values) and/or per-chat rules in `~/.config/opengolem/sender-allowlist.json` for each **`tg:-100…`** JID, with `allow` **not** `*`. Otherwise group messages are not stored. Only allowlisted users can drive the agent.
 >
-> This is optional if you only want trigger-based responses via @mentioning the bot.
+> Get a chat id by sending **`/chatid`** in that chat, then register the returned JID (`tg:…`).
 
 ### Build and restart
 
@@ -125,11 +131,10 @@ launchctl kickstart -k gui/$(id -u)/com.opengolem  # macOS
 
 Tell the user:
 
-> 1. Open your bot in Telegram (search for its username)
-> 2. Send `/chatid` — it will reply with the chat ID
-> 3. For groups: add the bot to the group first, then send `/chatid` in the group
+> 1. Open the chat you want (private, or group/supergroup if `TELEGRAM_ALLOW_GROUPS=1`)
+> 2. Send `/chatid` — it replies with the JID (e.g. `tg:123456789` or `tg:-100…`)
 
-Wait for the user to provide the chat ID (format: `tg:123456789` or `tg:-1001234567890`).
+Wait for the user to provide the chat ID (`tg:…`). Private ids are positive; supergroups use negative ids.
 
 ### Register the chat
 
@@ -153,9 +158,9 @@ npx tsx setup/index.ts --step register -- --jid "tg:<chat-id>" --name "<chat-nam
 
 Tell the user:
 
-> Send a message to your registered Telegram chat:
-> - For main chat: Any message works
-> - For non-main: `@Alef hello` or @mention the bot
+> Send a message in the **private** chat you registered:
+> - For main chat: Any message works (if `requiresTrigger` is false)
+> - For non-main: include the trigger (e.g. `@Alef hello`)
 >
 > The bot should respond within a few seconds.
 
@@ -175,11 +180,9 @@ Check:
 3. For non-main chats: message includes trigger pattern
 4. Service is running: `launchctl list | grep opengolem` (macOS) or `systemctl --user status opengolem` (Linux)
 
-### Bot only responds to @mentions in groups
+### Wrong chat type
 
-Group Privacy is enabled (default). Fix:
-1. `@BotFather` > `/mybots` > select bot > **Bot Settings** > **Group Privacy** > **Turn off**
-2. Remove and re-add the bot to the group (required for the change to take effect)
+If groups are **disabled** (default), only **private** chats work. If you enabled **`TELEGRAM_ALLOW_GROUPS`** but messages do nothing, confirm allowlists are set for that **`tg:-…`** JID (see `docs/INTERNALS.md`).
 
 ### Getting chat ID
 

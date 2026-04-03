@@ -19,6 +19,7 @@ import path from 'path';
 import url from 'url';
 
 import { createCredentialBackend } from './broker/credentials/factory.js';
+import { inspectRequest } from './inspector/index.js';
 import { logger } from './logger.js';
 
 const credentialBackend = createCredentialBackend();
@@ -79,78 +80,112 @@ export function startCredentialProxy(): { port: number; host: string } {
       : 80;
 
   server = http.createServer((req, res) => {
-    // Re-resolve auth on every request so credential rotations take effect immediately
-    resolveAuthHeader()
-      .then((currentAuth) => {
-        const outHeaders: Record<string, string | string[]> = {};
+    // Buffer request body for Call Inspector scanning (M3).
+    // Streaming *responses* from Anthropic are not buffered — they pipe through.
+    const bodyChunks: Buffer[] = [];
 
-        // Forward original headers, stripping hop-by-hop and injecting auth
-        for (const [key, val] of Object.entries(req.headers)) {
-          const lower = key.toLowerCase();
-          if (
-            lower === 'connection' ||
-            lower === 'keep-alive' ||
-            lower === 'proxy-authenticate' ||
-            lower === 'proxy-authorization' ||
-            lower === 'te' ||
-            lower === 'trailers' ||
-            lower === 'transfer-encoding' ||
-            lower === 'upgrade' ||
-            lower === 'host' ||
-            lower === 'x-api-key' ||
-            lower === 'authorization'
-          ) {
-            continue;
+    req.on('data', (chunk: Buffer) => bodyChunks.push(chunk));
+
+    req.on('error', (err) => {
+      logger.error({ err }, 'Credential proxy: request body read error');
+      if (!res.headersSent) res.writeHead(502);
+      res.end('Proxy error');
+    });
+
+    req.on('end', () => {
+      const body = Buffer.concat(bodyChunks);
+
+      // Re-resolve auth on every request so credential rotations take effect immediately
+      resolveAuthHeader()
+        .then((currentAuth) => {
+          // --- Call Inspector (M3) ---
+          const inspection = inspectRequest(req.url ?? '/', body.toString('utf8'));
+          if (!inspection.allow) {
+            logger.warn(
+              { rule: inspection.blockRule, url: req.url },
+              'Credential proxy: request blocked by Call Inspector',
+            );
+            if (!res.headersSent) {
+              res.writeHead(403, { 'Content-Type': 'application/json' });
+            }
+            res.end(JSON.stringify({ error: 'blocked', rule: inspection.blockRule }));
+            return;
           }
-          if (val !== undefined) outHeaders[key] = val as string | string[];
-        }
 
-        outHeaders['host'] = upstreamHost;
+          const outHeaders: Record<string, string | string[]> = {};
 
-        if (currentAuth) {
-          outHeaders[currentAuth.name] = currentAuth.value;
-        }
-
-        const options: https.RequestOptions = {
-          hostname: upstreamHost,
-          port: upstreamPort,
-          path: req.url,
-          method: req.method,
-          headers: outHeaders,
-          timeout: 30000,
-        };
-
-        const transport = isHttps ? https : http;
-        const proxyReq = transport.request(options, (proxyRes) => {
-          res.writeHead(proxyRes.statusCode ?? 502, proxyRes.headers);
-          proxyRes.pipe(res, { end: true });
-        });
-
-        proxyReq.on('timeout', () => {
-          logger.error('Credential proxy upstream request timed out after 30s');
-          proxyReq.destroy();
-          if (!res.headersSent) res.writeHead(504);
-          res.end('Upstream timeout');
-        });
-
-        proxyReq.on('error', (err) => {
-          logger.error({ err }, 'Credential proxy upstream error');
-          if (!res.headersSent) {
-            res.writeHead(502);
+          // Forward original headers, stripping hop-by-hop, auth (replaced below),
+          // and content-length (recalculated from buffered body).
+          for (const [key, val] of Object.entries(req.headers)) {
+            const lower = key.toLowerCase();
+            if (
+              lower === 'connection' ||
+              lower === 'keep-alive' ||
+              lower === 'proxy-authenticate' ||
+              lower === 'proxy-authorization' ||
+              lower === 'te' ||
+              lower === 'trailers' ||
+              lower === 'transfer-encoding' ||
+              lower === 'upgrade' ||
+              lower === 'host' ||
+              lower === 'x-api-key' ||
+              lower === 'authorization' ||
+              lower === 'content-length'
+            ) {
+              continue;
+            }
+            if (val !== undefined) outHeaders[key] = val as string | string[];
           }
-          res.end('Credential proxy upstream error');
-        });
 
-        req.pipe(proxyReq, { end: true });
-      })
-      .catch((err) => {
-        logger.error(
-          { err },
-          'Credential proxy: failed to resolve auth header',
-        );
-        if (!res.headersSent) res.writeHead(502);
-        res.end('Credential proxy error');
-      });
+          outHeaders['host'] = upstreamHost;
+          if (body.length > 0) outHeaders['content-length'] = String(body.length);
+
+          if (currentAuth) {
+            outHeaders[currentAuth.name] = currentAuth.value;
+          }
+
+          const options: https.RequestOptions = {
+            hostname: upstreamHost,
+            port: upstreamPort,
+            path: req.url,
+            method: req.method,
+            headers: outHeaders,
+            timeout: 30000,
+          };
+
+          const transport = isHttps ? https : http;
+          const proxyReq = transport.request(options, (proxyRes) => {
+            res.writeHead(proxyRes.statusCode ?? 502, proxyRes.headers);
+            proxyRes.pipe(res, { end: true });
+          });
+
+          proxyReq.on('timeout', () => {
+            logger.error('Credential proxy upstream request timed out after 30s');
+            proxyReq.destroy();
+            if (!res.headersSent) res.writeHead(504);
+            res.end('Upstream timeout');
+          });
+
+          proxyReq.on('error', (err) => {
+            logger.error({ err }, 'Credential proxy upstream error');
+            if (!res.headersSent) {
+              res.writeHead(502);
+            }
+            res.end('Credential proxy upstream error');
+          });
+
+          if (body.length > 0) proxyReq.write(body);
+          proxyReq.end();
+        })
+        .catch((err) => {
+          logger.error(
+            { err },
+            'Credential proxy: failed to resolve auth header',
+          );
+          if (!res.headersSent) res.writeHead(502);
+          res.end('Credential proxy error');
+        });
+    });
   });
 
   server.on('error', (err: NodeJS.ErrnoException) => {

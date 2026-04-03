@@ -1,7 +1,12 @@
 import fs from 'fs';
 
-import { SENDER_ALLOWLIST_PATH } from './config.js';
+import {
+  getTelegramValidUserSet,
+  isTelegramAllowGroupsEnabled,
+  SENDER_ALLOWLIST_PATH,
+} from './config.js';
 import { logger } from './logger.js';
+import type { NewMessage } from './types.js';
 
 export interface ChatAllowlistEntry {
   allow: '*' | string[];
@@ -95,11 +100,37 @@ function getEntry(
   return cfg.chats[chatJid] ?? cfg.default;
 }
 
+/** Supergroups/groups use negative numeric ids in `tg:` JIDs. */
+export function isTelegramGroupSupergroupJid(jid: string): boolean {
+  if (!jid.startsWith('tg:')) return false;
+  const rest = jid.slice(3);
+  return rest.startsWith('-');
+}
+
+/**
+ * When group Telegram is enabled, every supergroup/group must have an explicit
+ * allowlist so random members cannot drive the agent. Satisfied by non-empty
+ * `TELEGRAM_VALID_USERS` or a per-chat entry whose `allow` is not `*`.
+ */
+export function telegramGroupHasExplicitAllowlist(
+  chatJid: string,
+  cfg: SenderAllowlistConfig,
+): boolean {
+  if (!isTelegramGroupSupergroupJid(chatJid)) return true;
+  if (!isTelegramAllowGroupsEnabled()) return true;
+  if (getTelegramValidUserSet()) return true;
+  return getEntry(chatJid, cfg).allow !== '*';
+}
+
 export function isSenderAllowed(
   chatJid: string,
   sender: string,
   cfg: SenderAllowlistConfig,
 ): boolean {
+  const tgSet = getTelegramValidUserSet();
+  if (chatJid.startsWith('tg:') && tgSet) {
+    return tgSet.has(sender);
+  }
   const entry = getEntry(chatJid, cfg);
   if (entry.allow === '*') return true;
   return entry.allow.includes(sender);
@@ -109,6 +140,9 @@ export function shouldDropMessage(
   chatJid: string,
   cfg: SenderAllowlistConfig,
 ): boolean {
+  if (chatJid.startsWith('tg:') && getTelegramValidUserSet()) {
+    return true;
+  }
   return getEntry(chatJid, cfg).mode === 'drop';
 }
 
@@ -125,4 +159,30 @@ export function isTriggerAllowed(
     );
   }
   return allowed;
+}
+
+/** Inbound fields used when applying the allowlist to stored messages. */
+export type AllowlistMessageSlice = Pick<
+  NewMessage,
+  'sender' | 'is_from_me' | 'is_bot_message'
+>;
+
+/**
+ * Telegram only: inbound messages from non-allowlisted users must not reach
+ * the agent or trigger processing (main groups previously skipped this).
+ * Other channels are unchanged. For Telegram you can set `TELEGRAM_VALID_USERS`
+ * in `.env` (comma-separated IDs) or use `sender-allowlist.json`.
+ */
+export function filterMessagesForTelegramAllowlist<T extends AllowlistMessageSlice>(
+  chatJid: string,
+  messages: T[],
+  cfg: SenderAllowlistConfig,
+): T[] {
+  if (!chatJid.startsWith('tg:')) return messages;
+  return messages.filter(
+    (m) =>
+      m.is_from_me ||
+      m.is_bot_message ||
+      isSenderAllowed(chatJid, m.sender, cfg),
+  );
 }

@@ -9,6 +9,8 @@ const envConfig = readEnvFile([
   'ASSISTANT_NAME',
   'ASSISTANT_HAS_OWN_NUMBER',
   'TZ',
+  'TELEGRAM_VALID_USERS',
+  'TELEGRAM_ALLOW_GROUPS',
 ]);
 
 export const ASSISTANT_NAME =
@@ -96,3 +98,36 @@ function resolveConfigTimezone(): string {
   return 'UTC';
 }
 export const TIMEZONE = resolveConfigTimezone();
+
+/**
+ * Comma-separated Telegram user IDs (strings, same as `from.id` / message `sender`).
+ * When non-empty, only these users may interact on `tg:` chats; others are dropped
+ * before storage. Unset or empty → use `~/.config/opengolem/sender-allowlist.json` only.
+ */
+export function getTelegramValidUserSet(): Set<string> | null {
+  const rawSource =
+    process.env.TELEGRAM_VALID_USERS !== undefined
+      ? process.env.TELEGRAM_VALID_USERS
+      : (envConfig.TELEGRAM_VALID_USERS ?? '');
+  const raw = rawSource.trim();
+  if (!raw) return null;
+  const ids = raw
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean);
+  return ids.length > 0 ? new Set(ids) : null;
+}
+
+/**
+ * When true, Telegram accepts group/supergroup inbound updates and allows
+ * outbound to negative chat ids. Default false — DMs only. Group chats still
+ * require an explicit allowlist (TELEGRAM_VALID_USERS or per-chat allow ≠ *).
+ */
+export function isTelegramAllowGroupsEnabled(): boolean {
+  const v =
+    process.env.TELEGRAM_ALLOW_GROUPS !== undefined
+      ? process.env.TELEGRAM_ALLOW_GROUPS
+      : (envConfig.TELEGRAM_ALLOW_GROUPS ?? '');
+  if (!v.trim()) return false;
+  return /^(1|true|yes)$/i.test(v.trim());
+}

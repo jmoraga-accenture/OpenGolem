@@ -4,7 +4,11 @@ import path from 'path';
 
 import { Api, Bot } from 'grammy';
 
-import { ASSISTANT_NAME, TRIGGER_PATTERN } from '../config.js';
+import {
+  ASSISTANT_NAME,
+  isTelegramAllowGroupsEnabled,
+  TRIGGER_PATTERN,
+} from '../config.js';
 import { readEnvFile } from '../env.js';
 import { resolveGroupFolderPath } from '../group-folder.js';
 import { logger } from '../logger.js';
@@ -21,6 +25,43 @@ export interface TelegramChannelOpts {
   onMessage: OnInboundMessage;
   onChatMetadata: OnChatMetadata;
   registeredGroups: () => Record<string, RegisteredGroup>;
+}
+
+/** Telegram private chats use positive numeric chat ids; groups/supergroups are negative. */
+export function isTelegramPrivateChatId(numericId: string): boolean {
+  if (!/^\d+$/.test(numericId)) return false;
+  try {
+    return BigInt(numericId) > 0n;
+  } catch {
+    return false;
+  }
+}
+
+function isTelegramGroupNumericId(numericId: string): boolean {
+  return /^-\d+$/.test(numericId);
+}
+
+/** Inbound: private always; group/supergroup only if TELEGRAM_ALLOW_GROUPS is set. */
+function acceptTelegramInboundChat(
+  chat: { type?: string } | undefined,
+): boolean {
+  if (!chat?.type) return false;
+  if (chat.type === 'private') return true;
+  if (
+    isTelegramAllowGroupsEnabled() &&
+    (chat.type === 'group' || chat.type === 'supergroup')
+  ) {
+    return true;
+  }
+  return false;
+}
+
+function isTelegramOutboundTargetId(numericId: string): boolean {
+  if (isTelegramPrivateChatId(numericId)) return true;
+  if (isTelegramAllowGroupsEnabled() && isTelegramGroupNumericId(numericId)) {
+    return true;
+  }
+  return false;
 }
 
 /**
@@ -117,23 +158,37 @@ export class TelegramChannel implements Channel {
     });
 
     // Command to get chat ID (useful for registration)
-    this.bot.command('chatid', (ctx) => {
+    this.bot.command('chatid', async (ctx) => {
+      if (!acceptTelegramInboundChat(ctx.chat)) {
+        logger.debug(
+          { chatId: ctx.chat?.id, type: ctx.chat?.type },
+          'Telegram: /chatid ignored (unsupported chat type or groups disabled)',
+        );
+        return;
+      }
       const chatId = ctx.chat.id;
       const chatType = ctx.chat.type;
       const chatName =
         chatType === 'private'
           ? ctx.from?.first_name || 'Private'
-          : (ctx.chat as any).title || 'Unknown';
+          : (ctx.chat as { title?: string }).title || 'Unknown';
 
-      ctx.reply(
+      await ctx.reply(
         `Chat ID: \`tg:${chatId}\`\nName: ${chatName}\nType: ${chatType}`,
         { parse_mode: 'Markdown' },
       );
     });
 
     // Command to check bot status
-    this.bot.command('ping', (ctx) => {
-      ctx.reply(`${ASSISTANT_NAME} is online.`);
+    this.bot.command('ping', async (ctx) => {
+      if (!acceptTelegramInboundChat(ctx.chat)) {
+        logger.debug(
+          { chatId: ctx.chat?.id, type: ctx.chat?.type },
+          'Telegram: /ping ignored (unsupported chat type or groups disabled)',
+        );
+        return;
+      }
+      await ctx.reply(`${ASSISTANT_NAME} is online.`);
     });
 
     // Telegram bot commands handled above — skip them in the general handler
@@ -144,6 +199,14 @@ export class TelegramChannel implements Channel {
       if (ctx.message.text.startsWith('/')) {
         const cmd = ctx.message.text.slice(1).split(/[\s@]/)[0].toLowerCase();
         if (TELEGRAM_BOT_COMMANDS.has(cmd)) return;
+      }
+
+      if (!acceptTelegramInboundChat(ctx.chat)) {
+        logger.debug(
+          { chatId: ctx.chat.id, type: ctx.chat.type },
+          'Telegram: ignoring message (unsupported chat type or groups disabled)',
+        );
+        return;
       }
 
       const chatJid = `tg:${ctx.chat.id}`;
@@ -168,11 +231,10 @@ export class TelegramChannel implements Channel {
           'Unknown'
         : undefined;
 
-      // Determine chat name
       const chatName =
         ctx.chat.type === 'private'
           ? senderName
-          : (ctx.chat as any).title || chatJid;
+          : (ctx.chat as { title?: string }).title || chatJid;
 
       // Translate Telegram @bot_username mentions into TRIGGER_PATTERN format.
       // Telegram @mentions (e.g., @andy_ai_bot) won't match TRIGGER_PATTERN
@@ -194,7 +256,6 @@ export class TelegramChannel implements Channel {
         }
       }
 
-      // Store chat metadata for discovery
       const isGroup =
         ctx.chat.type === 'group' || ctx.chat.type === 'supergroup';
       this.opts.onChatMetadata(
@@ -242,6 +303,13 @@ export class TelegramChannel implements Channel {
       placeholder: string,
       opts?: { fileId?: string; filename?: string },
     ) => {
+      if (!acceptTelegramInboundChat(ctx.chat)) {
+        logger.debug(
+          { chatId: ctx.chat?.id, type: ctx.chat?.type },
+          'Telegram: ignoring media (unsupported chat type or groups disabled)',
+        );
+        return;
+      }
       const chatJid = `tg:${ctx.chat.id}`;
       const group = this.opts.registeredGroups()[chatJid];
       if (!group) return;
@@ -342,7 +410,10 @@ export class TelegramChannel implements Channel {
 
     // Handle errors gracefully
     this.bot.catch((err) => {
-      logger.error({ err: err.message }, 'Telegram bot error');
+      logger.error(
+        { err: (err as { error?: unknown }).error ?? err },
+        'Telegram bot error',
+      );
     });
 
     // Start polling — returns a Promise that resolves when started
@@ -354,9 +425,10 @@ export class TelegramChannel implements Channel {
             'Telegram bot connected',
           );
           console.log(`\n  Telegram bot: @${botInfo.username}`);
-          console.log(
-            `  Send /chatid to the bot to get a chat's registration ID\n`,
-          );
+          const hint = isTelegramAllowGroupsEnabled()
+            ? 'Groups enabled — use TELEGRAM_VALID_USERS or sender-allowlist.json for each tg: group; send /chatid in any allowed chat for IDs'
+            : 'Direct messages only (set TELEGRAM_ALLOW_GROUPS=1 for groups + explicit allowlist)';
+          console.log(`  ${hint}\n`);
           resolve();
         },
       });
@@ -375,6 +447,13 @@ export class TelegramChannel implements Channel {
 
     try {
       const numericId = jid.replace(/^tg:/, '');
+      if (!isTelegramOutboundTargetId(numericId)) {
+        logger.warn(
+          { jid },
+          'Telegram: refuse outbound message (invalid chat id or group sends disabled — set TELEGRAM_ALLOW_GROUPS=1 for supergroups/groups)',
+        );
+        return;
+      }
       const options = threadId
         ? { message_thread_id: parseInt(threadId, 10) }
         : {};
@@ -422,6 +501,7 @@ export class TelegramChannel implements Channel {
     if (!this.bot || !isTyping) return;
     try {
       const numericId = jid.replace(/^tg:/, '');
+      if (!isTelegramOutboundTargetId(numericId)) return;
       await this.bot.api.sendChatAction(numericId, 'typing');
     } catch (err) {
       logger.debug({ jid, err }, 'Failed to send Telegram typing indicator');

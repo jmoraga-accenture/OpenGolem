@@ -4,11 +4,14 @@ import path from 'path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import {
+  filterMessagesForTelegramAllowlist,
   isSenderAllowed,
+  isTelegramGroupSupergroupJid,
   isTriggerAllowed,
   loadSenderAllowlist,
   SenderAllowlistConfig,
   shouldDropMessage,
+  telegramGroupHasExplicitAllowlist,
 } from './sender-allowlist.js';
 
 let tmpDir: string;
@@ -212,5 +215,167 @@ describe('isTriggerAllowed', () => {
     };
     isTriggerAllowed('g1', 'eve', cfg);
     // Logger.debug is called — we just verify no crash; logger is a real pino instance
+  });
+});
+
+describe('filterMessagesForTelegramAllowlist', () => {
+  beforeEach(() => {
+    // Override repo .env so Telegram tests are not gated by TELEGRAM_VALID_USERS.
+    process.env.TELEGRAM_VALID_USERS = '';
+  });
+  afterEach(() => {
+    delete process.env.TELEGRAM_VALID_USERS;
+  });
+
+  const cfgOpen: SenderAllowlistConfig = {
+    default: { allow: '*', mode: 'trigger' },
+    chats: {},
+    logDenied: true,
+  };
+
+  const cfgList: SenderAllowlistConfig = {
+    default: { allow: ['111', '222'], mode: 'trigger' },
+    chats: {},
+    logDenied: true,
+  };
+
+  it('leaves non-Telegram JIDs unchanged', () => {
+    const msgs = [
+      { sender: 'eve', content: 'x' },
+      { sender: 'alice', content: 'y' },
+    ];
+    expect(filterMessagesForTelegramAllowlist('g1@g.us', msgs, cfgList)).toEqual(
+      msgs,
+    );
+  });
+
+  it('with allow=* keeps all Telegram senders', () => {
+    const msgs = [{ sender: '1' }, { sender: '2' }];
+    expect(
+      filterMessagesForTelegramAllowlist('tg:-100', msgs, cfgOpen),
+    ).toEqual(msgs);
+  });
+
+  it('filters Telegram to allowlisted senders only', () => {
+    const msgs = [
+      { sender: '111', content: 'ok' },
+      { sender: '999', content: 'no' },
+    ];
+    expect(
+      filterMessagesForTelegramAllowlist('tg:-100', msgs, cfgList),
+    ).toEqual([msgs[0]]);
+  });
+
+  it('keeps is_from_me and is_bot_message on Telegram', () => {
+    const msgs = [
+      { sender: '999', is_from_me: true },
+      { sender: '888', is_bot_message: true },
+      { sender: '777' },
+    ];
+    expect(
+      filterMessagesForTelegramAllowlist('tg:-100', msgs, cfgList),
+    ).toEqual([msgs[0], msgs[1]]);
+  });
+});
+
+describe('TELEGRAM_VALID_USERS', () => {
+  const cfgOpen: SenderAllowlistConfig = {
+    default: { allow: '*', mode: 'trigger' },
+    chats: {},
+    logDenied: true,
+  };
+
+  const cfgDenyAll: SenderAllowlistConfig = {
+    default: { allow: [], mode: 'trigger' },
+    chats: {},
+    logDenied: true,
+  };
+
+  afterEach(() => {
+    delete process.env.TELEGRAM_VALID_USERS;
+  });
+
+  it('gates tg: senders when set (overrides allow *)', () => {
+    process.env.TELEGRAM_VALID_USERS = '111, 222';
+    expect(isSenderAllowed('tg:-1', '111', cfgOpen)).toBe(true);
+    expect(isSenderAllowed('tg:-1', '999', cfgOpen)).toBe(false);
+  });
+
+  it('does not gate non-Telegram JIDs', () => {
+    process.env.TELEGRAM_VALID_USERS = '111';
+    expect(isSenderAllowed('g@g.us', 'anyone', cfgDenyAll)).toBe(false);
+    expect(isSenderAllowed('g@g.us', 'anyone', cfgOpen)).toBe(true);
+  });
+
+  it('enables drop behavior for tg: while active', () => {
+    process.env.TELEGRAM_VALID_USERS = '111';
+    expect(shouldDropMessage('tg:-1', cfgOpen)).toBe(true);
+    expect(shouldDropMessage('g@g.us', cfgOpen)).toBe(false);
+  });
+
+  it('filterMessages uses env list for Telegram', () => {
+    process.env.TELEGRAM_VALID_USERS = '111';
+    const msgs = [{ sender: '111' }, { sender: '999' }];
+    expect(
+      filterMessagesForTelegramAllowlist('tg:-100', msgs, cfgOpen),
+    ).toEqual([msgs[0]]);
+  });
+});
+
+describe('isTelegramGroupSupergroupJid / telegramGroupHasExplicitAllowlist', () => {
+  let origAllow: string | undefined;
+  let origUsers: string | undefined;
+
+  beforeEach(() => {
+    origAllow = process.env.TELEGRAM_ALLOW_GROUPS;
+    origUsers = process.env.TELEGRAM_VALID_USERS;
+  });
+
+  afterEach(() => {
+    if (origAllow === undefined) delete process.env.TELEGRAM_ALLOW_GROUPS;
+    else process.env.TELEGRAM_ALLOW_GROUPS = origAllow;
+    if (origUsers === undefined) delete process.env.TELEGRAM_VALID_USERS;
+    else process.env.TELEGRAM_VALID_USERS = origUsers;
+  });
+
+  const cfgAll: SenderAllowlistConfig = {
+    default: { allow: '*', mode: 'trigger' },
+    chats: {},
+    logDenied: true,
+  };
+
+  it('detects group/supergroup jids', () => {
+    expect(isTelegramGroupSupergroupJid('tg:-100')).toBe(true);
+    expect(isTelegramGroupSupergroupJid('tg:123')).toBe(false);
+    expect(isTelegramGroupSupergroupJid('g@g.us')).toBe(false);
+  });
+
+  it('private tg jids always pass explicit-allowlist check', () => {
+    process.env.TELEGRAM_ALLOW_GROUPS = '1';
+    process.env.TELEGRAM_VALID_USERS = '';
+    expect(telegramGroupHasExplicitAllowlist('tg:99', cfgAll)).toBe(true);
+  });
+
+  it('when groups disabled, supergroup jid passes without env list', () => {
+    process.env.TELEGRAM_ALLOW_GROUPS = '';
+    process.env.TELEGRAM_VALID_USERS = '';
+    expect(telegramGroupHasExplicitAllowlist('tg:-100', cfgAll)).toBe(true);
+  });
+
+  it('when groups enabled, supergroup needs TELEGRAM_VALID_USERS or non-* allow', () => {
+    process.env.TELEGRAM_ALLOW_GROUPS = '1';
+    process.env.TELEGRAM_VALID_USERS = '';
+    expect(telegramGroupHasExplicitAllowlist('tg:-100', cfgAll)).toBe(false);
+
+    process.env.TELEGRAM_VALID_USERS = '1';
+    expect(telegramGroupHasExplicitAllowlist('tg:-100', cfgAll)).toBe(true);
+
+    process.env.TELEGRAM_VALID_USERS = '';
+    const cfgPerChat: SenderAllowlistConfig = {
+      default: { allow: '*', mode: 'trigger' },
+      chats: { 'tg:-100': { allow: ['42'], mode: 'drop' } },
+      logDenied: true,
+    };
+    expect(telegramGroupHasExplicitAllowlist('tg:-100', cfgPerChat)).toBe(true);
   });
 });

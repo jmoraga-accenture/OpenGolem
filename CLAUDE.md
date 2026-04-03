@@ -41,6 +41,11 @@ Single Node.js process (Phase 1 TypeScript baseline). Channels (Telegram, WhatsA
 - `ANTHROPIC_API_KEY` — API key from console.anthropic.com
 - `ANTHROPIC_BASE_URL_UPSTREAM` — custom Enterprise endpoint (optional)
 - `CREDENTIAL_PROXY_PORT` — proxy port (default: 3001)
+- `OPENGOLEM_CHANNELS` — e.g. `tui`, `tui,telegram` (see `src/channels/channel-enabled.ts`)
+- `TELEGRAM_BOT_TOKEN` — when using Telegram (bot from @BotFather)
+- `TELEGRAM_ALLOW_GROUPS` — `1` / `true` / `yes` to allow supergroups/groups (requires explicit allowlist per `tg:-…` chat; see `docs/INTERNALS.md`)
+- `TELEGRAM_VALID_USERS` — optional comma-separated Telegram user ids; see `docs/INTERNALS.md`
+- `LOG_LEVEL` — `debug` | `info` | `warn` | `error` | `fatal` (TUI-only default is `warn` when unset)
 
 ## Skills
 
@@ -66,7 +71,7 @@ Run commands directly — don't tell the user to run them.
 ```bash
 npm run dev          # Run with hot reload
 npm run build        # Compile TypeScript
-npm test             # Run test suite (246 tests)
+npm test             # Run test suite (445 tests)
 ./container/build.sh # Rebuild agent container image
 ```
 

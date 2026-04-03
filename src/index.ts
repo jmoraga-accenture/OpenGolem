@@ -1,3 +1,5 @@
+import './bootstrap.js';
+
 import fs from 'fs';
 import path from 'path';
 
@@ -54,11 +56,16 @@ import {
   startRemoteControl,
   stopRemoteControl,
 } from './remote-control.js';
+import { getTelegramValidUserSet, isTelegramAllowGroupsEnabled } from './config.js';
+import { seedTelegramDmGroups } from './seed-groups.js';
 import {
+  filterMessagesForTelegramAllowlist,
   isSenderAllowed,
+  isTelegramGroupSupergroupJid,
   isTriggerAllowed,
   loadSenderAllowlist,
   shouldDropMessage,
+  telegramGroupHasExplicitAllowlist,
 } from './sender-allowlist.js';
 import { startSchedulerLoop } from './task-scheduler.js';
 import { isChannelEnabled } from './channels/channel-enabled.js';
@@ -216,11 +223,30 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
 
   if (missedMessages.length === 0) return true;
 
+  const allowlistCfg = loadSenderAllowlist();
+  const toProcess = filterMessagesForTelegramAllowlist(
+    chatJid,
+    missedMessages,
+    allowlistCfg,
+  );
+
+  if (toProcess.length === 0) {
+    lastAgentTimestamp[chatJid] =
+      missedMessages[missedMessages.length - 1].timestamp;
+    saveState();
+    if (allowlistCfg.logDenied && chatJid.startsWith('tg:')) {
+      logger.debug(
+        { chatJid, droppedCount: missedMessages.length },
+        'telegram sender-allowlist: skipped batch (no allowlisted inbound messages)',
+      );
+    }
+    return true;
+  }
+
   // For non-main groups, check if trigger is required and present
   if (!isMainGroup && group.requiresTrigger !== false) {
     const triggerPattern = getTriggerPattern(group.trigger);
-    const allowlistCfg = loadSenderAllowlist();
-    const hasTrigger = missedMessages.some(
+    const hasTrigger = toProcess.some(
       (m) =>
         triggerPattern.test(m.content.trim()) &&
         (m.is_from_me || isTriggerAllowed(chatJid, m.sender, allowlistCfg)),
@@ -228,17 +254,18 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
     if (!hasTrigger) return true;
   }
 
-  const prompt = formatMessages(missedMessages, TIMEZONE);
+  const prompt = formatMessages(toProcess, TIMEZONE);
 
   // Advance cursor so the piping path in startMessageLoop won't re-fetch
   // these messages. Save the old cursor so we can roll back on error.
+  // Use the full batch end so filtered-out Telegram senders are not reprocessed.
   const previousCursor = lastAgentTimestamp[chatJid] || '';
   lastAgentTimestamp[chatJid] =
     missedMessages[missedMessages.length - 1].timestamp;
   saveState();
 
   logger.info(
-    { group: group.name, messageCount: missedMessages.length },
+    { group: group.name, messageCount: toProcess.length },
     'Processing messages',
   );
 
@@ -461,6 +488,33 @@ async function startMessageLoop(): Promise<void> {
             continue;
           }
 
+          const allowlistCfg = loadSenderAllowlist();
+          const groupMessagesAllowed = filterMessagesForTelegramAllowlist(
+            chatJid,
+            groupMessages,
+            allowlistCfg,
+          );
+
+          if (
+            chatJid.startsWith('tg:') &&
+            groupMessages.length > 0 &&
+            groupMessagesAllowed.length === 0
+          ) {
+            const lastTs = groupMessages[groupMessages.length - 1]!.timestamp;
+            const cur = lastAgentTimestamp[chatJid] || '';
+            if (!cur || lastTs > cur) {
+              lastAgentTimestamp[chatJid] = lastTs;
+              saveState();
+            }
+            if (allowlistCfg.logDenied) {
+              logger.debug(
+                { chatJid, count: groupMessages.length },
+                'telegram sender-allowlist: skipped new batch (piping path)',
+              );
+            }
+            continue;
+          }
+
           const isMainGroup = group.isMain === true;
           const needsTrigger = !isMainGroup && group.requiresTrigger !== false;
 
@@ -469,8 +523,7 @@ async function startMessageLoop(): Promise<void> {
           // context when a trigger eventually arrives.
           if (needsTrigger) {
             const triggerPattern = getTriggerPattern(group.trigger);
-            const allowlistCfg = loadSenderAllowlist();
-            const hasTrigger = groupMessages.some(
+            const hasTrigger = groupMessagesAllowed.some(
               (m) =>
                 triggerPattern.test(m.content.trim()) &&
                 (m.is_from_me ||
@@ -487,7 +540,34 @@ async function startMessageLoop(): Promise<void> {
             ASSISTANT_NAME,
             MAX_MESSAGES_PER_PROMPT,
           );
+          const allPendingAllowed = filterMessagesForTelegramAllowlist(
+            chatJid,
+            allPending,
+            allowlistCfg,
+          );
+
+          if (
+            chatJid.startsWith('tg:') &&
+            allPending.length > 0 &&
+            allPendingAllowed.length === 0
+          ) {
+            lastAgentTimestamp[chatJid] =
+              allPending[allPending.length - 1]!.timestamp;
+            saveState();
+            if (allowlistCfg.logDenied) {
+              logger.debug(
+                { chatJid, count: allPending.length },
+                'telegram sender-allowlist: skipped pending batch (piping path)',
+              );
+            }
+            continue;
+          }
+
           const messagesToSend =
+            allPendingAllowed.length > 0
+              ? allPendingAllowed
+              : groupMessagesAllowed;
+          const rawForCursor =
             allPending.length > 0 ? allPending : groupMessages;
           const formatted = formatMessages(messagesToSend, TIMEZONE);
 
@@ -497,7 +577,7 @@ async function startMessageLoop(): Promise<void> {
               'Piped messages to active container',
             );
             lastAgentTimestamp[chatJid] =
-              messagesToSend[messagesToSend.length - 1].timestamp;
+              rawForCursor[rawForCursor.length - 1]!.timestamp;
             saveState();
             // Show typing indicator while the container processes the piped message
             channel
@@ -545,6 +625,22 @@ function ensureContainerSystemRunning(): void {
   cleanupOrphans();
 }
 
+function seedTelegramDmGroupsIfNeeded(): void {
+  seedTelegramDmGroups({
+    isChannelEnabled,
+    getTelegramValidUserSet,
+    registeredGroups: () => registeredGroups,
+    registerGroup: (jid, group) => {
+      logger.info(
+        { jid },
+        'Telegram DM user in TELEGRAM_VALID_USERS — auto-registering as group',
+      );
+      registerGroup(jid, group);
+    },
+    defaultTrigger: DEFAULT_TRIGGER,
+  });
+}
+
 /**
  * If the TUI channel is enabled and tui:console has never been registered,
  * register it automatically so `npm run dev` works without a setup step.
@@ -572,6 +668,7 @@ async function main(): Promise<void> {
   logger.debug('Database initialized');
   loadState();
   seedTuiGroupIfNeeded();
+  seedTelegramDmGroupsIfNeeded();
 
   // Start the Token Broker (M2). Issues scoped HMAC-signed tokens to containers,
   // enabling future per-container credential mediation and budget enforcement.
@@ -640,9 +737,35 @@ async function main(): Promise<void> {
   // Channel callbacks (shared by all channels)
   const channelOpts = {
     onMessage: (chatJid: string, msg: NewMessage) => {
+      if (
+        isTelegramGroupSupergroupJid(chatJid) &&
+        isTelegramAllowGroupsEnabled()
+      ) {
+        const alCfg = loadSenderAllowlist();
+        if (!telegramGroupHasExplicitAllowlist(chatJid, alCfg)) {
+          logger.debug(
+            { chatJid },
+            'telegram: group/supergroup requires TELEGRAM_VALID_USERS or per-chat sender-allowlist (allow cannot be *) — message not stored',
+          );
+          return;
+        }
+      }
+
       // Remote control commands — intercept before storage
       const trimmed = msg.content.trim();
       if (trimmed === '/remote-control' || trimmed === '/remote-control-end') {
+        if (chatJid.startsWith('tg:')) {
+          const rcCfg = loadSenderAllowlist();
+          if (!isSenderAllowed(chatJid, msg.sender, rcCfg)) {
+            if (rcCfg.logDenied) {
+              logger.debug(
+                { chatJid, sender: msg.sender },
+                'sender-allowlist: remote-control denied for sender',
+              );
+            }
+            return;
+          }
+        }
         handleRemoteControl(trimmed, chatJid, msg).catch((err) =>
           logger.error({ err, chatJid }, 'Remote control command error'),
         );

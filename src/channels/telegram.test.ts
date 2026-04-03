@@ -9,9 +9,12 @@ vi.mock('./registry.js', () => ({ registerChannel: vi.fn() }));
 vi.mock('../env.js', () => ({ readEnvFile: vi.fn(() => ({})) }));
 
 // Mock config
+const telegramConfigMock = vi.hoisted(() => ({ allowGroups: false }));
+
 vi.mock('../config.js', () => ({
   ASSISTANT_NAME: 'Alef',
   TRIGGER_PATTERN: /^@Alef\b/i,
+  isTelegramAllowGroupsEnabled: () => telegramConfigMock.allowGroups,
 }));
 
 // Mock logger
@@ -78,7 +81,12 @@ vi.mock('grammy', () => ({
 }));
 
 import fs from 'fs';
-import { TelegramChannel, TelegramChannelOpts } from './telegram.js';
+import {
+  isTelegramPrivateChatId,
+  TelegramChannel,
+  TelegramChannelOpts,
+} from './telegram.js';
+import { logger } from '../logger.js';
 
 // --- Test helpers ---
 
@@ -114,7 +122,7 @@ function createTextCtx(overrides: {
   reply_to_message?: any;
 }) {
   const chatId = overrides.chatId ?? 100200300;
-  const chatType = overrides.chatType ?? 'group';
+  const chatType = overrides.chatType ?? 'private';
   return {
     chat: {
       id: chatId,
@@ -152,7 +160,7 @@ function createMediaCtx(overrides: {
   return {
     chat: {
       id: chatId,
-      type: overrides.chatType ?? 'group',
+      type: overrides.chatType ?? 'private',
       title: 'Test Group',
     },
     from: {
@@ -195,6 +203,7 @@ const flushPromises = () => new Promise((resolve) => setTimeout(resolve, 0));
 describe('TelegramChannel', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    telegramConfigMock.allowGroups = false;
 
     // Mock fs operations used by downloadFile
     vi.spyOn(fs, 'mkdirSync').mockReturnValue(undefined);
@@ -277,7 +286,7 @@ describe('TelegramChannel', () => {
   // --- Text message handling ---
 
   describe('text message handling', () => {
-    it('delivers message for registered group', async () => {
+    it('delivers message for registered private chat', async () => {
       const opts = createTestOpts();
       const channel = new TelegramChannel('test-token', opts);
       await channel.connect();
@@ -288,9 +297,9 @@ describe('TelegramChannel', () => {
       expect(opts.onChatMetadata).toHaveBeenCalledWith(
         'tg:100200300',
         expect.any(String),
-        'Test Group',
+        'Alice',
         'telegram',
-        true,
+        false,
       );
       expect(opts.onMessage).toHaveBeenCalledWith(
         'tg:100200300',
@@ -316,9 +325,9 @@ describe('TelegramChannel', () => {
       expect(opts.onChatMetadata).toHaveBeenCalledWith(
         'tg:999999',
         expect.any(String),
-        'Test Group',
+        'Alice',
         'telegram',
-        true,
+        false,
       );
       expect(opts.onMessage).not.toHaveBeenCalled();
     });
@@ -423,7 +432,24 @@ describe('TelegramChannel', () => {
       );
     });
 
-    it('uses chat title as name for group chats', async () => {
+    it('ignores supergroup messages when TELEGRAM_ALLOW_GROUPS is off', async () => {
+      const opts = createTestOpts();
+      const channel = new TelegramChannel('test-token', opts);
+      await channel.connect();
+
+      const ctx = createTextCtx({
+        text: 'Hello',
+        chatType: 'supergroup',
+        chatTitle: 'Project Team',
+      });
+      await triggerTextMessage(ctx);
+
+      expect(opts.onChatMetadata).not.toHaveBeenCalled();
+      expect(opts.onMessage).not.toHaveBeenCalled();
+    });
+
+    it('delivers supergroup messages when TELEGRAM_ALLOW_GROUPS is on', async () => {
+      telegramConfigMock.allowGroups = true;
       const opts = createTestOpts();
       const channel = new TelegramChannel('test-token', opts);
       await channel.connect();
@@ -442,6 +468,7 @@ describe('TelegramChannel', () => {
         'telegram',
         true,
       );
+      expect(opts.onMessage).toHaveBeenCalled();
     });
 
     it('converts message.date to ISO timestamp', async () => {
@@ -937,7 +964,18 @@ describe('TelegramChannel', () => {
       );
     });
 
-    it('strips tg: prefix from JID', async () => {
+    it('does not send to group chat ids when TELEGRAM_ALLOW_GROUPS is off', async () => {
+      const opts = createTestOpts();
+      const channel = new TelegramChannel('test-token', opts);
+      await channel.connect();
+
+      await channel.sendMessage('tg:-1001234567890', 'Group message');
+
+      expect(currentBot().api.sendMessage).not.toHaveBeenCalled();
+    });
+
+    it('sends to supergroup id when TELEGRAM_ALLOW_GROUPS is on', async () => {
+      telegramConfigMock.allowGroups = true;
       const opts = createTestOpts();
       const channel = new TelegramChannel('test-token', opts);
       await channel.connect();
@@ -1066,6 +1104,30 @@ describe('TelegramChannel', () => {
       expect(currentBot().api.sendChatAction).not.toHaveBeenCalled();
     });
 
+    it('does not send typing to group chat ids when TELEGRAM_ALLOW_GROUPS is off', async () => {
+      const opts = createTestOpts();
+      const channel = new TelegramChannel('test-token', opts);
+      await channel.connect();
+
+      await channel.setTyping('tg:-1001234567890', true);
+
+      expect(currentBot().api.sendChatAction).not.toHaveBeenCalled();
+    });
+
+    it('sends typing to group id when TELEGRAM_ALLOW_GROUPS is on', async () => {
+      telegramConfigMock.allowGroups = true;
+      const opts = createTestOpts();
+      const channel = new TelegramChannel('test-token', opts);
+      await channel.connect();
+
+      await channel.setTyping('tg:-1001234567890', true);
+
+      expect(currentBot().api.sendChatAction).toHaveBeenCalledWith(
+        '-1001234567890',
+        'typing',
+      );
+    });
+
     it('does nothing when bot is not initialized', async () => {
       const opts = createTestOpts();
       const channel = new TelegramChannel('test-token', opts);
@@ -1094,14 +1156,14 @@ describe('TelegramChannel', () => {
   // --- Bot commands ---
 
   describe('bot commands', () => {
-    it('/chatid replies with chat ID and metadata', async () => {
+    it('/chatid replies with chat ID and metadata in private chat', async () => {
       const opts = createTestOpts();
       const channel = new TelegramChannel('test-token', opts);
       await channel.connect();
 
       const handler = currentBot().commandHandlers.get('chatid')!;
       const ctx = {
-        chat: { id: 100200300, type: 'group' as const },
+        chat: { id: 100200300, type: 'private' as const },
         from: { first_name: 'Alice' },
         reply: vi.fn(),
       };
@@ -1110,6 +1172,44 @@ describe('TelegramChannel', () => {
 
       expect(ctx.reply).toHaveBeenCalledWith(
         expect.stringContaining('tg:100200300'),
+        expect.objectContaining({ parse_mode: 'Markdown' }),
+      );
+    });
+
+    it('/chatid does nothing in a group when TELEGRAM_ALLOW_GROUPS is off', async () => {
+      const opts = createTestOpts();
+      const channel = new TelegramChannel('test-token', opts);
+      await channel.connect();
+
+      const handler = currentBot().commandHandlers.get('chatid')!;
+      const ctx = {
+        chat: { id: 100200300, type: 'group' as const, title: 'Team' },
+        from: { first_name: 'Alice' },
+        reply: vi.fn(),
+      };
+
+      await handler(ctx);
+
+      expect(ctx.reply).not.toHaveBeenCalled();
+    });
+
+    it('/chatid works in a group when TELEGRAM_ALLOW_GROUPS is on', async () => {
+      telegramConfigMock.allowGroups = true;
+      const opts = createTestOpts();
+      const channel = new TelegramChannel('test-token', opts);
+      await channel.connect();
+
+      const handler = currentBot().commandHandlers.get('chatid')!;
+      const ctx = {
+        chat: { id: -1001, type: 'supergroup' as const, title: 'Lab' },
+        from: { first_name: 'Alice' },
+        reply: vi.fn(),
+      };
+
+      await handler(ctx);
+
+      expect(ctx.reply).toHaveBeenCalledWith(
+        expect.stringContaining('tg:-1001'),
         expect.objectContaining({ parse_mode: 'Markdown' }),
       );
     });
@@ -1134,13 +1234,16 @@ describe('TelegramChannel', () => {
       );
     });
 
-    it('/ping replies with bot status', async () => {
+    it('/ping replies with bot status in private chat', async () => {
       const opts = createTestOpts();
       const channel = new TelegramChannel('test-token', opts);
       await channel.connect();
 
       const handler = currentBot().commandHandlers.get('ping')!;
-      const ctx = { reply: vi.fn() };
+      const ctx = {
+        chat: { id: 1, type: 'private' as const },
+        reply: vi.fn(),
+      };
 
       await handler(ctx);
 
@@ -1154,6 +1257,87 @@ describe('TelegramChannel', () => {
     it('has name "telegram"', () => {
       const channel = new TelegramChannel('test-token', createTestOpts());
       expect(channel.name).toBe('telegram');
+    });
+  });
+
+  // --- Grammy error handler ---
+
+  describe('Grammy error handler', () => {
+    it('is registered after connect()', async () => {
+      const channel = new TelegramChannel('test-token', createTestOpts());
+      await channel.connect();
+      expect(botRef.current.errorHandler).not.toBeNull();
+    });
+
+    it('logs errors via logger.error', async () => {
+      const channel = new TelegramChannel('test-token', createTestOpts());
+      await channel.connect();
+      const err = { error: new Error('send failed'), message: 'send failed' };
+      botRef.current.errorHandler!(err);
+      expect(vi.mocked(logger.error)).toHaveBeenCalledWith(
+        expect.objectContaining({ err: err.error }),
+        'Telegram bot error',
+      );
+    });
+
+    it('falls back to the outer error when .error is absent', async () => {
+      const channel = new TelegramChannel('test-token', createTestOpts());
+      await channel.connect();
+      const err = new Error('raw error');
+      botRef.current.errorHandler!(err);
+      expect(vi.mocked(logger.error)).toHaveBeenCalledWith(
+        expect.objectContaining({ err }),
+        'Telegram bot error',
+      );
+    });
+  });
+
+  // --- async reply propagation ---
+
+  describe('command handler async reply propagation', () => {
+    it('/chatid propagates a rejected ctx.reply as a rejected promise', async () => {
+      const channel = new TelegramChannel('test-token', createTestOpts());
+      await channel.connect();
+      const handler = botRef.current.commandHandlers.get('chatid')!;
+      const replyError = new Error('network failure');
+      const ctx = {
+        chat: { id: 42, type: 'private' as const },
+        from: { first_name: 'Jim' },
+        reply: vi.fn().mockRejectedValue(replyError),
+      };
+      // Before the fix ctx.reply was not awaited, so errors were swallowed.
+      // Now the handler is async and awaits ctx.reply — the rejection propagates.
+      await expect(handler(ctx)).rejects.toThrow('network failure');
+    });
+
+    it('/ping propagates a rejected ctx.reply as a rejected promise', async () => {
+      const channel = new TelegramChannel('test-token', createTestOpts());
+      await channel.connect();
+      const handler = botRef.current.commandHandlers.get('ping')!;
+      const replyError = new Error('timeout');
+      const ctx = {
+        chat: { id: 42, type: 'private' as const },
+        reply: vi.fn().mockRejectedValue(replyError),
+      };
+      await expect(handler(ctx)).rejects.toThrow('timeout');
+    });
+  });
+
+  describe('isTelegramPrivateChatId', () => {
+    it('accepts positive decimal user ids', () => {
+      expect(isTelegramPrivateChatId('12345')).toBe(true);
+      expect(isTelegramPrivateChatId('100200300')).toBe(true);
+    });
+
+    it('rejects group/supergroup ids', () => {
+      expect(isTelegramPrivateChatId('-1001234567890')).toBe(false);
+      expect(isTelegramPrivateChatId('-1')).toBe(false);
+    });
+
+    it('rejects zero and non-numeric', () => {
+      expect(isTelegramPrivateChatId('0')).toBe(false);
+      expect(isTelegramPrivateChatId('')).toBe(false);
+      expect(isTelegramPrivateChatId('abc')).toBe(false);
     });
   });
 });

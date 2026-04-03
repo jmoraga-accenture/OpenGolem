@@ -348,3 +348,4 @@ describe('trigger gating (requiresTrigger interaction)', () => {
     expect(shouldProcess(false, false, undefined, msgs)).toBe(true);
   });
 });
+

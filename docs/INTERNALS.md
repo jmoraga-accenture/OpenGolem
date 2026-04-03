@@ -143,7 +143,7 @@ Each channel defines its own JID namespace:
 | Channel | JID format | Example |
 |---|---|---|
 | TUI | `tui:<name>` | `tui:console` |
-| Telegram | `<chat_id>@telegram` | `-1001234567890@telegram` |
+| Telegram | `tg:<numeric_chat_id>` | `tg:123456789` (private chat id = user id) |
 | WhatsApp | `<phone>@s.whatsapp.net` or `<id>@g.us` | `447700900000@s.whatsapp.net` |
 
 `channel.ownsJid(jid)` returns true if the JID belongs to that channel. The router uses this to find the right channel when sending outbound messages.
@@ -248,7 +248,39 @@ The proxy calls `credentialBackend.resolve()` on every request (async), so crede
 
 ---
 
-## 7. IPC — Agent to Host Communication
+## 7. Call Inspector (M3)
+
+Every outbound Anthropic API request passes through the Call Inspector before reaching the upstream. The credential proxy buffers the request body, runs five checks in order, and either forwards or returns 403.
+
+```
+Container  →  Credential Proxy  →  Call Inspector  →  Anthropic API
+                                         ↓
+                                      audit.db  (append-only)
+```
+
+**Five checks (run in order):**
+
+| # | Check | Phase 1 status |
+|---|---|---|
+| 1 | `checkSkillWhitelist` | Advisory — no container token in HTTP headers yet |
+| 2 | `checkMemoryScope` | Advisory — same reason |
+| 3 | `checkPromptInjection` | Active — scans body against injection signatures |
+| 4 | `checkCallRate` | Active — sliding 60-second window, default 60 req/min |
+| 5 | `checkEndpointScope` | Active — path must be a valid Anthropic API prefix |
+
+**Security modes** (`OPENGOLEM_SECURITY_MODE`):
+
+| Mode | On check failure |
+|---|---|
+| `golem_guard` (default) | Hard block (403), logged |
+| `supervised` | Soft block — logged, forwarded in Phase 1; interactive pause in Phase 2 |
+| `power` | Only `checkPromptInjection` hard-blocks; others advisory |
+
+**Audit log** (`data/audit.db`): every request (pass or block) gets one row. `DELETE` is blocked at the SQLite trigger level — the table is append-only. The payload is never stored; only its SHA-256 hash is recorded.
+
+---
+
+## 8. IPC — Agent to Host Communication
 
 Containers write JSON files to their `/workspace/ipc/` directory (mounted from `data/ipc/<groupFolder>/`). The IPC watcher (`src/ipc.ts`) polls this directory every second and processes commands:
 
@@ -257,13 +289,13 @@ Containers write JSON files to their `/workspace/ipc/` directory (mounted from `
 | `send_message` | Send text to a chat JID via its channel |
 | `register_group` | Register a new group (adds DB row, creates folder) |
 | `create_task` / `update_task` / `delete_task` | Manage scheduled tasks |
-| `sync_groups` | Force WhatsApp/Telegram group list refresh |
+| `sync_groups` | Force WhatsApp-oriented group / metadata refresh |
 
 This allows agents to autonomously send messages, schedule work, or register new groups without the host polling the container's stdout.
 
 ---
 
-## 8. Connecting Each Channel
+## 9. Connecting Each Channel
 
 ### TUI (console) — default, zero config
 
@@ -275,9 +307,19 @@ npm run dev
 
 You get an `opengolem> ` prompt. Everything you type is routed to the `tui:console` group. On first run, that group is auto-registered pointing to `groups/tui/`. The agent's reply appears directly below your prompt.
 
+**Logging**: Host logs go to **stderr** so they do not interleave with the readline prompt on stdout. When only the TUI channel is enabled and `LOG_LEVEL` is unset, the default level is **warn** (set `LOG_LEVEL=info` for verbose startup).
+
 **Under systemd/headless**: TUI detects no TTY and stays silent. The process stays up so other channels can work. Add a real channel (e.g. Telegram) for headless operation.
 
 ### Telegram
+
+**Default: direct messages only.** Without `TELEGRAM_ALLOW_GROUPS`, the adapter ignores groups/supergroups and only sends to **positive** `tg:` ids (private chats).
+
+**Groups / supergroups (e.g. agent swarms):** set `TELEGRAM_ALLOW_GROUPS=1` (or `true` / `yes`). Then:
+
+- Inbound and outbound work for **negative** `tg:` ids (`tg:-100…`).
+- Each registered **supergroup/group** must have an **explicit** allowlist: non-empty `TELEGRAM_VALID_USERS` **or** a per-chat entry in `~/.config/opengolem/sender-allowlist.json` whose `allow` is **not** `*` for that JID. Otherwise messages from that chat are not stored.
+- Users **not** on the allowlist never reach the agent (`TELEGRAM_VALID_USERS` drop mode, `filterMessagesForTelegramAllowlist`, and trigger checks still apply).
 
 **Prerequisites**: a bot token from [@BotFather](https://t.me/botfather).
 
@@ -286,16 +328,30 @@ You get an `opengolem> ` prompt. Everything you type is routed to the `tui:conso
    TELEGRAM_BOT_TOKEN=123456789:AABBccdd...
    OPENGOLEM_CHANNELS=tui,telegram     # or just: telegram
    ```
+   Optional — comma-separated Telegram user ids (`from.id`); when set, only those users’ messages are stored on `tg:` chats (others dropped at ingest):
+   ```
+   TELEGRAM_VALID_USERS=123456789,987654321
+   ```
+   For groups, also set `TELEGRAM_ALLOW_GROUPS=1` and ensure explicit allowlist rules as above.
+
 2. Restart OpenGolem. The Telegram channel connects via Grammy long-polling.
-3. Send a message to your bot. The bot's chat ID (e.g. `-1001234567890@telegram`) appears in logs.
-4. Register it as a group via the main channel or IPC:
+
+3. Send `/chatid` in the chat you want (private, or group if groups are enabled) to obtain the JID for registration.
+
+4. Register via setup or IPC, for example (private):
    ```json
-   {"type":"register_group","jid":"-1001234567890@telegram","name":"My Group","folder":"my-group","trigger":"@Alef"}
+   {"type":"register_group","jid":"tg:123456789","name":"Alice DM","folder":"telegram_main","trigger":"@Alef"}
+   ```
+   Or supergroup (when `TELEGRAM_ALLOW_GROUPS` is on and allowlist configured):
+   ```json
+   {"type":"register_group","jid":"tg:-1001234567890","name":"Team","folder":"telegram_team","trigger":"@Alef"}
    ```
 
-Messages from that chat are then routed to the agent in `groups/my-group/`.
+**Group privacy:** for the main bot to see all messages in a group (not only commands), disable **Group Privacy** for that bot in @BotFather if you use groups.
 
-**Group vs DM**: Telegram group chats require `@BotFather → Group Privacy → disabled` (or add the bot as admin) so it can read all messages, not just commands.
+**`/remote-control` in Telegram** is restricted to allowlisted senders when `TELEGRAM_VALID_USERS` or sender-allowlist rules apply.
+
+**Telegram Agent Swarm (bot pool):** see `.claude/skills/add-telegram-swarm` — IPC routes some sends through extra bot tokens. Use with `TELEGRAM_ALLOW_GROUPS=1`, allowlists, and pool bots added to the same group; read the skill’s **Policy** section.
 
 ### WhatsApp
 
@@ -313,7 +369,7 @@ Teams is not a packaged skill. The Azure Bot / webhook model is incompatible wit
 
 ---
 
-## 9. Scheduled Tasks
+## 10. Scheduled Tasks
 
 The scheduler (`src/task-scheduler.ts`) polls every 60 seconds. Each task has a `schedule_type`:
 
@@ -328,13 +384,14 @@ Agents create and manage tasks via IPC (`create_task`, `update_task`, `delete_ta
 
 ---
 
-## 10. Data Layout
+## 11. Data Layout
 
 ```
 OpenGolem/
 ├── data/
 │   ├── opengolem.db         ← SQLite: messages, chats, groups, sessions, tasks
 │   ├── broker.sock          ← Token Broker Unix socket (deleted on clean shutdown)
+│   ├── audit.db             ← Call Inspector append-only audit log (never deleted)
 │   └── ipc/
 │       └── <groupFolder>/   ← JSON files from containers (processed and deleted)
 ├── groups/
