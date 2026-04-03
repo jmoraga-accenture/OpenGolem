@@ -12,6 +12,7 @@ import {
   CONTAINER_TIMEOUT,
   CREDENTIAL_PROXY_PORT,
   DATA_DIR,
+  EXTRA_DIR,
   GROUPS_DIR,
   IDLE_TIMEOUT,
   TIMEZONE,
@@ -207,6 +208,15 @@ function buildVolumeMounts(
     hostPath: groupAgentRunnerDir,
     containerPath: '/app/src',
     readonly: false,
+  });
+
+  // Shared read-only context directory — auditable common files for all agents.
+  // Agents and subagents can read but never write; the host owns the contents.
+  fs.mkdirSync(EXTRA_DIR, { recursive: true });
+  mounts.push({
+    hostPath: EXTRA_DIR,
+    containerPath: '/workspace/extra',
+    readonly: true,
   });
 
   // Additional mounts validated against external allowlist (tamper-proof from containers)
