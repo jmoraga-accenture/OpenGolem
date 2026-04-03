@@ -1,5 +1,5 @@
 # OpenGolem — Implementation Plan
-*Produced: April 2026 | Last updated: 2026-04-03 | Tracks SPECS.md v0.4 | M7 + M9 complete | 505 tests*
+*Produced: April 2026 | Last updated: 2026-04-03 | Tracks SPECS.md v0.4 | M7 + M9 complete; SOUL.md [FLAG] revised | 505 tests*
 
 ---
 
@@ -11,7 +11,7 @@
 | M2 — Token Broker | ✅ Complete | 328 tests; HMAC tokens; env/bitwarden/onecli backends; broker wired into orchestrator and container-runner |
 | M3 — Call Inspector | ✅ Complete | 5 checks; audit.db append-only; golem_guard/supervised/power modes |
 | M4 — Channel Adapters | ✅ Complete | TUI + Telegram tested; DM-only; TELEGRAM_VALID_USERS allowlist; Teams dropped (see note) |
-| M5 — SOUL.md (Alef's character + assertiveness) | ✅ Complete | SOUL.md prepended as system prompt; assertiveness_level per group; [FLAG] logged to audit |
+| M5 — SOUL.md (Alef's character + assertiveness) | ✅ Complete | SOUL.md prepended as system prompt; assertiveness_level per group; [FLAG] logged to audit; [FLAG] protocol revised 2026-04-03 |
 | M6 — Cato (hard oversight) + PSYCHE.md + dao_score | ✅ Complete | Inline hook (deterministic stub); scheduled audit every 6h; dao_score.db; PSYCHE.md |
 | M7 — /health endpoint + CLI status | ✅ Complete | GET /health JSON; `npm run status`; 127.0.0.1 only; no TUI split-pane (headless) |
 | M8 — Skill Schema | 🔲 Not started | |
@@ -331,6 +331,8 @@ Alef is assertive by default. It pushes back on self-damaging instructions, resi
 - `src/index.ts` — streaming output callback detects `text.trimStart().startsWith('[FLAG]')`, calls `logFlagEvent()`, logs at INFO level. The `[FLAG]` text is delivered to the user as-is — it is Alef's own voice.
 - Container image rebuilt (`opengolem-agent:latest`).
 - Total: 451 tests passing.
+
+**Post-completion revision (2026-04-03):** [FLAG] protocol tightened. The original instruction ("Reserve it for genuine assertion. A mild caveat does not need it") was subjective — the model was classifying most pushbacks as mild caveats and skipping [FLAG]. Revised to a binary decision rule: **if complying, no [FLAG]; if not complying (in whole or significant part), [FLAG] is required.** Tie goes to [FLAG]. This makes [FLAG] events reliable signals for Cato's audit rather than inconsistent self-reports.
 
 ---
 

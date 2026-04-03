@@ -8,9 +8,15 @@ const TEST_PORT = 0; // 0 = OS assigns a free port
 
 vi.mock('./config.js', () => ({
   HEALTH_PORT: 0,
-  CATO_SOCKET_PATH: path.join(os.tmpdir(), `cato-health-test-${process.pid}.sock`),
+  CATO_SOCKET_PATH: path.join(
+    os.tmpdir(),
+    `cato-health-test-${process.pid}.sock`,
+  ),
   DATA_DIR: os.tmpdir(),
-  DAO_SCORE_DB_PATH: path.join(os.tmpdir(), `dao-health-test-${process.pid}.db`),
+  DAO_SCORE_DB_PATH: path.join(
+    os.tmpdir(),
+    `dao-health-test-${process.pid}.db`,
+  ),
 }));
 vi.mock('./logger.js', () => ({
   logger: { info: vi.fn(), debug: vi.fn(), warn: vi.fn(), error: vi.fn() },
@@ -19,7 +25,11 @@ vi.mock('./cato/dao-score.js', () => ({
   getLatestDaoScore: vi.fn(() => null),
 }));
 
-import { startHealthServer, stopHealthServer, type HealthSnapshot } from './health.js';
+import {
+  startHealthServer,
+  stopHealthServer,
+  type HealthSnapshot,
+} from './health.js';
 
 function getAssignedPort(srv: http.Server): number {
   const addr = srv.address();
@@ -27,7 +37,10 @@ function getAssignedPort(srv: http.Server): number {
   return addr.port;
 }
 
-function httpGet(port: number, path: string): Promise<{ status: number; body: string }> {
+function httpGet(
+  port: number,
+  path: string,
+): Promise<{ status: number; body: string }> {
   return new Promise((resolve, reject) => {
     const req = http.get({ hostname: '127.0.0.1', port, path }, (res) => {
       let body = '';
@@ -67,7 +80,10 @@ describe('Health server — GET /health', () => {
   let port: number;
 
   beforeEach(async () => {
-    const srv = startHealthServer({ getActiveContainerCount: () => 3 }, TEST_PORT);
+    const srv = startHealthServer(
+      { getActiveContainerCount: () => 3 },
+      TEST_PORT,
+    );
     await new Promise<void>((resolve) => srv.once('listening', resolve));
     port = getAssignedPort(srv);
   });

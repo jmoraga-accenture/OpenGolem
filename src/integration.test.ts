@@ -29,7 +29,12 @@ vi.mock('./logger.js', () => ({
   logger: { info: vi.fn(), debug: vi.fn(), warn: vi.fn(), error: vi.fn() },
 }));
 
-import { _setAuditDb, initAuditDb, getRecentCalls, logCall } from './inspector/audit.js';
+import {
+  _setAuditDb,
+  initAuditDb,
+  getRecentCalls,
+  logCall,
+} from './inspector/audit.js';
 import { inspectRequest, _resetCallTimestamps } from './inspector/index.js';
 import { computeDaoScore } from './cato/dao-score.js';
 import { CONFIG_KEYS } from './bootstrap.js';
@@ -77,7 +82,10 @@ describe('M9 Integration — Call Inspector → audit.db pipeline', () => {
   it('clean request → pass logged to audit.db', () => {
     const result = inspectRequest(
       '/v1/messages',
-      JSON.stringify({ model: 'claude-opus-4-6', messages: [{ role: 'user', content: 'Hello' }] }),
+      JSON.stringify({
+        model: 'claude-opus-4-6',
+        messages: [{ role: 'user', content: 'Hello' }],
+      }),
     );
 
     expect(result.allow).toBe(true);
@@ -147,7 +155,11 @@ describe('M9 Integration — dao_score pipeline with fixture audit data', () => 
 
   function insertCall(
     db: Database.Database,
-    opts: { container?: string; outcome?: string; block_rule?: string | null } = {},
+    opts: {
+      container?: string;
+      outcome?: string;
+      block_rule?: string | null;
+    } = {},
   ): void {
     db.prepare(
       'INSERT INTO calls (ts, container, outcome, block_rule) VALUES (?, ?, ?, ?)',
@@ -162,7 +174,10 @@ describe('M9 Integration — dao_score pipeline with fixture audit data', () => 
   it('security_failures_per_call > 0 when hard_blocks exist', () => {
     const db = makeAuditDb();
     insertCall(db, { outcome: 'pass' });
-    insertCall(db, { outcome: 'hard_block', block_rule: 'checkPromptInjection' });
+    insertCall(db, {
+      outcome: 'hard_block',
+      block_rule: 'checkPromptInjection',
+    });
     const score = computeDaoScore(db);
     expect(score.security_failures_per_call).toBeGreaterThan(0);
     expect(score.security_failures_per_call).toBeCloseTo(0.5);
@@ -193,13 +208,21 @@ describe('M9 Integration — dao_score pipeline with fixture audit data', () => 
 
 describe('M9 Integration — Cato inline check (task context)', () => {
   beforeEach(async () => {
-    try { fs.unlinkSync(CATO_SOCKET_PATH); } catch { /* ok */ }
+    try {
+      fs.unlinkSync(CATO_SOCKET_PATH);
+    } catch {
+      /* ok */
+    }
     startCatoInlineHook();
     await new Promise((r) => setTimeout(r, 50));
   });
   afterEach(() => {
     stopCatoInlineHook();
-    try { fs.unlinkSync(CATO_SOCKET_PATH); } catch { /* ok */ }
+    try {
+      fs.unlinkSync(CATO_SOCKET_PATH);
+    } catch {
+      /* ok */
+    }
   });
 
   it('path traversal in task prompt is blocked', async () => {
