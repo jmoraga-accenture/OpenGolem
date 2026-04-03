@@ -1,0 +1,253 @@
+# OpenGolem — Architecture Specification v0.3
+*Last updated: April 2026*
+
+---
+
+## 1. Mission Statement
+
+OpenGolem is a personal AI assistant for power users who are not necessarily engineers. It is safety-first by design — protecting users even from themselves — and its default posture is assertive accountability, not passive helpfulness. It is built to be fully owned, audited, and customized by the individual who runs it.
+
+OpenGolem is not competing on feature count. It is solving a different problem: how do you give a power user genuine AI agency without surrendering security, privacy, or governance?
+
+---
+
+## 2. Design Principles
+
+**P1 — Security by isolation, not by trust.**
+No agent is trusted to behave correctly. Every agent runs inside a container with hard OS-level boundaries. The security perimeter is the *call itself*, not the container boundary.
+
+**P2 — Codebase small enough to audit.**
+The Rust core must be readable by a competent engineer in one sitting. If it isn't, it has grown too large. No feature justifies an unauditable core.
+
+**P3 — Protecting users from themselves.**
+The default mode is Golem Guard — the system flags, blocks, or challenges actions that could harm the user, even if the user requested them. Users dial this down deliberately; it never defaults to permissive.
+
+**P4 — Skills over configuration.**
+Functionality is added via auditable, modular skills. There are no configuration files to sprawl. Customization means code changes to a small, comprehensible codebase.
+
+**P5 — Mediated execution.**
+Agents never call external APIs directly. Every outbound call passes through the Golem Token Broker and the Call Inspector. The agent holds a scoped, time-limited derivative token — never a raw credential.
+
+**P6 — Governance is infrastructure, not policy.**
+SOUL.md (identity and guardrails) and PSYCHE.md (self-improvement contract) are enforced structurally, not by agent self-reporting. The dao_score KPI pipeline feeds from the audit log, not from agent claims.
+
+---
+
+## 3. Stack
+
+| Layer | Technology | Rationale |
+|---|---|---|
+| Core runtime | Rust | Auditability, memory safety, no GC pauses, concrete ecosystem advantages over alternatives |
+| Plugin system | Python plugins via FFI | Rich ML/AI ecosystem without contaminating the core |
+| Container runtime | Docker Sandboxes (micro-VM) / Apple Container (macOS) | OS-level isolation, not application-level checks |
+| Credential store | Bitwarden | User-owned, auditable, no vendor lock-in |
+| Memory persistence | SQLite + semantic graph | Lightweight, transparent, no message brokers |
+| IPC | Filesystem-based | Simple, inspectable, no hidden state |
+| Memory sync | Optional Obsidian vault | Power-user integration, not a dependency |
+
+---
+
+## 4. Core Architecture
+
+### 4.1 Process Model
+
+One Rust orchestrator process. No microservices. No message brokers. The orchestrator:
+
+- Polls channels for incoming messages
+- Manages per-context message queues with concurrency control
+- Issues tokens via the Token Broker
+- Spawns agent containers
+- Routes all outbound API calls through the Call Inspector
+- Writes to the immutable audit log
+
+### 4.2 Container Model
+
+Each agent task executes in its own isolated container. Containers:
+
+- Have their own filesystem, IPC namespace, and process space
+- Can only access directories explicitly mounted for that task
+- Never share memory with other containers
+- Hold a Golem-issued derivative token, not a raw API key
+- Are torn down at task completion; the token is revoked on teardown
+
+### 4.3 Context Isolation
+
+Each conversation context (user-defined group or domain) gets:
+
+- Its own CLAUDE.md memory file
+- Its own isolated filesystem
+- Its own container sandbox
+- Its own scoped token set
+
+Contexts cannot access each other's data. This is enforced by the OS, not by the application.
+
+---
+
+## 5. Token Broker and Call Inspector
+
+*This is OpenGolem's primary architectural differentiator from NanoClaw, MicroClaw, and OpenClaw.*
+
+### 5.1 Token Broker
+
+The Token Broker is the smallest, most auditable component in the codebase. It is pure Rust, no plugins, no dynamic loading. It holds raw API credentials in Bitwarden and never exposes them outside the broker process.
+
+At task instantiation, the broker issues a derivative token encoding:
+
+- **Allowed skill set** — explicit whitelist; anything not listed is blocked
+- **Expiry** — wall-clock TTL plus a maximum call count
+- **Permitted data scopes** — which memory partitions are readable/writable
+- **Originating container ID** — token is bound to the container that requested it
+
+The broker is the only process that ever makes a real API call. Agents hold derivative tokens that are valid only for the declared task window.
+
+### 5.2 Call Inspector
+
+Every outbound call from an agent passes through the Call Inspector before execution. The inspector checks:
+
+1. Is the requested skill in this token's declared whitelist?
+2. Does the payload contain data from a memory partition not permitted by this token?
+3. Does the call match known prompt injection signatures?
+4. Is the call rate anomalous relative to the declared task profile?
+5. Does the call attempt to access credentials, filesystem paths, or network endpoints outside scope?
+
+Failed checks result in a hard block or soft block depending on security mode (see §6). All calls — passed and blocked — are written to the immutable audit log.
+
+### 5.3 Token Lifecycle
+
+```
+Task requested
+    │
+    ▼
+Broker issues scoped token (TTL + call budget + skill whitelist)
+    │
+    ▼
+Container spawned with token injected
+    │
+    ▼
+Agent executes → all calls pass through Call Inspector
+    │
+    ▼
+Task complete OR TTL expired OR call budget exhausted
+    │
+    ▼
+Token revoked → container torn down → audit log entry closed
+```
+
+---
+
+## 6. Security Modes
+
+Security mode is a dial, not a switch. The default is Golem Guard. Users move down deliberately through demonstrated interaction patterns, not a one-time settings toggle.
+
+| Mode | Inspection | Block type | User prompt on block |
+|---|---|---|---|
+| **Golem Guard** (default) | Full lint on every call | Hard block | No — blocked silently, logged |
+| **Supervised** | Full lint, advisory | Soft block | Yes — user confirms or cancels |
+| **Power** | Anomaly detection only | Hard block on known-bad signatures only | No |
+
+Golem Guard is the expression of P3 at the infrastructure level. A user who has never configured their security mode is always in Golem Guard.
+
+---
+
+## 7. Agent Personas
+
+### 7.1 Executive Assistant — "Jiminy Cricket"
+
+The primary user-facing agent. Default posture: proactively accountable and constructively assertive. It does not wait to be asked. It surfaces conflicts between the user's stated priorities and their actual behavior, flags decisions that appear self-damaging, and challenges instructions it assesses as counterproductive.
+
+Assertiveness is calibrated by the user through interaction. The system starts at maximum assertiveness and moves toward compliance only through explicit user direction. This is the inverse of typical assistant design.
+
+### 7.2 Safety Agent
+
+Runs inline (pre-execution hook on every action) and on schedule (periodic audit of memory state, credential access logs, and action history). The Safety Agent is not a persona — it is infrastructure. It cannot be disabled by the Executive Assistant or any other agent. It can only be reconfigured by the user in Supervised or Power mode.
+
+### 7.3 Security Agent
+
+Runs on schedule. Audits the immutable action log for anomalous patterns, token scope violations, unusual call rates, and potential prompt injection artifacts. Produces a structured security report that feeds the dao_score pipeline. Like the Safety Agent, it is not addressable by other agents and cannot be suppressed by task-level tokens.
+
+---
+
+## 8. Memory Architecture
+
+### 8.1 Per-Context Memory (Operational)
+
+Each context has a CLAUDE.md file — flat, fast, directly readable by the agent. This is the working memory layer: recent decisions, active tasks, context-specific preferences.
+
+### 8.2 Semantic Graph (Strategic)
+
+The semantic graph sits above the per-context layer. It is queryable, relational, and surfaces non-obvious connections across contexts and time. Implemented with SQLite + vector extensions. This is the layer that enables OpenGolem to notice patterns the user hasn't noticed — e.g., a recurring decision under stress that produces bad outcomes.
+
+The Safety Agent has read access to the semantic graph for its scheduled audits. No task-level agent has write access to the graph directly; writes are mediated by the orchestrator after Call Inspector approval.
+
+### 8.3 Obsidian Vault Sync (Optional)
+
+Power users can sync the semantic graph to an Obsidian vault for external review and annotation. This is a one-way export by default; bidirectional sync is a configurable skill. The vault sync is a plugin, not a core dependency.
+
+---
+
+## 9. Skill System
+
+Skills are modular, auditable extensions. They are declared, not discovered. To add a capability, a skill is explicitly applied — not installed as a dependency.
+
+Each skill has a corresponding `.intent.md` describing what it adds, what filesystem paths it touches, and what token scopes it requires. The orchestrator validates intent declarations before applying a skill.
+
+Skills are applied via Claude Code interaction (`/add-gmail`, `/add-telegram`, etc.). There are no configuration files. If a user only needs one channel, they inherit zero security surface from channels they have not added.
+
+Skill updates use a three-way merge pattern (base + skill + current state) with a verified resolution cache for common conflict patterns — borrowed from NanoClaw's architecture.
+
+---
+
+## 10. Governance Layer
+
+### 10.1 SOUL.md
+
+~70-line identity and guardrails document. Defines the agent's core values, non-negotiable behaviors, and execution principles. Lean by design — if it can't be read in five minutes, it has grown too large.
+
+### 10.2 PSYCHE.md
+
+Self-improvement contract. Defines:
+
+- dao_score KPIs (quantitative behavioral metrics drawn from the audit log)
+- Hansei reflection rituals (scheduled structured self-assessment)
+- Drift detection thresholds (when behavior diverges from SOUL.md commitments)
+- Escalation paths (what happens when drift is detected)
+
+PSYCHE.md is not self-reported. Inputs come from the Security Agent's audit log analysis. The agent cannot manipulate its own dao_score.
+
+---
+
+## 11. What OpenGolem Is Not
+
+| Capability | OpenGolem stance |
+|---|---|
+| Multi-model routing | Supported — route by task complexity and stakes, not just preference. Cheap models for simple queries; frontier models for high-stakes decisions. |
+| Windows support | Not in v1. Rust core is cross-platform; container runtime support on Windows via Docker/WSL2 is a later skill. |
+| ClawHub / skill marketplace | Explicitly out of scope for v1. Community skills introduce unaudited surface area inconsistent with P2. |
+| Web UI / control panel | No. Management is through the Executive Assistant via natural language. The system is designed to be machine-to-machine. |
+| 50+ integrations at launch | No. Three integrations done correctly beats fifty done poorly. Start with the channels the user actually uses. |
+
+---
+
+## 12. Relationship to NanoClaw / MicroClaw
+
+OpenGolem is not a fork of either project. It shares architectural DNA with both:
+
+- From **NanoClaw**: container isolation as foundation, skills over configuration, codebase auditability as a security property, SQLite + filesystem IPC, per-context memory isolation.
+- From **MicroClaw**: Rust core, provider-agnostic LLM layer, platform adapter pattern for channels.
+
+OpenGolem's differentiators are: the Token Broker and mediated execution layer (no agent ever holds a real credential), the Safety and Security Agents as infrastructure (not persona), the Jiminy Cricket assertiveness model, the semantic graph memory tier, and the SOUL.md / PSYCHE.md governance architecture.
+
+---
+
+## 13. Open Questions (v0.3)
+
+- Token broker key management: Bitwarden CLI integration vs. native secrets manager — needs spike
+- Semantic graph implementation: sqlite-vec vs. dedicated embedding store — evaluate MicroClaw's approach
+- dao_score schema: define initial KPI set before PSYCHE.md is written
+- Assertiveness dial: interaction pattern for moving between security modes needs UX design
+- Agent Swarms: NanoClaw/MicroClaw pattern is adoptable — defer to v1.1
+
+---
+
+*OpenGolem is open source under MIT. The codebase is designed to be auditable by a single engineer in one sitting. If it isn't, it has grown too large.*
+
