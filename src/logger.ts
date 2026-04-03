@@ -1,3 +1,5 @@
+import { getEnabledChannelIds } from './channels/channel-enabled.js';
+
 const LEVELS = { debug: 20, info: 30, warn: 40, error: 50, fatal: 60 } as const;
 type Level = keyof typeof LEVELS;
 
@@ -13,8 +15,20 @@ const MSG_COLOR = '\x1b[36m';
 const RESET = '\x1b[39m';
 const FULL_RESET = '\x1b[0m';
 
-const threshold =
-  LEVELS[(process.env.LOG_LEVEL as Level) || 'info'] ?? LEVELS.info;
+function resolveThreshold(): number {
+  const env = process.env.LOG_LEVEL as Level | undefined;
+  if (env && env in LEVELS) {
+    return LEVELS[env];
+  }
+  // TUI-only runs use stdout for the readline prompt and replies; keep stderr
+  // quiet by default. Multi-channel or explicit LOG_LEVEL=info restores noise.
+  const enabled = getEnabledChannelIds();
+  const tuiOnly = enabled.size === 1 && enabled.has('tui');
+  const level: Level = tuiOnly ? 'warn' : 'info';
+  return LEVELS[level];
+}
+
+const threshold = resolveThreshold();
 
 function formatErr(err: unknown): string {
   if (err instanceof Error) {
@@ -47,7 +61,8 @@ function log(
 ): void {
   if (LEVELS[level] < threshold) return;
   const tag = `${COLORS[level]}${level.toUpperCase()}${level === 'fatal' ? FULL_RESET : RESET}`;
-  const stream = LEVELS[level] >= LEVELS.warn ? process.stderr : process.stdout;
+  // Always stderr so INFO/DEBUG never interleave with TUI readline on stdout.
+  const stream = process.stderr;
   if (typeof dataOrMsg === 'string') {
     stream.write(
       `[${ts()}] ${tag} (${process.pid}): ${MSG_COLOR}${dataOrMsg}${RESET}\n`,

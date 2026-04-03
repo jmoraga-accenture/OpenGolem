@@ -32,7 +32,7 @@ export class TuiChannel implements Channel {
     const tty = Boolean(process.stdin.isTTY && process.stdout.isTTY);
     if (!tty) {
       this.connected = true;
-      logger.info(
+      logger.warn(
         'TUI: no interactive terminal (stdin/stdout not TTY) — console input disabled. ' +
           'Use OPENGOLEM_CHANNELS=telegram (or another channel) for headless messaging, ' +
           'or run `npm run dev` in a terminal for the TUI prompt.',
