@@ -89,7 +89,9 @@ describe('TuiChannel — sendMessage', () => {
   let write: ReturnType<typeof vi.spyOn>;
 
   beforeEach(() => {
-    write = vi.spyOn(process.stdout, 'write').mockReturnValue(true as unknown as boolean);
+    write = vi
+      .spyOn(process.stdout, 'write')
+      .mockReturnValue(true as unknown as boolean);
   });
 
   afterEach(() => {
@@ -99,7 +101,9 @@ describe('TuiChannel — sendMessage', () => {
   it('writes the message text to stdout', async () => {
     const ch = makeChannel();
     await ch.sendMessage(TUI_CONSOLE_JID, 'Hello from Alef');
-    expect(write).toHaveBeenCalledWith(expect.stringContaining('Hello from Alef'));
+    expect(write).toHaveBeenCalledWith(
+      expect.stringContaining('Hello from Alef'),
+    );
   });
 
   it('is a no-op for JIDs it does not own', async () => {

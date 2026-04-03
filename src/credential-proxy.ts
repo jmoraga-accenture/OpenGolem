@@ -99,7 +99,10 @@ export function startCredentialProxy(): { port: number; host: string } {
       resolveAuthHeader()
         .then((currentAuth) => {
           // --- Call Inspector (M3) ---
-          const inspection = inspectRequest(req.url ?? '/', body.toString('utf8'));
+          const inspection = inspectRequest(
+            req.url ?? '/',
+            body.toString('utf8'),
+          );
           if (!inspection.allow) {
             logger.warn(
               { rule: inspection.blockRule, url: req.url },
@@ -108,7 +111,9 @@ export function startCredentialProxy(): { port: number; host: string } {
             if (!res.headersSent) {
               res.writeHead(403, { 'Content-Type': 'application/json' });
             }
-            res.end(JSON.stringify({ error: 'blocked', rule: inspection.blockRule }));
+            res.end(
+              JSON.stringify({ error: 'blocked', rule: inspection.blockRule }),
+            );
             return;
           }
 
@@ -138,7 +143,8 @@ export function startCredentialProxy(): { port: number; host: string } {
           }
 
           outHeaders['host'] = upstreamHost;
-          if (body.length > 0) outHeaders['content-length'] = String(body.length);
+          if (body.length > 0)
+            outHeaders['content-length'] = String(body.length);
 
           if (currentAuth) {
             outHeaders[currentAuth.name] = currentAuth.value;
@@ -160,7 +166,9 @@ export function startCredentialProxy(): { port: number; host: string } {
           });
 
           proxyReq.on('timeout', () => {
-            logger.error('Credential proxy upstream request timed out after 30s');
+            logger.error(
+              'Credential proxy upstream request timed out after 30s',
+            );
             proxyReq.destroy();
             if (!res.headersSent) res.writeHead(504);
             res.end('Upstream timeout');

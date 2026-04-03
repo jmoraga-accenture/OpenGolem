@@ -56,7 +56,10 @@ import {
   startRemoteControl,
   stopRemoteControl,
 } from './remote-control.js';
-import { getTelegramValidUserSet, isTelegramAllowGroupsEnabled } from './config.js';
+import {
+  getTelegramValidUserSet,
+  isTelegramAllowGroupsEnabled,
+} from './config.js';
 import { seedTelegramDmGroups } from './seed-groups.js';
 import {
   filterMessagesForTelegramAllowlist,

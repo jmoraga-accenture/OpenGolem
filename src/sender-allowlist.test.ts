@@ -244,9 +244,9 @@ describe('filterMessagesForTelegramAllowlist', () => {
       { sender: 'eve', content: 'x' },
       { sender: 'alice', content: 'y' },
     ];
-    expect(filterMessagesForTelegramAllowlist('g1@g.us', msgs, cfgList)).toEqual(
-      msgs,
-    );
+    expect(
+      filterMessagesForTelegramAllowlist('g1@g.us', msgs, cfgList),
+    ).toEqual(msgs);
   });
 
   it('with allow=* keeps all Telegram senders', () => {

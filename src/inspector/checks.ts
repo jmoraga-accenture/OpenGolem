@@ -5,7 +5,10 @@
  * advisory=true: log but never block (Phase 1 limitation noted inline).
  * advisory=false: eligible for hard/soft block depending on security mode.
  */
-import { ALLOWED_ENDPOINT_PREFIXES, INJECTION_SIGNATURES } from './signatures.js';
+import {
+  ALLOWED_ENDPOINT_PREFIXES,
+  INJECTION_SIGNATURES,
+} from './signatures.js';
 
 export interface CheckResult {
   pass: boolean;
@@ -19,7 +22,10 @@ export interface CheckResult {
  * so we cannot verify which skills the calling container was granted.
  * Advisory until Phase 2 adds X-Golem-Token header support.
  */
-export function checkSkillWhitelist(_endpoint: string, _jti: string): CheckResult {
+export function checkSkillWhitelist(
+  _endpoint: string,
+  _jti: string,
+): CheckResult {
   return { pass: true, rule: 'checkSkillWhitelist', advisory: true };
 }
 
@@ -53,7 +59,10 @@ export function checkPromptInjection(body: string): CheckResult {
  * Caller supplies the count of calls in the current sliding window and
  * the per-minute threshold; this function is a pure predicate.
  */
-export function checkCallRate(callsInWindow: number, threshold: number): CheckResult {
+export function checkCallRate(
+  callsInWindow: number,
+  threshold: number,
+): CheckResult {
   if (callsInWindow >= threshold) {
     return { pass: false, rule: 'checkCallRate', advisory: false };
   }

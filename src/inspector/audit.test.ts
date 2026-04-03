@@ -92,9 +92,13 @@ describe('logCall', () => {
 
   it('inserts hard_block record with block_rule', () => {
     logCall({
-      jti: 'jti-1', container: 'c1', skill: '/v1/messages',
-      outcome: 'hard_block', blockRule: 'checkPromptInjection',
-      payloadHash: 'abc', securityMode: 'golem_guard',
+      jti: 'jti-1',
+      container: 'c1',
+      skill: '/v1/messages',
+      outcome: 'hard_block',
+      blockRule: 'checkPromptInjection',
+      payloadHash: 'abc',
+      securityMode: 'golem_guard',
     });
     const rows = getRecentCalls(1);
     expect(rows[0].outcome).toBe('hard_block');
@@ -102,8 +106,24 @@ describe('logCall', () => {
   });
 
   it('can insert multiple records', () => {
-    logCall({ jti: 'a', container: 'c', skill: '/v1/messages', outcome: 'pass', blockRule: null, payloadHash: 'h1', securityMode: 'golem_guard' });
-    logCall({ jti: 'b', container: 'c', skill: '/v1/messages', outcome: 'pass', blockRule: null, payloadHash: 'h2', securityMode: 'golem_guard' });
+    logCall({
+      jti: 'a',
+      container: 'c',
+      skill: '/v1/messages',
+      outcome: 'pass',
+      blockRule: null,
+      payloadHash: 'h1',
+      securityMode: 'golem_guard',
+    });
+    logCall({
+      jti: 'b',
+      container: 'c',
+      skill: '/v1/messages',
+      outcome: 'pass',
+      blockRule: null,
+      payloadHash: 'h2',
+      securityMode: 'golem_guard',
+    });
     expect(getRecentCalls(10)).toHaveLength(2);
   });
 });

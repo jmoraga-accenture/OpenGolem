@@ -6,7 +6,10 @@ import { loadConfigEnv, CONFIG_KEYS } from './bootstrap.js';
 
 // Helpers
 function writeTmpEnv(content: string): string {
-  const p = path.join(os.tmpdir(), `bootstrap-test-${process.pid}-${Date.now()}.env`);
+  const p = path.join(
+    os.tmpdir(),
+    `bootstrap-test-${process.pid}-${Date.now()}.env`,
+  );
   fs.writeFileSync(p, content, 'utf-8');
   return p;
 }
@@ -110,12 +113,14 @@ describe('loadConfigEnv', () => {
   });
 
   it('populates multiple config keys in a single .env', () => {
-    const p = writeTmpEnv([
-      'OPENGOLEM_CHANNELS=tui,telegram',
-      'OPENGOLEM_SECURITY_MODE=golem_guard',
-      'INSPECTOR_RATE_LIMIT=30',
-      'TELEGRAM_ALLOW_GROUPS=1',
-    ].join('\n') + '\n');
+    const p = writeTmpEnv(
+      [
+        'OPENGOLEM_CHANNELS=tui,telegram',
+        'OPENGOLEM_SECURITY_MODE=golem_guard',
+        'INSPECTOR_RATE_LIMIT=30',
+        'TELEGRAM_ALLOW_GROUPS=1',
+      ].join('\n') + '\n',
+    );
     loadConfigEnv(p);
     expect(process.env.OPENGOLEM_CHANNELS).toBe('tui,telegram');
     expect(process.env.OPENGOLEM_SECURITY_MODE).toBe('golem_guard');

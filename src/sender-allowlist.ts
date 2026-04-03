@@ -173,11 +173,9 @@ export type AllowlistMessageSlice = Pick<
  * Other channels are unchanged. For Telegram you can set `TELEGRAM_VALID_USERS`
  * in `.env` (comma-separated IDs) or use `sender-allowlist.json`.
  */
-export function filterMessagesForTelegramAllowlist<T extends AllowlistMessageSlice>(
-  chatJid: string,
-  messages: T[],
-  cfg: SenderAllowlistConfig,
-): T[] {
+export function filterMessagesForTelegramAllowlist<
+  T extends AllowlistMessageSlice,
+>(chatJid: string, messages: T[], cfg: SenderAllowlistConfig): T[] {
   if (!chatJid.startsWith('tg:')) return messages;
   return messages.filter(
     (m) =>

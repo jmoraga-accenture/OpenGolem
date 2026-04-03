@@ -29,7 +29,9 @@ import {
 export type SecurityMode = 'golem_guard' | 'supervised' | 'power';
 
 export function getSecurityMode(): SecurityMode {
-  const raw = (process.env.OPENGOLEM_SECURITY_MODE ?? 'golem_guard').toLowerCase();
+  const raw = (
+    process.env.OPENGOLEM_SECURITY_MODE ?? 'golem_guard'
+  ).toLowerCase();
   if (raw === 'supervised' || raw === 'power') return raw as SecurityMode;
   return 'golem_guard';
 }
@@ -116,8 +118,13 @@ export function inspectRequest(
         'Inspector soft block (supervised — forwarding in Phase 1)',
       );
       logCall({
-        jti, container, skill, outcome: 'soft_block',
-        blockRule: result.rule, payloadHash, securityMode: mode,
+        jti,
+        container,
+        skill,
+        outcome: 'soft_block',
+        blockRule: result.rule,
+        payloadHash,
+        securityMode: mode,
       });
       return { allow: true, outcome: 'soft_block', blockRule: result.rule };
     }
@@ -125,15 +132,25 @@ export function inspectRequest(
     // Golem Guard: hard block
     logger.warn({ rule: result.rule, container, mode }, 'Inspector hard block');
     logCall({
-      jti, container, skill, outcome: 'hard_block',
-      blockRule: result.rule, payloadHash, securityMode: mode,
+      jti,
+      container,
+      skill,
+      outcome: 'hard_block',
+      blockRule: result.rule,
+      payloadHash,
+      securityMode: mode,
     });
     return { allow: false, outcome: 'hard_block', blockRule: result.rule };
   }
 
   logCall({
-    jti, container, skill, outcome: 'pass',
-    blockRule: null, payloadHash, securityMode: mode,
+    jti,
+    container,
+    skill,
+    outcome: 'pass',
+    blockRule: null,
+    payloadHash,
+    securityMode: mode,
   });
   return { allow: true, outcome: 'pass' };
 }
