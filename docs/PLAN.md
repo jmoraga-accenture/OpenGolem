@@ -1,5 +1,5 @@
 # OpenGolem — Implementation Plan
-*Produced: April 2026 | Last updated: 2026-04-03 | Tracks SPECS.md v0.4*
+*Produced: April 2026 | Last updated: 2026-04-03 | Tracks SPECS.md v0.4 | M2 in progress*
 
 ---
 
@@ -11,7 +11,7 @@
 | M2 — Token Broker | 🔧 In progress | |
 | M3 — Call Inspector | 🔲 Not started | |
 | M4 — Channel Adapters (Teams) | 🔲 Not started | TUI completed in M1; Teams remains |
-| M5 — Jiminy Cricket + SOUL.md | 🔲 Not started | |
+| M5 — Cato + SOUL.md | 🔲 Not started | |
 | M6 — Safety Agent + Security Agent + dao_score | 🔲 Not started | |
 | M7 — TUI Health Dashboard | 🔲 Not started | |
 | M8 — Skill Schema | 🔲 Not started | |
@@ -24,8 +24,11 @@
 
 OpenGolem is built in two phases:
 
-1. **Phase 1 — OpenGolem-TS:** Fork NanoClaw (TypeScript/Node.js) to prove the architecture and iron out the design before committing to a full rewrite.
-2. **Phase 2 — OpenGolem-RS:** Rewrite in Rust, crate-by-crate, while Phase 1 stays in production. TypeScript components are replaced one at a time at their interface boundary (Unix socket protocol).
+1. **Phase 1 — OpenGolem-TS:** Fork NanoClaw (TypeScript/Node.js) to prove the architecture and iron out the design. The security perimeter is the container boundary, not the language runtime — TypeScript with strict mode is auditable enough for the host orchestrator. Channel adapters (Grammy, Baileys) and the Claude Agent SDK are JS/TS; staying in TypeScript avoids FFI complexity with no security benefit.
+
+2. **Phase 2 — OpenGolem-v2 (clean lab):** Specs-first TypeScript rewrite from first principles. Replace Phase 1 modules one at a time at their interface boundary. No NanoClaw lineage; module boundaries and abstractions designed for OpenGolem, not inherited. Stays TypeScript — the clean-room is about architecture, not language.
+
+**Default channel is TUI.** The console/readline prompt is the primary interface. External channels (Telegram, Teams, WhatsApp) are optional skills applied on top. `OPENGOLEM_CHANNELS=tui` is the out-of-box default; no credentials required to start.
 
 The NanoClaw fork lives in `.background/repos/nanoclaw`. It is excluded from version control via `.gitignore`.
 
@@ -51,7 +54,7 @@ The NanoClaw fork lives in `.background/repos/nanoclaw`. It is excluded from ver
 | Security Modes | **New** | No NanoClaw equivalent |
 | TUI channel | **New** | No NanoClaw equivalent |
 | Microsoft Teams channel | **New** | No NanoClaw equivalent |
-| Jiminy Cricket persona | **New** | Executive assistant with SOUL.md |
+| Cato persona | **New** | Executive assistant with SOUL.md |
 | Safety Agent | **New** | Inline hook + scheduled |
 | Security Agent | **New** | Scheduled log auditor |
 | dao_score pipeline | **New** | Computed from audit log |
@@ -80,8 +83,8 @@ The NanoClaw fork lives in `.background/repos/nanoclaw`. It is excluded from ver
 │  ┌──────────────────────────────────┐                  │
 │  │        Agent Containers          │                  │
 │  │  ┌──────────┐  ┌──────────────┐  │                  │
-│  │  │ Jiminy   │  │ Safety/Sec.  │  │                  │
-│  │  │ Cricket  │  │ Agents       │  │                  │
+│  │  │  Cato   │  │ Safety/Sec.  │  │                  │
+│  │  │         │  │ Agents       │  │                  │
 │  │  └──────────┘  └──────────────┘  │                  │
 │  └──────────────────────────────────┘                  │
 │                                                         │
@@ -97,7 +100,7 @@ The Call Inspector is middleware inside the orchestrator's outbound call path �
 
 ### Milestone 1: Repository Scaffold and NanoClaw Fork Baseline ✅ Complete
 
-**Completed:** April 2026 — 246 tests passing, clean build.
+**Completed:** April 2026 — 304 tests passing, clean build.
 
 **Goal:** Establish the OpenGolem-TS codebase from the NanoClaw fork. Remove out-of-scope channels. Add empty module stubs for new components.
 
@@ -110,7 +113,7 @@ The Call Inspector is middleware inside the orchestrator's outbound call path �
    - `src/broker/` — Token Broker
    - `src/inspector/` — Call Inspector
    - `src/audit/` — Audit log
-   - `src/agents/jiminy/` — Jiminy Cricket
+   - `src/agents/cato/` — Cato
    - `src/agents/safety/` — Safety Agent
    - `src/agents/security/` — Security Agent
    - `src/tui/` — TUI channel adapter
@@ -124,17 +127,20 @@ The Call Inspector is middleware inside the orchestrator's outbound call path �
 - OneCLI replaced immediately (was planned for M2) with a native credential proxy (`src/credential-proxy.ts`) to unblock local testing. The Token Broker in M2 will replace this proxy.
 - Sentinel markers rebranded from `NANOCLAW_OUTPUT_*` to `OPENGOLEM_OUTPUT_*` in both host and container.
 - All `nanoclaw` references in service names, config paths, container names, and log files rebranded to `opengolem`.
-- `src/broker/`, `src/inspector/`, `src/audit/`, `src/agents/`, `src/tui/`, `src/dao/` stub directories not yet created — deferred to respective milestones rather than adding empty files.
+- `src/broker/`, `src/inspector/`, `src/audit/`, `src/agents/`, `src/dao/` stub directories not yet created — deferred to respective milestones rather than adding empty files.
 - `SOUL.md` and `PSYCHE.md` placeholder files not yet created — deferred to M5/M6.
+- **TUI channel built and active** (`src/channels/tui.ts`) — originally planned for M4. Console prompt is the default and primary interface; `OPENGOLEM_CHANNELS=tui` out of the box, zero credentials required. The TUI portion of M4 is complete.
+- **Telegram channel pulled in** (`src/channels/telegram.ts`, ported from nanoclaw-telegram) but **disabled by default**. Activating it requires `OPENGOLEM_CHANNELS=tui,telegram` and `TELEGRAM_BOT_TOKEN` in `.env`. Telegram is never the default channel.
+- **Assistant renamed to Alef** (default `ASSISTANT_NAME`). Inspired by the Hebrew letter and Borges' *El Aleph*.
+- **304 tests passing** (not 246 as originally targeted).
+- **`predev` npm hook** (`scripts/stop-service.ts`) stops the background service and kills server processes before `npm run dev` to avoid port conflicts.
 
 **Credential path in M1:**
 `src/credential-proxy.ts` is the only active credential mechanism. It reads `CLAUDE_CODE_OAUTH_TOKEN` (preferred), then `ANTHROPIC_AUTH_TOKEN`, then `ANTHROPIC_API_KEY` from `.env` and injects the auth header into every outbound call before passing it upstream. It starts automatically on `npm start`. **`.env` is the only supported credential backend in M1.** OneCLI Agent Vault backend support lands in M2 as one of the three pluggable `CredentialBackend` implementations.
 
-**No channel adapters are active in M1.** All channel imports in `src/channels/index.ts` are commented out — channels are skills, not bundled core code. The TUI channel (M4) is not yet built. To route real messages through OpenGolem, apply a channel skill (`/add-telegram` is the fastest path for testing; it fetches `src/channels/telegram.ts` from the NanoClaw-Telegram repo and adapts it).
-
 ---
 
-### Milestone 2: Token Broker (Node.js) 🔲 Not started
+### Milestone 2: Token Broker (Node.js) 🔧 In progress
 
 **Goal:** Internal Node.js process on a Unix socket. Issues scoped opaque tokens. Resolves API credentials through a **pluggable backend** (see below). Call Inspector + broker still mediate every outbound path; agents never hold raw secrets.
 
@@ -213,19 +219,23 @@ CREATE TABLE calls (
 
 ---
 
-### Milestone 4: Channel Adapters — TUI and Microsoft Teams
+### Milestone 4: Channel Adapters — Microsoft Teams
 
-**Goal:** Add TUI (readline-based terminal) and Microsoft Teams (webhook-based) channel adapters. Scope: TUI, Teams, Telegram, WhatsApp — four channels total.
-
-**TUI:** readline-based (`src/channels/tui/index.ts`). Chat pane reads from stdin, writes to stdout. Feeds the same message queue as production channels. Doubles as the health dashboard surface (M7). Handles Ctrl-C gracefully.
+**Goal:** Add Microsoft Teams as a channel adapter. TUI (readline/console) was completed in M1 and is the default channel. Telegram is already pulled in and available as an opt-in skill.
 
 **Teams:** HTTP webhook receiver for inbound messages; Bot Framework REST API for outbound via broker/inspector. Registered as a Claude Code skill (`/add-teams`).
 
-**Gate:** `npm start --channel tui` routes a typed message through the orchestrator. Teams webhook POST delivers to message queue within 500ms. All four channel adapters are registered.
+**Channel hierarchy (by default):**
+1. **TUI** — always on; zero config; `npm run dev` gives a working prompt immediately
+2. **Telegram** — opt-in skill; set `OPENGOLEM_CHANNELS=tui,telegram` + `TELEGRAM_BOT_TOKEN`
+3. **Teams** — opt-in skill (this milestone); Azure Bot registration required
+4. **WhatsApp** — opt-in skill (existing, via Baileys); phone pairing required
+
+**Gate:** Teams webhook POST delivers to message queue within 500ms. `/add-teams` skill registers the adapter. TUI remains the default when no `OPENGOLEM_CHANNELS` override is set.
 
 ---
 
-### Milestone 5: Jiminy Cricket Agent Persona and SOUL.md
+### Milestone 5: Cato Agent Persona and SOUL.md
 
 **Goal:** Implement the Executive Assistant with maximum-assertiveness-default behavior. Write SOUL.md and wire it as a system prompt prefix.
 
@@ -233,13 +243,13 @@ CREATE TABLE calls (
 - Decreasing the level requires user confirmation in `Supervised` mode; rejected entirely in `Golem Guard`.
 - The safety agent enforces the threshold — the orchestrator cannot reduce it without passing the safety check.
 
-**`[FLAG]` protocol:** SOUL.md instructs Jiminy to prefix any response that challenges a user instruction with `[FLAG]`. The orchestrator detects this marker post-response and routes it to each channel adapter's `flaggedResponse` formatter. A flag event is written to the audit log.
+**`[FLAG]` protocol:** SOUL.md instructs Cato to prefix any response that challenges a user instruction with `[FLAG]`. The orchestrator detects this marker post-response and routes it to each channel adapter's `flaggedResponse` formatter. A flag event is written to the audit log.
 
 **SOUL.md structure (~70 lines):**
-- Identity: who Jiminy Cricket is.
+- Identity: who Cato is.
 - Core commitments (non-negotiable): flag self-damaging decisions, surface conflicts, never falsify audit log, defer to Safety Agent on blocks.
 - Assertiveness calibration: how `assertiveness_level` maps to behavior.
-- Escalation path: what Jiminy does when assessing an instruction as harmful.
+- Escalation path: what Cato does when assessing an instruction as harmful.
 - Hard limits: unconditional refusals.
 
 **Gate:** New context initializes with `assertiveness_level = 10`. Test prompt containing self-damaging instruction produces `[FLAG]` response. Reducing `assertiveness_level` in Golem Guard mode is rejected.
@@ -271,7 +281,7 @@ Computed by `src/dao/score.ts` from `audit.db`. Written to `dao_score.db`.
 - dao_score KPI definitions with explicit formulas.
 - Hansei ritual schedule (weekly: Security Agent report review + dao_score delta).
 - Drift detection thresholds (e.g., `security_failures_per_call > 0.05` triggers Golem Guard lock).
-- Escalation path (surface to user via Jiminy `[FLAG]` mode; block security mode downgrade requests).
+- Escalation path (surface to user via Cato `[FLAG]` mode; block security mode downgrade requests).
 
 **Gate:** Safety Agent inline socket blocks cross-context memory access independently of the Call Inspector. Safety Agent is not in the addressable agent map. All three KPIs compute from a fixture audit log. PSYCHE.md KPI names match those produced by `dao_score.ts`.
 
@@ -326,7 +336,7 @@ An agent cannot request a broker token for a skill the context has not applied. 
 **Goal:** End-to-end tests, security audit, developer docs, Phase 1 release tag.
 
 **Integration test scenarios:**
-1. TUI message → Jiminy responds → two audit log entries.
+1. TUI message → Cato responds → two audit log entries.
 2. Prompt injection attempt → Call Inspector hard block → audit log `hard_block` row.
 3. Safety Agent scheduled run → valid safety report.
 4. dao_score pipeline → non-zero KPI values from integration test audit log.
@@ -340,53 +350,65 @@ An agent cannot request a broker token for a skill the context has not applied. 
 
 ---
 
-## Phase 2: OpenGolem-RS
+## Phase 2: OpenGolem-v2 (Clean Lab)
 
-### Migration Strategy
+### Rationale
 
-The TypeScript system stays in production throughout. Rust crates replace TypeScript components at the Unix socket boundary — the wire protocol is preserved so components can be swapped one at a time. Each crate is shadow-validated (both TS and RS running in parallel, outputs compared) before switching.
+After M9, OpenGolem-TS will be working but will carry inherited structure from NanoClaw: the message loop pattern, the container runner design, and some channel abstractions were designed for WhatsApp-first, not TUI-first. Phase 2 is a specs-first TypeScript rewrite that sheds this lineage and designs from OpenGolem's actual requirements.
 
-### Crate Structure
+**Why TypeScript, not Rust:** The security perimeter is the container boundary, not the language runtime. Whether the orchestrator is TypeScript or Rust, agents run inside Docker with identical isolation. Channel adapters (Grammy, Baileys) and the Claude Agent SDK are JS/TS; Rust would require subprocess calls to reach them — more complexity, same security profile. TypeScript with strict mode is auditable enough for a 3–5k line orchestrator.
 
-```
-opengolem-rs/
-├── Cargo.toml                  (workspace)
-└── crates/
-    ├── golem-broker/           (Token Broker — port first)
-    ├── golem-inspector/        (Call Inspector + audit)
-    ├── golem-audit/            (Audit log writer)
-    ├── golem-orchestrator/     (Orchestrator — port last)
-    ├── golem-dao/              (dao_score pipeline)
-    └── golem-tui/              (TUI dashboard, ratatui)
-```
+**Approach — incremental, not flag-day:** Phase 1 stays in production throughout. Phase 2 modules replace Phase 1 modules one at a time at their interface boundary (Unix socket or function call). Each module is shadow-validated before switching. No big-bang rewrite.
 
-**Key dependencies:**
-- `tokio` — async runtime, Unix socket server
-- `ring` — HMAC-SHA256 token signing (no OpenSSL)
-- `rusqlite` — SQLite (bundled feature)
-- `serde` + `serde_json` — wire format
-- `regex` — injection signatures compiled to `RegexSet` at startup
-- `bollard` — Docker API for container management
-- `ratatui` — TUI dashboard
-- `DashMap` — concurrent token store
+### Design Principles for v2
 
-### Migration Sequence
+- **TUI-first.** The console prompt is the primary interaction model. External channels are optional skills layered on top. All architectural decisions favour the local-use case before the remote-messaging case.
+- **No inherited assumptions.** The message loop, channel abstraction, and IPC protocol are redesigned from SPECS.md, not evolved from NanoClaw.
+- **Smallest possible surface.** Each module does one thing. No shared mutable state outside SQLite. No singletons.
+- **Specs before code.** Each v2 module begins with a one-page design doc (interface, data flow, error model) before any implementation.
 
-**RS-M1 — `golem-broker`:** Port first. Shadow-validate for 1 week (TypeScript broker responses authoritative; Rust responses compared). Switch when zero divergences.
+### Module Replacement Sequence
 
-**RS-M2 — `golem-inspector` + `golem-audit`:** Wire Rust inspector into the TypeScript orchestrator via the same socket protocol. Injection signatures compiled to a `RegexSet` (zero per-call allocation). `AuditWriter` struct exposes only `append` — no `delete`, no `update`.
+**v2-M1 — Orchestrator core:** Redesigned message loop. TUI-native (not retrofitted). Channel registry unchanged at the interface boundary.
 
-**RS-M3 — `golem-orchestrator`:** Largest port. Channel adapters one at a time: TUI → Teams → Telegram → WhatsApp. Container management via `bollard`. Sentinel IPC protocol unchanged.
+**v2-M2 — Channel abstraction:** Clean channel interface designed for TUI + Teams + Telegram as equal peers, not WhatsApp-primary with others added.
 
-**RS-M4 — `golem-tui`:** Replace readline with `ratatui`.
+**v2-M3 — Token Broker v2:** Incorporate lessons from M2 implementation. Cleaner socket protocol; pluggable backend interface simplified based on actual usage patterns.
 
-**RS-M5 — `golem-dao`:** dao_score as pure functions over SQLite. Build script validates PSYCHE.md KPI name references at compile time.
+**v2-M4 — Container runner:** Redesigned for the sentinel protocol; remove NanoClaw-era assumptions about volume mounts and group structure.
 
-**RS-M6 — Archive TypeScript:** After 30-day shadow validation period, `opengolem-ts` becomes read-only. `main` branch switches to the Rust workspace.
+**v2-M5 — TUI Health Dashboard v2:** Replace readline-based panel with a proper split-pane TUI (Ink or blessed). Richer health data surface.
 
-### Rust Constraints
+**v2-M6 — Archive Phase 1:** After 30-day parallel operation, Phase 1 becomes read-only. `main` branch is the v2 codebase.
 
-- `#![forbid(unsafe_code)]` in `golem-broker`, `golem-inspector`, `golem-audit`.
-- `AuditWriter` owns the sole writable `audit.db` connection. Rust ownership model enforces this — no runtime check needed.
-- Token `budget` field can only decrease. `TokenStore` exposes `consume_budget` using `fetch_sub` with checked underflow. No `set_budget` method exists.
-- Injection signatures are a `const` array of `&'static str` in source. Adding a signature requires a code change and rebuild — not a config file edit. This is intentional: source-level signatures are auditable; config-driven signatures can be manipulated.
+---
+
+## Deferred Decision: Phase 3 — Rust?
+
+**Revisit after v2-M6 is stable in production.** Do not decide earlier.
+
+At that point, OpenGolem-v2 will be a clean TypeScript codebase with no NanoClaw lineage, well-defined module boundaries, and a proven architecture. That is the right moment to evaluate whether a Rust rewrite adds enough value to justify the cost.
+
+### Questions to answer at the decision point
+
+| Question | Why it matters |
+|---|---|
+| What is the actual attack surface of the host process? | If the orchestrator is essentially a message router with no privileged operations, Rust's memory safety gains are marginal. If it handles untrusted input at the socket boundary, Rust is more compelling. |
+| Are channel adapters still JS/TS only? | If Grammy, Baileys, or a Teams SDK with no Rust equivalent is still in use, Rust orchestrator → JS subprocess → channel adapter adds a process boundary for no security gain. |
+| Has the Claude Agent SDK gained a Rust binding? | The SDK is currently JS/TS only. A native Rust binding would remove the main FFI argument against Rust. |
+| Is auditability a bottleneck? | If a clean v2 TypeScript codebase is already auditable in one sitting (target: <5k lines of core), the Rust argument weakens further. |
+| Are there performance requirements TypeScript can't meet? | Container orchestration is I/O-bound. Node.js handles this well. Rust wins on CPU-bound work; identify whether any hot path is actually CPU-bound before committing. |
+
+### Criteria for choosing Rust
+
+Rust is the right call if, at the decision point, **three or more** of the following are true:
+
+- The Claude Agent SDK has a stable Rust binding
+- The host orchestrator handles cryptographic operations at scale (Token Broker under high load)
+- A production security audit identifies memory-safety risks in the TypeScript runtime
+- Channel adapters are available as Rust crates or can be replaced by HTTP webhooks (no in-process JS required)
+- The team has production Rust experience and can maintain it without velocity cost
+
+### Default outcome
+
+If the criteria are not met: **stay on TypeScript v2.** A clean, auditable, well-tested TypeScript codebase is a better outcome than a Rust rewrite done for its own sake. The security perimeter is the container boundary. The language of the orchestrator is a secondary concern.

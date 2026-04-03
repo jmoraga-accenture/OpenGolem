@@ -157,7 +157,7 @@ Golem Guard is the expression of P3 at the infrastructure level. A user who has 
 
 ## 7. Agent Personas
 
-### 7.1 Executive Assistant — "Jiminy Cricket"
+### 7.1 Executive Assistant — "Cato"
 
 The primary user-facing agent. Default posture: proactively accountable and constructively assertive. It does not wait to be asked. It surfaces conflicts between the user's stated priorities and their actual behavior, flags decisions that appear self-damaging, and challenges instructions it assesses as counterproductive.
 
@@ -241,7 +241,7 @@ OpenGolem is not a fork of either project. It shares architectural DNA with both
 - From **NanoClaw**: container isolation as foundation, skills over configuration, codebase auditability as a security property, SQLite + filesystem IPC, per-context memory isolation.
 - From **MicroClaw**: Rust core, provider-agnostic LLM layer, platform adapter pattern for channels.
 
-OpenGolem's differentiators are: the Token Broker and mediated execution layer (no agent ever holds a real credential), the Safety and Security Agents as infrastructure (not persona), the Jiminy Cricket assertiveness model, the semantic graph memory tier, and the SOUL.md / PSYCHE.md governance architecture.
+OpenGolem's differentiators are: the Token Broker and mediated execution layer (no agent ever holds a real credential), the Safety and Security Agents as infrastructure (not persona), the Cato assertiveness model, the semantic graph memory tier, and the SOUL.md / PSYCHE.md governance architecture.
 
 ---
 
