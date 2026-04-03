@@ -1,18 +1,13 @@
 /**
- * OpenGolem Native Credential Proxy
+ * OpenGolem Credential Proxy
  *
- * A local HTTP reverse proxy that runs on the host and injects API credentials
- * into outbound Anthropic API calls from containers. Containers are configured
- * with ANTHROPIC_BASE_URL pointing to this proxy; the proxy adds the auth
- * header and forwards to the real upstream.
+ * A local HTTP reverse proxy that injects API credentials into outbound
+ * Anthropic API calls from containers. Containers point ANTHROPIC_BASE_URL
+ * here; the proxy resolves credentials via the Token Broker's credential
+ * backend and forwards to the real upstream.
  *
- * This is the M1 placeholder for the Token Broker (Milestone 2). In M2 this
- * will be replaced by the full Token Broker with scoped, time-limited tokens.
- *
- * Auth modes (checked in order):
- *   1. CLAUDE_CODE_OAUTH_TOKEN  → Authorization: Bearer <token>  (Enterprise/Pro)
- *   2. ANTHROPIC_AUTH_TOKEN     → Authorization: Bearer <token>  (alias)
- *   3. ANTHROPIC_API_KEY        → x-api-key: <key>               (API key)
+ * Credentials are resolved on every request so rotations take effect
+ * immediately without a restart.
  *
  * Upstream: ANTHROPIC_BASE_URL_UPSTREAM (default: https://api.anthropic.com)
  */
@@ -23,41 +18,19 @@ import os from 'os';
 import path from 'path';
 import url from 'url';
 
-import { readEnvFile } from './env.js';
+import { createCredentialBackend } from './broker/credentials/factory.js';
 import { logger } from './logger.js';
 
-interface ProxyConfig {
-  port: number;
-  host: string;
-  upstreamUrl: string;
-  authHeader: { name: string; value: string } | null;
-}
+const credentialBackend = createCredentialBackend();
 
-function resolveAuthHeader(): { name: string; value: string } | null {
-  const env = readEnvFile([
-    'CLAUDE_CODE_OAUTH_TOKEN',
-    'ANTHROPIC_AUTH_TOKEN',
-    'ANTHROPIC_API_KEY',
-  ]);
-
-  const oauthToken =
-    process.env.CLAUDE_CODE_OAUTH_TOKEN || env.CLAUDE_CODE_OAUTH_TOKEN;
-  if (oauthToken) {
-    return { name: 'Authorization', value: `Bearer ${oauthToken}` };
+async function resolveAuthHeader(): Promise<{ name: string; value: string } | null> {
+  try {
+    const cred = await credentialBackend.resolve();
+    return { name: cred.headerName, value: cred.headerValue };
+  } catch (err) {
+    logger.warn({ err }, 'Credential backend failed to resolve — requests will be unauthenticated');
+    return null;
   }
-
-  const authToken =
-    process.env.ANTHROPIC_AUTH_TOKEN || env.ANTHROPIC_AUTH_TOKEN;
-  if (authToken) {
-    return { name: 'Authorization', value: `Bearer ${authToken}` };
-  }
-
-  const apiKey = process.env.ANTHROPIC_API_KEY || env.ANTHROPIC_API_KEY;
-  if (apiKey) {
-    return { name: 'x-api-key', value: apiKey };
-  }
-
-  return null;
 }
 
 function resolveBindHost(): string {
@@ -85,19 +58,10 @@ export function startCredentialProxy(): { port: number; host: string } {
   const upstreamBase =
     process.env.ANTHROPIC_BASE_URL_UPSTREAM || 'https://api.anthropic.com';
 
-  const authHeader = resolveAuthHeader();
-  if (!authHeader) {
-    logger.warn(
-      'Credential proxy: no credentials found in .env ' +
-        '(ANTHROPIC_API_KEY, CLAUDE_CODE_OAUTH_TOKEN, or ANTHROPIC_AUTH_TOKEN). ' +
-        'Containers will receive 401 errors from Anthropic.',
-    );
-  } else {
-    logger.info(
-      { port, host, authMode: authHeader.name },
-      'Credential proxy started',
-    );
-  }
+  logger.info(
+    { port, host, backend: credentialBackend.name },
+    'Credential proxy started',
+  );
 
   const upstreamParsed = new url.URL(upstreamBase);
   const isHttps = upstreamParsed.protocol === 'https:';
@@ -109,8 +73,8 @@ export function startCredentialProxy(): { port: number; host: string } {
       : 80;
 
   server = http.createServer((req, res) => {
-    // Re-resolve auth on every request so .env changes take effect without restart
-    const currentAuth = resolveAuthHeader();
+    // Re-resolve auth on every request so credential rotations take effect immediately
+    resolveAuthHeader().then((currentAuth) => {
 
     const outHeaders: Record<string, string | string[]> = {};
 
@@ -171,7 +135,12 @@ export function startCredentialProxy(): { port: number; host: string } {
       res.end('Credential proxy upstream error');
     });
 
-    req.pipe(proxyReq, { end: true });
+      req.pipe(proxyReq, { end: true });
+    }).catch((err) => {
+      logger.error({ err }, 'Credential proxy: failed to resolve auth header');
+      if (!res.headersSent) res.writeHead(502);
+      res.end('Credential proxy error');
+    });
   });
 
   server.on('error', (err: NodeJS.ErrnoException) => {
@@ -204,16 +173,5 @@ export function getContainerProxyUrl(port: number): string {
   return `http://host.docker.internal:${port}`;
 }
 
-/**
- * Which auth header the proxy will inject.
- * Containers must set a matching placeholder so Claude Code passes its
- * local "not logged in" check before making any API call.
- */
-export type AuthMode = 'api-key' | 'oauth';
-
-export function detectAuthMode(): AuthMode {
-  const env = readEnvFile(['ANTHROPIC_API_KEY']);
-  return env.ANTHROPIC_API_KEY || process.env.ANTHROPIC_API_KEY
-    ? 'api-key'
-    : 'oauth';
-}
+// Re-export for callers that previously imported detectAuthMode from here
+export { detectAuthMode, type AuthMode } from './broker/credentials/factory.js';

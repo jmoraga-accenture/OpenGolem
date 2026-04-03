@@ -1,5 +1,5 @@
 # OpenGolem — Implementation Plan
-*Produced: April 2026 | Last updated: 2026-04-03 | Tracks SPECS.md v0.4 | M2 in progress*
+*Produced: April 2026 | Last updated: 2026-04-03 | Tracks SPECS.md v0.4 | M2 complete*
 
 ---
 
@@ -8,9 +8,9 @@
 | Milestone | Status | Notes |
 |---|---|---|
 | M1 — Repository Scaffold | ✅ Complete | 304 tests passing; TUI live; Telegram pulled, inactive by default; assistant named Alef |
-| M2 — Token Broker | 🔧 In progress | |
+| M2 — Token Broker | ✅ Complete | 328 tests; HMAC tokens; env/bitwarden/onecli backends; broker wired into orchestrator and container-runner |
 | M3 — Call Inspector | 🔲 Not started | |
-| M4 — Channel Adapters (Teams) | 🔲 Not started | TUI completed in M1; Teams remains |
+| M4 — Channel Adapters | 🔲 Not started | TUI completed in M1; Teams dropped (see note) |
 | M5 — Cato + SOUL.md | 🔲 Not started | |
 | M6 — Safety Agent + Security Agent + dao_score | 🔲 Not started | |
 | M7 — TUI Health Dashboard | 🔲 Not started | |
@@ -28,7 +28,7 @@ OpenGolem is built in two phases:
 
 2. **Phase 2 — OpenGolem-v2 (clean lab):** Specs-first TypeScript rewrite from first principles. Replace Phase 1 modules one at a time at their interface boundary. No NanoClaw lineage; module boundaries and abstractions designed for OpenGolem, not inherited. Stays TypeScript — the clean-room is about architecture, not language.
 
-**Default channel is TUI.** The console/readline prompt is the primary interface. External channels (Telegram, Teams, WhatsApp) are optional skills applied on top. `OPENGOLEM_CHANNELS=tui` is the out-of-box default; no credentials required to start.
+**Default channel is TUI.** The console/readline prompt is the primary interface. External channels (Telegram, WhatsApp) are optional skills applied on top. `OPENGOLEM_CHANNELS=tui` is the out-of-box default; no credentials required to start.
 
 The NanoClaw fork lives in `.background/repos/nanoclaw`. It is excluded from version control via `.gitignore`.
 
@@ -53,7 +53,7 @@ The NanoClaw fork lives in `.background/repos/nanoclaw`. It is excluded from ver
 | Token Broker | **New** | Issues opaque tokens; resolves real secrets via user-chosen backend: `.env`, Bitwarden CLI, or OneCLI |
 | Security Modes | **New** | No NanoClaw equivalent |
 | TUI channel | **New** | No NanoClaw equivalent |
-| Microsoft Teams channel | **New** | No NanoClaw equivalent |
+| Microsoft Teams channel | **Dropped** | Infrastructure model incompatible with self-hosted personal assistant (see Teams note in M4) |
 | Cato persona | **New** | Executive assistant with SOUL.md |
 | Safety Agent | **New** | Inline hook + scheduled |
 | Security Agent | **New** | Scheduled log auditor |
@@ -140,7 +140,7 @@ The Call Inspector is middleware inside the orchestrator's outbound call path �
 
 ---
 
-### Milestone 2: Token Broker (Node.js) 🔧 In progress
+### Milestone 2: Token Broker (Node.js) ✅ Complete
 
 **Goal:** Internal Node.js process on a Unix socket. Issues scoped opaque tokens. Resolves API credentials through a **pluggable backend** (see below). Call Inspector + broker still mediate every outbound path; agents never hold raw secrets.
 
@@ -178,6 +178,21 @@ Tokens are HMAC-SHA256 signed. The signing key is generated fresh at each broker
 - `src/broker/credentials/` — `CredentialBackend` interface; `env.ts`, `bitwarden.ts`, `onecli.ts` implementations; factory from `OPENGOLEM_CREDENTIAL_BACKEND` (names TBD; align with `src/config.ts`)
 
 **Gate:** Issue/verify/revoke unit tests pass. Budget exhaustion and container-binding rejection tested. Zero `ANTHROPIC_API_KEY` references outside `src/broker/credentials/`. Each backend has at least one integration or contract test (OneCLI may use mocked gateway).
+
+**What was actually done (M2 complete — 2026-04-03):**
+- `src/broker/token.ts` — `TokenStore` with HMAC-SHA256 signing, revocation set, container→jti index
+- `src/broker/server.ts` — Unix socket server (`data/broker.sock`), ISSUE/VERIFY/REVOKE ops, chmod 0o600
+- `src/broker/client.ts` — in-process async client (`issueToken`, `verifyToken`, `revokeToken`, `revokeContainer`)
+- `src/broker/credentials/types.ts` — `CredentialBackend` interface + `ResolvedCredential`
+- `src/broker/credentials/env.ts` — reads OAuth token → auth token → API key from `.env` / process.env
+- `src/broker/credentials/bitwarden.ts` — invokes `bw` CLI; auto-detects api-key vs oauth by `sk-ant-` prefix
+- `src/broker/credentials/onecli.ts` — POSTs to `ONECLI_GATEWAY_URL/v1/credential`
+- `src/broker/credentials/factory.ts` — `createCredentialBackend()` + `detectAuthMode()` (moved from credential-proxy)
+- `src/broker/token.test.ts` (21 tests), `src/broker/server.test.ts` (10 tests)
+- `src/index.ts` — `startBroker()` called before `startCredentialProxy()`; broker closed on SIGTERM/SIGINT
+- `src/container-runner.ts` — `issueToken()` at spawn, `OPENGOLEM_BROKER_TOKEN` env var, `revokeContainer()` on close
+- `src/credential-proxy.ts` — delegated to `CredentialBackend`; re-exports `detectAuthMode` for backwards compat
+- Total: 328 tests passing. Zero `ANTHROPIC_API_KEY` references outside `src/broker/credentials/`.
 
 ---
 
@@ -219,19 +234,33 @@ CREATE TABLE calls (
 
 ---
 
-### Milestone 4: Channel Adapters — Microsoft Teams
+### Milestone 4: Channel Adapters
 
-**Goal:** Add Microsoft Teams as a channel adapter. TUI (readline/console) was completed in M1 and is the default channel. Telegram is already pulled in and available as an opt-in skill.
-
-**Teams:** HTTP webhook receiver for inbound messages; Bot Framework REST API for outbound via broker/inspector. Registered as a Claude Code skill (`/add-teams`).
+**Goal:** Harden the existing channel set. TUI is the default and is complete. Telegram is in and works. This milestone is about polish and reliability, not new channels.
 
 **Channel hierarchy (by default):**
 1. **TUI** — always on; zero config; `npm run dev` gives a working prompt immediately
 2. **Telegram** — opt-in skill; set `OPENGOLEM_CHANNELS=tui,telegram` + `TELEGRAM_BOT_TOKEN`
-3. **Teams** — opt-in skill (this milestone); Azure Bot registration required
-4. **WhatsApp** — opt-in skill (existing, via Baileys); phone pairing required
+3. **WhatsApp** — opt-in skill (via Baileys); phone pairing required
 
-**Gate:** Teams webhook POST delivers to message queue within 500ms. `/add-teams` skill registers the adapter. TUI remains the default when no `OPENGOLEM_CHANNELS` override is set.
+**Gate:** All active channels (TUI, Telegram) have channel-level tests. Reconnect / backoff logic verified. No regressions in routing or session continuity.
+
+---
+
+### Note: Microsoft Teams — not a packaged skill
+
+Teams integration was originally planned for M4 and has been dropped from the roadmap. The reason is a fundamental model mismatch:
+
+- **Webhook-only inbound**: Teams pushes messages via HTTP POST to a publicly reachable HTTPS endpoint. There is no long-polling equivalent. Local development requires a tunnel (ngrok, cloudflared) and a signed certificate. This is not compatible with OpenGolem's zero-infrastructure self-hosted model.
+- **Azure dependency**: A working Teams bot requires Azure Bot Service registration, an Azure AD app, and (in any enterprise tenant) IT admin approval for app installation. That is out of scope for a personal assistant.
+
+**Two realistic paths for anyone who needs Teams:**
+
+1. **Power Automate bridge (recommended for personal/SMB use):** A Power Automate flow monitors a Teams channel and POSTs new messages to a local OpenGolem HTTP endpoint (a small webhook receiver skill). OpenGolem replies by POSTing back to Teams via the Incoming Webhook connector. No Azure Bot registration required; no public HTTPS endpoint. The flow runs in the user's M365 tenant. This is the most realistic self-hosted path and the one worth documenting if demand appears.
+
+2. **Microsoft Graph API polling:** Register an Azure AD app with delegated `ChannelMessage.Read.All` and `ChannelMessage.Send` permissions. Poll `GET /teams/{id}/channels/{id}/messages` on a configurable interval. No public endpoint needed; works from behind NAT. Tradeoffs: latency (polling interval), Graph API rate limits, AD app registration still required (but no Bot Service or app manifest).
+
+Neither is an "out-of-the-box" skill. If Teams matters to a contributor, the Power Automate path is the better starting point — it keeps all the Microsoft-specific plumbing outside OpenGolem and exposes a simple HTTP interface that fits the existing channel model.
 
 ---
 
@@ -309,16 +338,15 @@ Implemented with Node.js `readline` + ANSI escape codes (no TUI library in Phase
 
 **`.intent.md` frontmatter schema:**
 ```yaml
-skill: add-teams
+skill: add-telegram
 version: 1.0.0
-description: "Microsoft Teams channel adapter"
+description: "Telegram channel adapter"
 token_scopes:
-  - channel:teams:send
-  - channel:teams:receive
-filesystem_paths:
-  - /var/golem/channels/teams/
+  - channel:telegram:send
+  - channel:telegram:receive
+filesystem_paths: []
 network_endpoints:
-  - "https://smba.trafficmanager.net/*"
+  - "https://api.telegram.org/*"
 dependencies: []
 breaking_changes: []
 ```
@@ -371,7 +399,7 @@ After M9, OpenGolem-TS will be working but will carry inherited structure from N
 
 **v2-M1 — Orchestrator core:** Redesigned message loop. TUI-native (not retrofitted). Channel registry unchanged at the interface boundary.
 
-**v2-M2 — Channel abstraction:** Clean channel interface designed for TUI + Teams + Telegram as equal peers, not WhatsApp-primary with others added.
+**v2-M2 — Channel abstraction:** Clean channel interface designed for TUI + Telegram + WhatsApp as equal peers, not WhatsApp-primary with others added.
 
 **v2-M3 — Token Broker v2:** Incorporate lessons from M2 implementation. Cleaner socket protocol; pluggable backend interface simplified based on actual usage patterns.
 
@@ -394,7 +422,7 @@ At that point, OpenGolem-v2 will be a clean TypeScript codebase with no NanoClaw
 | Question | Why it matters |
 |---|---|
 | What is the actual attack surface of the host process? | If the orchestrator is essentially a message router with no privileged operations, Rust's memory safety gains are marginal. If it handles untrusted input at the socket boundary, Rust is more compelling. |
-| Are channel adapters still JS/TS only? | If Grammy, Baileys, or a Teams SDK with no Rust equivalent is still in use, Rust orchestrator → JS subprocess → channel adapter adds a process boundary for no security gain. |
+| Are channel adapters still JS/TS only? | If Grammy (Telegram) or Baileys (WhatsApp) with no Rust equivalent are still in use, Rust orchestrator → JS subprocess → channel adapter adds a process boundary for no security gain. |
 | Has the Claude Agent SDK gained a Rust binding? | The SDK is currently JS/TS only. A native Rust binding would remove the main FFI argument against Rust. |
 | Is auditability a bottleneck? | If a clean v2 TypeScript codebase is already auditable in one sitting (target: <5k lines of core), the Rust argument weakens further. |
 | Are there performance requirements TypeScript can't meet? | Container orchestration is I/O-bound. Node.js handles this well. Rust wins on CPU-bound work; identify whether any hot path is actually CPU-bound before committing. |

@@ -24,28 +24,33 @@ Running `npm run dev` (or `node dist/index.js` in production) executes `src/inde
    └─ if OPENGOLEM_CHANNELS includes "tui" and tui:console is not yet registered,
       auto-registers groups/tui/ as the main group — zero setup for first run
 
-5. startCredentialProxy()
+5. startBroker()
+   └─ starts the Token Broker (Unix socket at data/broker.sock)
+   └─ generates an in-memory HMAC signing key (never persisted)
+   └─ ready to ISSUE / VERIFY / REVOKE scoped tokens for containers
+
+6. startCredentialProxy()
    └─ binds an HTTP reverse proxy on port 3001 (CREDENTIAL_PROXY_PORT)
-   └─ reads credentials from .env (ANTHROPIC_API_KEY or CLAUDE_CODE_OAUTH_TOKEN)
+   └─ credential backend resolves on every request (env / bitwarden / onecli)
    └─ containers call this proxy instead of api.anthropic.com directly
 
-6. restoreRemoteControl()
+7. restoreRemoteControl()
    └─ if a /remote-control session was active before restart, reconnect it
 
-7. Register shutdown handlers (SIGTERM / SIGINT)
-   └─ drains the GroupQueue, disconnects all channels, exits cleanly
+8. Register shutdown handlers (SIGTERM / SIGINT)
+   └─ drains the GroupQueue, disconnects all channels, closes broker, exits cleanly
 
-8. Channel instantiation loop
+9. Channel instantiation loop
    └─ for each name in the channel registry:
         factory(channelOpts) → Channel | null
         if null: skip (credentials missing or channel disabled)
         else: channel.connect()
 
-9. startSchedulerLoop()   — fires scheduled tasks at their cron/interval
-10. startIpcWatcher()     — polls data/ipc/ for JSON files written by containers
-11. queue.setProcessMessagesFn(processGroupMessages)
-12. recoverPendingMessages()  — re-enqueues any messages that survived a crash
-13. startMessageLoop()    — the main polling loop (runs forever)
+10. startSchedulerLoop()   — fires scheduled tasks at their cron/interval
+11. startIpcWatcher()      — polls data/ipc/ for JSON files written by containers
+12. queue.setProcessMessagesFn(processGroupMessages)
+13. recoverPendingMessages()  — re-enqueues any messages that survived a crash
+14. startMessageLoop()    — the main polling loop (runs forever)
 ```
 
 The process never exits after step 13 unless it receives a signal or `startMessageLoop` throws.
@@ -155,6 +160,7 @@ docker run \
   --network=bridge \
   -e ANTHROPIC_BASE_URL=http://host.docker.internal:3001  ← credential proxy
   -e ANTHROPIC_API_KEY=proxied                            ← placeholder (proxy replaces)
+  -e OPENGOLEM_BROKER_TOKEN=<hmac-token>                  ← scoped identity token (M2)
   -v groups/tui:/workspace/group                          ← group files (r/w)
   -v data/ipc/tui:/workspace/ipc                          ← IPC directory (r/w)
   -v groups/main:/workspace/project:ro                    ← project root (r/o, main only)
@@ -197,7 +203,34 @@ This means a long conversation in Telegram keeps the same container alive, prese
 
 ---
 
-## 5. Credential Proxy
+## 5. Token Broker (M2)
+
+The Token Broker (`src/broker/`) issues HMAC-SHA256 signed tokens to containers, establishing the foundation for per-container credential mediation and budget enforcement.
+
+```
+Host (broker.sock)           Container
+──────────────────           ─────────
+ISSUE { container_id,  ◄──  (at spawn time, from host)
+        skills, budget }
+  → { token }          ──►  OPENGOLEM_BROKER_TOKEN env var
+
+VERIFY { token }        ◄── (future: container-to-host verification)
+REVOKE { container_id } ◄── (on container exit, from host)
+```
+
+The signing key is generated fresh each startup and never written to disk. Tokens include `jti` (unique ID), `container_id`, `skills`, `scopes`, `budget`, `iat`, and `exp`. Revocation is in-memory only — a restart clears the revocation set (safe, since the signing key also changes).
+
+Three credential backends are selectable via `OPENGOLEM_CREDENTIAL_BACKEND`:
+
+| Backend | Description | Required env vars |
+|---|---|---|
+| `env` (default) | Reads `.env` on every request | `ANTHROPIC_API_KEY` or `CLAUDE_CODE_OAUTH_TOKEN` |
+| `bitwarden` | Fetches from Bitwarden vault via `bw` CLI | `BW_SESSION`, `BW_ITEM_NAME`, `BW_FIELD_NAME` |
+| `onecli` | HTTP POST to OneCLI Agent Vault gateway | `ONECLI_GATEWAY_URL`, `ONECLI_GATEWAY_TOKEN` |
+
+---
+
+## 6. Credential Proxy
 
 Containers never hold real API credentials. The credential proxy (`src/credential-proxy.ts`) runs on the host:
 
@@ -211,11 +244,11 @@ ANTHROPIC_API_KEY=proxied         Inject real x-api-key or       api.anthropic.c
                               ◄───────────────────────────────────────────
 ```
 
-The proxy re-reads `.env` on every request, so credential rotations take effect without restarting the service. On Linux it binds to the `docker0` bridge IP; on macOS/Windows it binds to loopback and containers reach it via `host.docker.internal`.
+The proxy calls `credentialBackend.resolve()` on every request (async), so credential rotations take effect without restarting the service. On Linux it binds to the `docker0` bridge IP; on macOS/Windows it binds to loopback and containers reach it via `host.docker.internal`.
 
 ---
 
-## 6. IPC — Agent to Host Communication
+## 7. IPC — Agent to Host Communication
 
 Containers write JSON files to their `/workspace/ipc/` directory (mounted from `data/ipc/<groupFolder>/`). The IPC watcher (`src/ipc.ts`) polls this directory every second and processes commands:
 
@@ -230,7 +263,7 @@ This allows agents to autonomously send messages, schedule work, or register new
 
 ---
 
-## 7. Connecting Each Channel
+## 8. Connecting Each Channel
 
 ### TUI (console) — default, zero config
 
@@ -276,14 +309,11 @@ WhatsApp uses the Baileys library and maintains its own session under `store/`.
 
 ### Microsoft Teams
 
-Teams is a planned skill (M3/M4). The channel adapter will use the Bot Framework SDK. When available, the setup flow will be:
-1. Register an Azure Bot resource and get `TEAMS_APP_ID` + `TEAMS_APP_PASSWORD`.
-2. Set `OPENGOLEM_CHANNELS=tui,teams`.
-3. Restart and install the bot into your Teams tenant.
+Teams is not a packaged skill. The Azure Bot / webhook model is incompatible with OpenGolem's self-hosted zero-infrastructure design. Two bridging approaches are documented in `docs/PLAN.md` (the Teams note in M4) for anyone who needs it: a **Power Automate flow** (recommended — no public endpoint required) or **Microsoft Graph API polling** (AD app registration, no Bot Service). Neither is built-in; both are documented starting points for contributors.
 
 ---
 
-## 8. Scheduled Tasks
+## 9. Scheduled Tasks
 
 The scheduler (`src/task-scheduler.ts`) polls every 60 seconds. Each task has a `schedule_type`:
 
@@ -298,12 +328,13 @@ Agents create and manage tasks via IPC (`create_task`, `update_task`, `delete_ta
 
 ---
 
-## 9. Data Layout
+## 10. Data Layout
 
 ```
 OpenGolem/
 ├── data/
 │   ├── opengolem.db         ← SQLite: messages, chats, groups, sessions, tasks
+│   ├── broker.sock          ← Token Broker Unix socket (deleted on clean shutdown)
 │   └── ipc/
 │       └── <groupFolder>/   ← JSON files from containers (processed and deleted)
 ├── groups/

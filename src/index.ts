@@ -12,6 +12,7 @@ import {
   TIMEZONE,
 } from './config.js';
 import { startCredentialProxy } from './credential-proxy.js';
+import { startBroker, type BrokerHandle } from './broker/server.js';
 import './channels/index.js';
 import {
   getChannelFactory,
@@ -73,6 +74,7 @@ let sessions: Record<string, string> = {};
 let registeredGroups: Record<string, RegisteredGroup> = {};
 let lastAgentTimestamp: Record<string, string> = {};
 let messageLoopRunning = false;
+let broker: BrokerHandle | null = null;
 
 const channels: Channel[] = [];
 const queue = new GroupQueue();
@@ -571,10 +573,13 @@ async function main(): Promise<void> {
   loadState();
   seedTuiGroupIfNeeded();
 
+  // Start the Token Broker (M2). Issues scoped HMAC-signed tokens to containers,
+  // enabling future per-container credential mediation and budget enforcement.
+  broker = startBroker();
+
   // Start the native credential proxy. Containers are configured with
   // ANTHROPIC_BASE_URL pointing to this proxy; it injects credentials
   // from .env into outbound Anthropic API calls.
-  // In M2 this will be replaced by the Token Broker.
   startCredentialProxy();
 
   restoreRemoteControl();
@@ -584,6 +589,7 @@ async function main(): Promise<void> {
     logger.info({ signal }, 'Shutdown signal received');
     await queue.shutdown(10000);
     for (const ch of channels) await ch.disconnect();
+    broker?.close();
     process.exit(0);
   };
   process.on('SIGTERM', () => shutdown('SIGTERM'));

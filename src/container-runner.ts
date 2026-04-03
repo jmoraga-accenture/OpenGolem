@@ -25,6 +25,7 @@ import {
   stopContainer,
 } from './container-runtime.js';
 import { getContainerProxyUrl, detectAuthMode } from './credential-proxy.js';
+import { issueToken, revokeContainer } from './broker/client.js';
 import { validateAdditionalMounts } from './mount-security.js';
 import { RegisteredGroup } from './types.js';
 
@@ -225,6 +226,7 @@ async function buildContainerArgs(
   mounts: VolumeMount[],
   containerName: string,
   agentIdentifier?: string,
+  brokerToken?: string,
 ): Promise<string[]> {
   const args: string[] = ['run', '-i', '--rm', '--name', containerName];
 
@@ -248,8 +250,12 @@ async function buildContainerArgs(
   } else {
     args.push('-e', 'CLAUDE_CODE_OAUTH_TOKEN=proxied');
   }
+  if (brokerToken) {
+    args.push('-e', `OPENGOLEM_BROKER_TOKEN=${brokerToken}`);
+  }
+
   logger.debug(
-    { containerName, proxyUrl, authMode },
+    { containerName, proxyUrl, authMode, hasBrokerToken: !!brokerToken },
     'Credential proxy configured for container',
   );
 
@@ -296,10 +302,27 @@ export async function runContainerAgent(
   const agentIdentifier = input.isMain
     ? undefined
     : group.folder.toLowerCase().replace(/_/g, '-');
+
+  // Issue a scoped broker token for this container (M2 Token Broker).
+  // Fire-and-forget on failure — broker may not be up during tests or first-run.
+  let brokerToken: string | undefined;
+  try {
+    brokerToken = await issueToken({
+      containerId: containerName,
+      skills: ['anthropic.message'],
+      scopes: [`context:${group.folder}`],
+      ttlSeconds: Math.ceil((group.containerConfig?.timeout || CONTAINER_TIMEOUT) / 1000) + 60,
+      budget: 100,
+    });
+  } catch (err) {
+    logger.debug({ containerName, err }, 'Broker unavailable, container will run without token');
+  }
+
   const containerArgs = await buildContainerArgs(
     mounts,
     containerName,
     agentIdentifier,
+    brokerToken,
   );
 
   logger.debug(
@@ -464,6 +487,8 @@ export async function runContainerAgent(
 
     container.on('close', (code) => {
       clearTimeout(timeout);
+      // Revoke broker token on exit — fire-and-forget
+      revokeContainer(containerName).catch(() => {});
       const duration = Date.now() - startTime;
 
       if (timedOut) {
@@ -674,6 +699,7 @@ export async function runContainerAgent(
 
     container.on('error', (err) => {
       clearTimeout(timeout);
+      revokeContainer(containerName).catch(() => {});
       logger.error(
         { group: group.name, containerName, error: err },
         'Container spawn error',
