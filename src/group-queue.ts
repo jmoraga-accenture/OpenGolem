@@ -344,6 +344,10 @@ export class GroupQueue {
     }
   }
 
+  getActiveCount(): number {
+    return this.activeCount;
+  }
+
   async shutdown(_gracePeriodMs: number): Promise<void> {
     this.shuttingDown = true;
 

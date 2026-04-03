@@ -80,6 +80,7 @@ import {
   startCatoScheduledAudit,
   stopCatoScheduledAudit,
 } from './cato/scheduled-audit.js';
+import { startHealthServer, stopHealthServer } from './health.js';
 import { isChannelEnabled } from './channels/channel-enabled.js';
 import { TUI_CONSOLE_JID } from './channels/tui.js';
 import { Channel, NewMessage, RegisteredGroup } from './types.js';
@@ -725,6 +726,9 @@ async function main(): Promise<void> {
   startCatoInlineHook();
   startCatoScheduledAudit();
 
+  // Start the health endpoint (M7). Exposes system state for 'npm run status'.
+  startHealthServer({ getActiveContainerCount: () => queue.getActiveCount() });
+
   // Start the Token Broker (M2). Issues scoped HMAC-signed tokens to containers,
   // enabling future per-container credential mediation and budget enforcement.
   broker = startBroker();
@@ -741,6 +745,7 @@ async function main(): Promise<void> {
     logger.info({ signal }, 'Shutdown signal received');
     stopCatoScheduledAudit();
     stopCatoInlineHook();
+    stopHealthServer();
     await queue.shutdown(10000);
     for (const ch of channels) await ch.disconnect();
     broker?.close();

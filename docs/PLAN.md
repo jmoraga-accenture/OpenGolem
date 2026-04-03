@@ -1,5 +1,5 @@
 # OpenGolem — Implementation Plan
-*Produced: April 2026 | Last updated: 2026-04-04 | Tracks SPECS.md v0.4 | M6 complete | 487 tests*
+*Produced: April 2026 | Last updated: 2026-04-03 | Tracks SPECS.md v0.4 | M7 + M9 complete | 505 tests*
 
 ---
 
@@ -13,9 +13,9 @@
 | M4 — Channel Adapters | ✅ Complete | TUI + Telegram tested; DM-only; TELEGRAM_VALID_USERS allowlist; Teams dropped (see note) |
 | M5 — SOUL.md (Alef's character + assertiveness) | ✅ Complete | SOUL.md prepended as system prompt; assertiveness_level per group; [FLAG] logged to audit |
 | M6 — Cato (hard oversight) + PSYCHE.md + dao_score | ✅ Complete | Inline hook (deterministic stub); scheduled audit every 6h; dao_score.db; PSYCHE.md |
-| M7 — TUI Health Dashboard | 🔲 Not started | |
+| M7 — /health endpoint + CLI status | ✅ Complete | GET /health JSON; `npm run status`; 127.0.0.1 only; no TUI split-pane (headless) |
 | M8 — Skill Schema | 🔲 Not started | |
-| M9 — Integration + Hardening | 🔲 Not started | |
+| M9 — Integration + Hardening | ✅ Complete | 11 integration tests; Cato gate in task-scheduler; audit append-only verified; CONFIG_KEYS audit |
 | **Phase 2 — OpenGolem-v2 (clean lab)** | 🔲 Not started | Incremental TypeScript rewrite from specs; begins after M9 |
 
 ---
@@ -399,19 +399,25 @@ Three bugs found via subagent review and fixed before shipping:
 
 ---
 
-### Milestone 7: TUI Health Dashboard
+### Milestone 7: /health Endpoint + CLI Status
 
-**Goal:** Split-pane terminal UI. Upper pane: chat. Lower pane: health panel (toggle `Ctrl-D`).
+**Scope reframe (2026-04-03):** The original split-pane TUI spec is low-value headless (service runs under systemd/WSL, no TTY). Replaced with a `GET /health` HTTP endpoint and `npm run status` CLI that work equally well in all environments.
 
-**Health panel data sources (polled every 500ms):**
-- Active container count + pending messages (orchestrator `getHealth()`)
-- Active token count + tokens expiring in <60s (broker `getActiveTokenCount()`)
-- Last 10 rows from `audit.db`
-- Latest dao_score KPI values from `dao_score.db`
+**Implementation:**
+- **`src/health.ts`** — HTTP server listening on `127.0.0.1:HEALTH_PORT` (default 3003).
+  - `GET /health` → JSON snapshot: `status`, `uptime_seconds`, `active_containers`, `broker_socket`, `cato_socket`, `dao_score` (latest KPIs or null), `recent_blocks` (up to 10 non-pass audit calls).
+  - `GET /health` is read-only; no auth required (localhost only).
+  - `startHealthServer(deps)` / `stopHealthServer()` wired into `main()` / graceful shutdown in `index.ts`.
+- **`scripts/status.ts`** — `npm run status` calls the endpoint and prints a human-readable summary.
+- **`src/config.ts`** — `HEALTH_PORT` (default 3003) added.
+- **`src/group-queue.ts`** — `getActiveCount()` method added.
+- **`src/health.test.ts`** — 7 tests: lifecycle, 200/404 responses, field shape, active_containers reflection.
 
-Implemented with Node.js `readline` + ANSI escape codes (no TUI library in Phase 1 — keeps dependency surface minimal and auditable). Replaced with `ratatui` in Phase 2.
-
-**Gate:** `Ctrl-D` renders health panel with all four data sources. Panel updates every 500ms without disrupting chat scroll. Terminal resize redraws without artifacts.
+**Gate status:**
+- ✅ `GET /health` returns JSON with all required fields
+- ✅ Unknown paths return 404
+- ✅ `stopHealthServer()` is idempotent
+- ✅ Binds to 127.0.0.1 (not 0.0.0.0)
 
 ---
 
@@ -446,18 +452,32 @@ An agent cannot request a broker token for a skill the context has not applied. 
 
 **Goal:** End-to-end tests, security audit, developer docs, Phase 1 release tag.
 
-**Integration test scenarios:**
-1. TUI message → Cato responds → two audit log entries.
-2. Prompt injection attempt → Call Inspector hard block → audit log `hard_block` row.
-3. Safety Agent scheduled run → valid safety report.
-4. dao_score pipeline → non-zero KPI values from integration test audit log.
+**Implementation (2026-04-03):**
 
-**Security hardening:**
-- Audit every `process.env` access outside `src/broker/credentials.ts`.
-- Verify audit log DELETE trigger.
-- Verify Safety Agent socket is bound to `127.0.0.1` or a filesystem socket with restrictive permissions.
+**`src/integration.test.ts`** — 11 integration tests across 6 scenarios:
+1. **Call Inspector → audit.db pipeline:** prompt injection → `hard_block` logged; clean request → `pass` logged.
+2. **Audit log append-only:** DELETE on `calls` and `flag_events` tables raises ABORT error (real SQLite trigger).
+3. **dao_score pipeline:** fixture data → non-zero `security_failures_per_call` and `data_leaks_per_call`; all three KPI field names match PSYCHE.md contract.
+4. **Cato inline check (task context):** path traversal in task prompt is blocked; clean prompt passes.
+5. **CONFIG_KEYS security audit:** verified that `ANTHROPIC_API_KEY`, `TELEGRAM_BOT_TOKEN`, `BW_SESSION`, etc. are absent from `CONFIG_KEYS` (would be exposed to child processes if present).
+6. **Cato wired in task-scheduler:** `task-scheduler.ts` now imports `catoCheck` and calls it before any `runContainerAgent` invocation — scheduled tasks no longer bypass the Cato gate.
 
-**Deliverables:** `docs/ARCHITECTURE.md`, `docs/DEVELOPMENT.md`, tag `opengolem-ts-1.0`.
+**`src/task-scheduler.ts`** — Cato inline check added before `runContainerAgent` in `runTask()`:
+- Blocked tasks log a `cato_block:<reason>` error to `task_runs` and send `[Cato] Task blocked` to the user.
+- This closes the gap where scheduled tasks bypassed the Cato gate (message-loop tasks were already gated in M6).
+
+**Deferred from original M9 spec:**
+- `docs/ARCHITECTURE.md` and `docs/DEVELOPMENT.md` — deferred to Phase 2 (v2 architecture will differ significantly; writing these now would need rewriting).
+- `opengolem-ts-1.0` release tag — deferred until M8 (Skill Schema) is complete.
+- Safety Agent container-run integration test — requires Docker, not feasible in unit test suite.
+
+**Gate status:**
+- ✅ Call Inspector → audit.db pipeline verified (injections logged as hard_block)
+- ✅ Audit log DELETE trigger fires (append-only enforcement confirmed)
+- ✅ dao_score KPIs non-zero from fixture audit data
+- ✅ Cato blocks path traversal in task context (socket-based, real IPC)
+- ✅ CONFIG_KEYS contains no secret key names
+- ✅ Cato check wired into scheduled task runner
 
 ---
 

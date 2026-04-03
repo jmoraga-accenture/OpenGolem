@@ -3,6 +3,7 @@ import { CronExpressionParser } from 'cron-parser';
 import fs from 'fs';
 
 import { ASSISTANT_NAME, SCHEDULER_POLL_INTERVAL, TIMEZONE } from './config.js';
+import { catoCheck } from './cato/inline.js';
 import {
   ContainerOutput,
   runContainerAgent,
@@ -146,6 +147,33 @@ async function runTask(
       next_run: t.next_run,
     })),
   );
+
+  // Cato inline check — same gate as processGroupMessages in index.ts.
+  // Scheduled tasks bypass the message loop but must still pass Cato.
+  const catoResult = await catoCheck({
+    type: 'check_action',
+    groupFolder: task.group_folder,
+    prompt: task.prompt,
+  });
+  if (!catoResult.allow) {
+    logger.warn(
+      { taskId: task.id, reason: catoResult.reason },
+      'Cato: scheduled task blocked by inline hook',
+    );
+    await deps.sendMessage(
+      task.chat_jid,
+      `[Cato] Task blocked (${catoResult.reason ?? 'policy'}). The task was not executed.`,
+    );
+    logTaskRun({
+      task_id: task.id,
+      run_at: new Date().toISOString(),
+      duration_ms: Date.now() - startTime,
+      status: 'error',
+      result: null,
+      error: `cato_block:${catoResult.reason ?? 'policy'}`,
+    });
+    return;
+  }
 
   let result: string | null = null;
   let error: string | null = null;

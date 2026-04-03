@@ -20,7 +20,8 @@
     "lint": "eslint src/",
     "lint:fix": "eslint src/ --fix",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "status": "tsx scripts/status.ts"
   },
   "dependencies": {
     "better-sqlite3": "11.10.0",

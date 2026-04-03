@@ -33,6 +33,7 @@ export const CONFIG_KEYS = new Set([
   'TELEGRAM_VALID_USERS',
   'TELEGRAM_ALLOW_GROUPS',
   'CATO_AUDIT_INTERVAL_MS',
+  'HEALTH_PORT',
 ]);
 
 /**
