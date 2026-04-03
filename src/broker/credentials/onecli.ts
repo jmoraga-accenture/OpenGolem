@@ -25,20 +25,14 @@ export class OneCLICredentialBackend implements CredentialBackend {
   async resolve(): Promise<ResolvedCredential> {
     const env = readEnvFile(['ONECLI_GATEWAY_URL', 'ONECLI_VAULT_TOKEN']);
 
-    const gatewayUrl =
-      process.env.ONECLI_GATEWAY_URL || env.ONECLI_GATEWAY_URL;
-    const vaultToken =
-      process.env.ONECLI_VAULT_TOKEN || env.ONECLI_VAULT_TOKEN;
+    const gatewayUrl = process.env.ONECLI_GATEWAY_URL || env.ONECLI_GATEWAY_URL;
+    const vaultToken = process.env.ONECLI_VAULT_TOKEN || env.ONECLI_VAULT_TOKEN;
 
     if (!gatewayUrl) {
-      throw new Error(
-        'OneCLICredentialBackend: ONECLI_GATEWAY_URL not set.',
-      );
+      throw new Error('OneCLICredentialBackend: ONECLI_GATEWAY_URL not set.');
     }
     if (!vaultToken) {
-      throw new Error(
-        'OneCLICredentialBackend: ONECLI_VAULT_TOKEN not set.',
-      );
+      throw new Error('OneCLICredentialBackend: ONECLI_VAULT_TOKEN not set.');
     }
 
     const url = `${gatewayUrl.replace(/\/$/, '')}/v1/credential`;
@@ -65,20 +59,27 @@ export class OneCLICredentialBackend implements CredentialBackend {
       );
     }
 
-    let body: { header_name: string; header_value: string };
+    let raw: unknown;
     try {
-      body = await res.json();
+      raw = await res.json();
     } catch {
       throw new Error(
         `OneCLICredentialBackend: could not parse gateway response from ${url}`,
       );
     }
 
-    if (!body.header_name || !body.header_value) {
+    if (
+      typeof raw !== 'object' ||
+      raw === null ||
+      typeof (raw as { header_name?: unknown }).header_name !== 'string' ||
+      typeof (raw as { header_value?: unknown }).header_value !== 'string'
+    ) {
       throw new Error(
         `OneCLICredentialBackend: gateway response missing header_name or header_value`,
       );
     }
+
+    const body = raw as { header_name: string; header_value: string };
 
     return {
       headerName: body.header_name as 'Authorization' | 'x-api-key',
