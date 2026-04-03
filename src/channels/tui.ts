@@ -53,6 +53,8 @@ export class TuiChannel implements Channel {
       const text = line.trim();
       if (text.length > 0) {
         const ts = new Date().toISOString();
+        // Ensure the chats row exists before storeMessage runs (FK constraint).
+        this.opts.onChatMetadata(TUI_CONSOLE_JID, ts, 'Console', 'tui', false);
         this.opts.onMessage(TUI_CONSOLE_JID, {
           id: `tui-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
           chat_jid: TUI_CONSOLE_JID,
