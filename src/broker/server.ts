@@ -47,10 +47,7 @@ type BrokerResponse =
   | { ok: true; revoked: number }
   | { ok: false; error: string };
 
-function handleRequest(
-  store: TokenStore,
-  req: BrokerRequest,
-): BrokerResponse {
+function handleRequest(store: TokenStore, req: BrokerRequest): BrokerResponse {
   switch (req.op) {
     case 'ISSUE': {
       if (!req.container_id) {
@@ -122,7 +119,9 @@ export function startBroker(socketPath = BROKER_SOCKET_PATH): BrokerHandle {
       try {
         req = JSON.parse(line);
       } catch {
-        socket.write(JSON.stringify({ ok: false, error: 'invalid JSON' }) + '\n');
+        socket.write(
+          JSON.stringify({ ok: false, error: 'invalid JSON' }) + '\n',
+        );
         socket.end();
         return;
       }

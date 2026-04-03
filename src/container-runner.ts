@@ -311,11 +311,17 @@ export async function runContainerAgent(
       containerId: containerName,
       skills: ['anthropic.message'],
       scopes: [`context:${group.folder}`],
-      ttlSeconds: Math.ceil((group.containerConfig?.timeout || CONTAINER_TIMEOUT) / 1000) + 60,
+      ttlSeconds:
+        Math.ceil(
+          (group.containerConfig?.timeout || CONTAINER_TIMEOUT) / 1000,
+        ) + 60,
       budget: 100,
     });
   } catch (err) {
-    logger.debug({ containerName, err }, 'Broker unavailable, container will run without token');
+    logger.debug(
+      { containerName, err },
+      'Broker unavailable, container will run without token',
+    );
   }
 
   const containerArgs = await buildContainerArgs(

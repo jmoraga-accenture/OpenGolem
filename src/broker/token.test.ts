@@ -28,8 +28,20 @@ describe('TokenStore — issue', () => {
   });
 
   it('each token has a unique jti', () => {
-    const t1 = store.issue({ container_id: 'c1', skills: [], scopes: [], ttl_seconds: 60, budget: 10 });
-    const t2 = store.issue({ container_id: 'c1', skills: [], scopes: [], ttl_seconds: 60, budget: 10 });
+    const t1 = store.issue({
+      container_id: 'c1',
+      skills: [],
+      scopes: [],
+      ttl_seconds: 60,
+      budget: 10,
+    });
+    const t2 = store.issue({
+      container_id: 'c1',
+      skills: [],
+      scopes: [],
+      ttl_seconds: 60,
+      budget: 10,
+    });
     const r1 = store.verify(t1);
     const r2 = store.verify(t2);
     expect(r1.valid && r2.valid).toBe(true);
@@ -38,9 +50,15 @@ describe('TokenStore — issue', () => {
     }
   });
 
-  it('different stores cannot verify each other\'s tokens', () => {
+  it("different stores cannot verify each other's tokens", () => {
     const store2 = new TokenStore();
-    const token = store.issue({ container_id: 'c1', skills: [], scopes: [], ttl_seconds: 60, budget: 10 });
+    const token = store.issue({
+      container_id: 'c1',
+      skills: [],
+      scopes: [],
+      ttl_seconds: 60,
+      budget: 10,
+    });
     const result = store2.verify(token);
     expect(result.valid).toBe(false);
     if (!result.valid) expect(result.reason).toBe('invalid signature');
@@ -55,10 +73,17 @@ describe('TokenStore — verify', () => {
   });
 
   it('rejects a tampered payload', () => {
-    const token = store.issue({ container_id: 'c1', skills: [], scopes: [], ttl_seconds: 60, budget: 10 });
+    const token = store.issue({
+      container_id: 'c1',
+      skills: [],
+      scopes: [],
+      ttl_seconds: 60,
+      budget: 10,
+    });
     const [payload, sig] = token.split('.');
     // Flip a character in the payload
-    const tampered = payload.slice(0, -1) + (payload.slice(-1) === 'a' ? 'b' : 'a');
+    const tampered =
+      payload.slice(0, -1) + (payload.slice(-1) === 'a' ? 'b' : 'a');
     const result = store.verify(`${tampered}.${sig}`);
     expect(result.valid).toBe(false);
   });
@@ -70,7 +95,13 @@ describe('TokenStore — verify', () => {
   });
 
   it('rejects an expired token', async () => {
-    const token = store.issue({ container_id: 'c1', skills: [], scopes: [], ttl_seconds: -1, budget: 10 });
+    const token = store.issue({
+      container_id: 'c1',
+      skills: [],
+      scopes: [],
+      ttl_seconds: -1,
+      budget: 10,
+    });
     const result = store.verify(token);
     expect(result.valid).toBe(false);
     if (!result.valid) expect(result.reason).toBe('token expired');
@@ -85,7 +116,13 @@ describe('TokenStore — revoke by token', () => {
   });
 
   it('revokeToken makes the token invalid', () => {
-    const token = store.issue({ container_id: 'c1', skills: [], scopes: [], ttl_seconds: 60, budget: 10 });
+    const token = store.issue({
+      container_id: 'c1',
+      skills: [],
+      scopes: [],
+      ttl_seconds: 60,
+      budget: 10,
+    });
     expect(store.verify(token).valid).toBe(true);
     expect(store.revokeToken(token)).toBe(true);
     const result = store.verify(token);
@@ -98,8 +135,20 @@ describe('TokenStore — revoke by token', () => {
   });
 
   it('revoking one token does not affect others', () => {
-    const t1 = store.issue({ container_id: 'c1', skills: [], scopes: [], ttl_seconds: 60, budget: 10 });
-    const t2 = store.issue({ container_id: 'c1', skills: [], scopes: [], ttl_seconds: 60, budget: 10 });
+    const t1 = store.issue({
+      container_id: 'c1',
+      skills: [],
+      scopes: [],
+      ttl_seconds: 60,
+      budget: 10,
+    });
+    const t2 = store.issue({
+      container_id: 'c1',
+      skills: [],
+      scopes: [],
+      ttl_seconds: 60,
+      budget: 10,
+    });
     store.revokeToken(t1);
     expect(store.verify(t1).valid).toBe(false);
     expect(store.verify(t2).valid).toBe(true);
@@ -114,9 +163,27 @@ describe('TokenStore — revoke by container', () => {
   });
 
   it('revokeContainer revokes all tokens for that container', () => {
-    const t1 = store.issue({ container_id: 'c1', skills: [], scopes: [], ttl_seconds: 60, budget: 10 });
-    const t2 = store.issue({ container_id: 'c1', skills: [], scopes: [], ttl_seconds: 60, budget: 10 });
-    const t3 = store.issue({ container_id: 'c2', skills: [], scopes: [], ttl_seconds: 60, budget: 10 });
+    const t1 = store.issue({
+      container_id: 'c1',
+      skills: [],
+      scopes: [],
+      ttl_seconds: 60,
+      budget: 10,
+    });
+    const t2 = store.issue({
+      container_id: 'c1',
+      skills: [],
+      scopes: [],
+      ttl_seconds: 60,
+      budget: 10,
+    });
+    const t3 = store.issue({
+      container_id: 'c2',
+      skills: [],
+      scopes: [],
+      ttl_seconds: 60,
+      budget: 10,
+    });
 
     const count = store.revokeContainer('c1');
     expect(count).toBe(2);
@@ -138,7 +205,13 @@ describe('TokenStore — budget', () => {
   });
 
   it('issues token with the requested budget', () => {
-    const token = store.issue({ container_id: 'c1', skills: [], scopes: [], ttl_seconds: 60, budget: 42 });
+    const token = store.issue({
+      container_id: 'c1',
+      skills: [],
+      scopes: [],
+      ttl_seconds: 60,
+      budget: 42,
+    });
     const result = store.verify(token);
     expect(result.valid).toBe(true);
     if (result.valid) expect(result.claims.budget).toBe(42);
@@ -154,8 +227,20 @@ describe('TokenStore — activeCount', () => {
 
   it('counts active tokens', () => {
     expect(store.activeCount()).toBe(0);
-    const t1 = store.issue({ container_id: 'c1', skills: [], scopes: [], ttl_seconds: 60, budget: 10 });
-    const t2 = store.issue({ container_id: 'c2', skills: [], scopes: [], ttl_seconds: 60, budget: 10 });
+    const t1 = store.issue({
+      container_id: 'c1',
+      skills: [],
+      scopes: [],
+      ttl_seconds: 60,
+      budget: 10,
+    });
+    const t2 = store.issue({
+      container_id: 'c2',
+      skills: [],
+      scopes: [],
+      ttl_seconds: 60,
+      budget: 10,
+    });
     expect(store.activeCount()).toBe(2);
     store.revokeToken(t1);
     expect(store.activeCount()).toBe(1);
@@ -164,7 +249,13 @@ describe('TokenStore — activeCount', () => {
   });
 
   it('does not count expired tokens', () => {
-    store.issue({ container_id: 'c1', skills: [], scopes: [], ttl_seconds: -1, budget: 10 });
+    store.issue({
+      container_id: 'c1',
+      skills: [],
+      scopes: [],
+      ttl_seconds: -1,
+      budget: 10,
+    });
     expect(store.activeCount()).toBe(0);
   });
 });

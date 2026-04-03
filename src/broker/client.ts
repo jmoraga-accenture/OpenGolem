@@ -20,26 +20,47 @@ function request(payload: object): Promise<SocketResponse> {
   return new Promise((resolve, reject) => {
     const socket = net.createConnection(BROKER_SOCKET_PATH);
     let buf = '';
+    let settled = false;
 
-    socket.on('connect', () => {
+    const detach = () => {
+      socket.setTimeout(0);
+      socket.off('connect', onConnect);
+      socket.off('data', onData);
+      socket.off('error', onError);
+    };
+
+    const settle = (fn: () => void) => {
+      if (settled) return;
+      settled = true;
+      detach();
+      socket.destroy();
+      fn();
+    };
+
+    function onConnect() {
       socket.write(JSON.stringify(payload) + '\n');
-    });
+    }
 
-    socket.on('data', (chunk) => {
+    function onData(chunk: Buffer | string) {
       buf += chunk.toString('utf8');
       const nl = buf.indexOf('\n');
       if (nl === -1) return;
       try {
-        resolve(JSON.parse(buf.slice(0, nl)));
+        settle(() => resolve(JSON.parse(buf.slice(0, nl))));
       } catch {
-        reject(new Error('Broker returned invalid JSON'));
+        settle(() => reject(new Error('Broker returned invalid JSON')));
       }
-    });
+    }
 
-    socket.on('error', reject);
+    function onError(err: Error) {
+      settle(() => reject(err));
+    }
+
+    socket.on('connect', onConnect);
+    socket.on('data', onData);
+    socket.on('error', onError);
     socket.setTimeout(5000, () => {
-      socket.destroy();
-      reject(new Error('Broker request timed out'));
+      settle(() => reject(new Error('Broker request timed out')));
     });
   });
 }
@@ -69,9 +90,14 @@ export async function issueToken(opts: IssueOptions): Promise<string> {
 
 export async function verifyToken(
   token: string,
-): Promise<{ valid: true; claims: TokenClaims } | { valid: false; reason?: string }> {
+): Promise<
+  { valid: true; claims: TokenClaims } | { valid: false; reason?: string }
+> {
   const res = await request({ op: 'VERIFY', token });
-  if (!res.ok) throw new Error(`Broker VERIFY failed: ${(res as { error: string }).error}`);
+  if (!res.ok)
+    throw new Error(
+      `Broker VERIFY failed: ${(res as { error: string }).error}`,
+    );
   const r = res as { ok: true; valid: boolean; claims?: TokenClaims };
   if (r.valid && r.claims) return { valid: true, claims: r.claims };
   return { valid: false };
@@ -79,12 +105,18 @@ export async function verifyToken(
 
 export async function revokeToken(token: string): Promise<number> {
   const res = await request({ op: 'REVOKE', token });
-  if (!res.ok) throw new Error(`Broker REVOKE failed: ${(res as { error: string }).error}`);
+  if (!res.ok)
+    throw new Error(
+      `Broker REVOKE failed: ${(res as { error: string }).error}`,
+    );
   return (res as { ok: true; revoked: number }).revoked;
 }
 
 export async function revokeContainer(containerId: string): Promise<number> {
   const res = await request({ op: 'REVOKE', container_id: containerId });
-  if (!res.ok) throw new Error(`Broker REVOKE failed: ${(res as { error: string }).error}`);
+  if (!res.ok)
+    throw new Error(
+      `Broker REVOKE failed: ${(res as { error: string }).error}`,
+    );
   return (res as { ok: true; revoked: number }).revoked;
 }

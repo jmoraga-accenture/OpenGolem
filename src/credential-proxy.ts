@@ -23,12 +23,18 @@ import { logger } from './logger.js';
 
 const credentialBackend = createCredentialBackend();
 
-async function resolveAuthHeader(): Promise<{ name: string; value: string } | null> {
+async function resolveAuthHeader(): Promise<{
+  name: string;
+  value: string;
+} | null> {
   try {
     const cred = await credentialBackend.resolve();
     return { name: cred.headerName, value: cred.headerValue };
   } catch (err) {
-    logger.warn({ err }, 'Credential backend failed to resolve — requests will be unauthenticated');
+    logger.warn(
+      { err },
+      'Credential backend failed to resolve — requests will be unauthenticated',
+    );
     return null;
   }
 }
@@ -74,73 +80,77 @@ export function startCredentialProxy(): { port: number; host: string } {
 
   server = http.createServer((req, res) => {
     // Re-resolve auth on every request so credential rotations take effect immediately
-    resolveAuthHeader().then((currentAuth) => {
+    resolveAuthHeader()
+      .then((currentAuth) => {
+        const outHeaders: Record<string, string | string[]> = {};
 
-    const outHeaders: Record<string, string | string[]> = {};
+        // Forward original headers, stripping hop-by-hop and injecting auth
+        for (const [key, val] of Object.entries(req.headers)) {
+          const lower = key.toLowerCase();
+          if (
+            lower === 'connection' ||
+            lower === 'keep-alive' ||
+            lower === 'proxy-authenticate' ||
+            lower === 'proxy-authorization' ||
+            lower === 'te' ||
+            lower === 'trailers' ||
+            lower === 'transfer-encoding' ||
+            lower === 'upgrade' ||
+            lower === 'host' ||
+            lower === 'x-api-key' ||
+            lower === 'authorization'
+          ) {
+            continue;
+          }
+          if (val !== undefined) outHeaders[key] = val as string | string[];
+        }
 
-    // Forward original headers, stripping hop-by-hop and injecting auth
-    for (const [key, val] of Object.entries(req.headers)) {
-      const lower = key.toLowerCase();
-      if (
-        lower === 'connection' ||
-        lower === 'keep-alive' ||
-        lower === 'proxy-authenticate' ||
-        lower === 'proxy-authorization' ||
-        lower === 'te' ||
-        lower === 'trailers' ||
-        lower === 'transfer-encoding' ||
-        lower === 'upgrade' ||
-        lower === 'host' ||
-        lower === 'x-api-key' ||
-        lower === 'authorization'
-      ) {
-        continue;
-      }
-      if (val !== undefined) outHeaders[key] = val as string | string[];
-    }
+        outHeaders['host'] = upstreamHost;
 
-    outHeaders['host'] = upstreamHost;
+        if (currentAuth) {
+          outHeaders[currentAuth.name] = currentAuth.value;
+        }
 
-    if (currentAuth) {
-      outHeaders[currentAuth.name] = currentAuth.value;
-    }
+        const options: https.RequestOptions = {
+          hostname: upstreamHost,
+          port: upstreamPort,
+          path: req.url,
+          method: req.method,
+          headers: outHeaders,
+          timeout: 30000,
+        };
 
-    const options: https.RequestOptions = {
-      hostname: upstreamHost,
-      port: upstreamPort,
-      path: req.url,
-      method: req.method,
-      headers: outHeaders,
-      timeout: 30000,
-    };
+        const transport = isHttps ? https : http;
+        const proxyReq = transport.request(options, (proxyRes) => {
+          res.writeHead(proxyRes.statusCode ?? 502, proxyRes.headers);
+          proxyRes.pipe(res, { end: true });
+        });
 
-    const transport = isHttps ? https : http;
-    const proxyReq = transport.request(options, (proxyRes) => {
-      res.writeHead(proxyRes.statusCode ?? 502, proxyRes.headers);
-      proxyRes.pipe(res, { end: true });
-    });
+        proxyReq.on('timeout', () => {
+          logger.error('Credential proxy upstream request timed out after 30s');
+          proxyReq.destroy();
+          if (!res.headersSent) res.writeHead(504);
+          res.end('Upstream timeout');
+        });
 
-    proxyReq.on('timeout', () => {
-      logger.error('Credential proxy upstream request timed out after 30s');
-      proxyReq.destroy();
-      if (!res.headersSent) res.writeHead(504);
-      res.end('Upstream timeout');
-    });
+        proxyReq.on('error', (err) => {
+          logger.error({ err }, 'Credential proxy upstream error');
+          if (!res.headersSent) {
+            res.writeHead(502);
+          }
+          res.end('Credential proxy upstream error');
+        });
 
-    proxyReq.on('error', (err) => {
-      logger.error({ err }, 'Credential proxy upstream error');
-      if (!res.headersSent) {
-        res.writeHead(502);
-      }
-      res.end('Credential proxy upstream error');
-    });
-
-      req.pipe(proxyReq, { end: true });
-    }).catch((err) => {
-      logger.error({ err }, 'Credential proxy: failed to resolve auth header');
-      if (!res.headersSent) res.writeHead(502);
-      res.end('Credential proxy error');
-    });
+        req.pipe(proxyReq, { end: true });
+      })
+      .catch((err) => {
+        logger.error(
+          { err },
+          'Credential proxy: failed to resolve auth header',
+        );
+        if (!res.headersSent) res.writeHead(502);
+        res.end('Credential proxy error');
+      });
   });
 
   server.on('error', (err: NodeJS.ErrnoException) => {
