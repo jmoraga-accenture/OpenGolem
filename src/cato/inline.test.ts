@@ -20,12 +20,21 @@ import {
 import { CATO_SOCKET_PATH } from '../config.js';
 
 function cleanSocket() {
-  try { fs.unlinkSync(CATO_SOCKET_PATH); } catch { /* ok */ }
+  try {
+    fs.unlinkSync(CATO_SOCKET_PATH);
+  } catch {
+    /* ok */
+  }
 }
 
 describe('Cato inline hook — server lifecycle', () => {
-  beforeEach(() => { cleanSocket(); });
-  afterEach(() => { stopCatoInlineHook(); cleanSocket(); });
+  beforeEach(() => {
+    cleanSocket();
+  });
+  afterEach(() => {
+    stopCatoInlineHook();
+    cleanSocket();
+  });
 
   it('starts without throwing', () => {
     expect(() => startCatoInlineHook()).not.toThrow();
@@ -53,7 +62,10 @@ describe('Cato inline hook — deterministic checks', () => {
     startCatoInlineHook();
     await new Promise((r) => setTimeout(r, 50));
   });
-  afterEach(() => { stopCatoInlineHook(); cleanSocket(); });
+  afterEach(() => {
+    stopCatoInlineHook();
+    cleanSocket();
+  });
 
   function req(prompt: string): CatoCheckRequest {
     return { type: 'check_action', groupFolder: 'test-group', prompt };
@@ -116,18 +128,27 @@ describe('Cato inline hook — raw socket protocol', () => {
     startCatoInlineHook();
     await new Promise((r) => setTimeout(r, 50));
   });
-  afterEach(() => { stopCatoInlineHook(); cleanSocket(); });
+  afterEach(() => {
+    stopCatoInlineHook();
+    cleanSocket();
+  });
 
   it('returns valid JSON response for any well-formed request', async () => {
     const response = await new Promise<string>((resolve) => {
       const client = net.createConnection(CATO_SOCKET_PATH, () => {
         client.write(
-          JSON.stringify({ type: 'check_action', groupFolder: 'g', prompt: 'ok' }),
+          JSON.stringify({
+            type: 'check_action',
+            groupFolder: 'g',
+            prompt: 'ok',
+          }),
         );
         client.end();
       });
       let data = '';
-      client.on('data', (c) => { data += c.toString(); });
+      client.on('data', (c) => {
+        data += c.toString();
+      });
       client.on('end', () => resolve(data));
     });
     const parsed = JSON.parse(response);
@@ -141,7 +162,9 @@ describe('Cato inline hook — raw socket protocol', () => {
         client.end();
       });
       let data = '';
-      client.on('data', (c) => { data += c.toString(); });
+      client.on('data', (c) => {
+        data += c.toString();
+      });
       client.on('end', () => resolve(data));
     });
     const parsed = JSON.parse(response);

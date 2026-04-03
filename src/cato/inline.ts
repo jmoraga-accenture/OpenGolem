@@ -156,7 +156,10 @@ export async function catoCheck(
     });
     client.on('error', (err) => {
       clearTimeout(timer);
-      logger.error({ err }, 'Cato: inline hook unreachable — blocking action (fail-closed)');
+      logger.error(
+        { err },
+        'Cato: inline hook unreachable — blocking action (fail-closed)',
+      );
       resolve({ allow: false, reason: 'cato_unreachable' });
     });
   });

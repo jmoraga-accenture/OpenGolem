@@ -19,7 +19,7 @@ import { DAO_SCORE_DB_PATH } from '../config.js';
 
 export interface DaoScore {
   period_start: number; // epoch ms
-  period_end: number;   // epoch ms
+  period_end: number; // epoch ms
   /** (hard_blocks + soft_blocks) / total_calls */
   security_failures_per_call: number;
   /** checkMemoryScope blocks / total_calls */
@@ -91,7 +91,9 @@ export function computeDaoScore(
   const start = now - periodMs;
 
   const rows = auditDb
-    .prepare('SELECT id, ts, container, skill, outcome, block_rule FROM calls WHERE ts >= ? AND ts <= ? ORDER BY id ASC')
+    .prepare(
+      'SELECT id, ts, container, skill, outcome, block_rule FROM calls WHERE ts >= ? AND ts <= ? ORDER BY id ASC',
+    )
     .all(start, now) as CallRow[];
 
   const total = rows.length;
@@ -147,7 +149,11 @@ export function computeDaoScore(
 
   // Distinct (container, rule) pairs (first occurrence only)
   const seenPairs = new Set<string>();
-  const distinctPairs: Array<{ container: string; rule: string; firstId: number }> = [];
+  const distinctPairs: Array<{
+    container: string;
+    rule: string;
+    firstId: number;
+  }> = [];
   for (const row of blockedRows) {
     const key = `${row.container}:::${row.block_rule}`;
     if (!seenPairs.has(key)) {
@@ -208,9 +214,7 @@ export function getLatestDaoScore(dbPath?: string): DaoScore | null {
   if (!fs.existsSync(resolvedPath)) return null;
   const db = new Database(resolvedPath);
   const row = db
-    .prepare(
-      'SELECT * FROM kpi_snapshots ORDER BY computed_at DESC LIMIT 1',
-    )
+    .prepare('SELECT * FROM kpi_snapshots ORDER BY computed_at DESC LIMIT 1')
     .get() as
     | {
         period_start: number;

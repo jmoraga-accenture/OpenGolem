@@ -79,7 +79,10 @@ describe('computeDaoScore — security_failures_per_call', () => {
     const db = makeAuditDb();
     insertCall(db, { outcome: 'pass' });
     insertCall(db, { outcome: 'pass' });
-    insertCall(db, { outcome: 'hard_block', block_rule: 'checkSkillWhitelist' });
+    insertCall(db, {
+      outcome: 'hard_block',
+      block_rule: 'checkSkillWhitelist',
+    });
     insertCall(db, { outcome: 'soft_block', block_rule: 'rateLimit' });
     const score = computeDaoScore(db);
     expect(score.security_failures_per_call).toBeCloseTo(2 / 4);
@@ -97,7 +100,10 @@ describe('computeDaoScore — data_leaks_per_call', () => {
     const db = makeAuditDb();
     insertCall(db, { outcome: 'pass' });
     insertCall(db, { outcome: 'hard_block', block_rule: 'checkMemoryScope' });
-    insertCall(db, { outcome: 'hard_block', block_rule: 'checkSkillWhitelist' });
+    insertCall(db, {
+      outcome: 'hard_block',
+      block_rule: 'checkSkillWhitelist',
+    });
     insertCall(db, { outcome: 'pass' });
     const score = computeDaoScore(db);
     expect(score.data_leaks_per_call).toBeCloseTo(1 / 4);
@@ -114,7 +120,11 @@ describe('computeDaoScore — behavioral_change_rate', () => {
   it('is 1.0 when a block rule did NOT re-fire in next 10 calls', () => {
     const db = makeAuditDb();
     const container = 'c1';
-    insertCall(db, { container, outcome: 'hard_block', block_rule: 'checkSkillWhitelist' });
+    insertCall(db, {
+      container,
+      outcome: 'hard_block',
+      block_rule: 'checkSkillWhitelist',
+    });
     // 10 subsequent passing calls — rule does not re-fire
     for (let i = 0; i < 10; i++) insertCall(db, { container, outcome: 'pass' });
     expect(computeDaoScore(db).behavioral_change_rate).toBe(1.0);
@@ -123,10 +133,18 @@ describe('computeDaoScore — behavioral_change_rate', () => {
   it('is 0 when every block rule re-fires within next 10 calls', () => {
     const db = makeAuditDb();
     const container = 'c2';
-    insertCall(db, { container, outcome: 'hard_block', block_rule: 'checkSkillWhitelist' });
+    insertCall(db, {
+      container,
+      outcome: 'hard_block',
+      block_rule: 'checkSkillWhitelist',
+    });
     // Re-fires in next 5 calls
     for (let i = 0; i < 4; i++) insertCall(db, { container, outcome: 'pass' });
-    insertCall(db, { container, outcome: 'hard_block', block_rule: 'checkSkillWhitelist' });
+    insertCall(db, {
+      container,
+      outcome: 'hard_block',
+      block_rule: 'checkSkillWhitelist',
+    });
     expect(computeDaoScore(db).behavioral_change_rate).toBe(0);
   });
 
@@ -166,7 +184,11 @@ describe('saveDaoScore / getLatestDaoScore', () => {
 
   afterEach(() => {
     _setDaoScoreDb(null);
-    try { fs.unlinkSync(dbPath); } catch { /* ok */ }
+    try {
+      fs.unlinkSync(dbPath);
+    } catch {
+      /* ok */
+    }
   });
 
   it('round-trips a DaoScore', () => {
@@ -191,11 +213,23 @@ describe('saveDaoScore / getLatestDaoScore', () => {
 
   it('returns the most recent snapshot when multiple exist', () => {
     saveDaoScore(
-      { period_start: 0, period_end: 1, security_failures_per_call: 0.1, data_leaks_per_call: 0, behavioral_change_rate: 1 },
+      {
+        period_start: 0,
+        period_end: 1,
+        security_failures_per_call: 0.1,
+        data_leaks_per_call: 0,
+        behavioral_change_rate: 1,
+      },
       dbPath,
     );
     saveDaoScore(
-      { period_start: 0, period_end: 2, security_failures_per_call: 0.2, data_leaks_per_call: 0, behavioral_change_rate: 1 },
+      {
+        period_start: 0,
+        period_end: 2,
+        security_failures_per_call: 0.2,
+        data_leaks_per_call: 0,
+        behavioral_change_rate: 1,
+      },
       dbPath,
     );
     const latest = getLatestDaoScore(dbPath);

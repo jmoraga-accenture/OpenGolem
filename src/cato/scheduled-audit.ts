@@ -13,11 +13,7 @@
 import fs from 'fs';
 import path from 'path';
 
-import {
-  CATO_AUDIT_INTERVAL_MS,
-  DATA_DIR,
-  GROUPS_DIR,
-} from '../config.js';
+import { CATO_AUDIT_INTERVAL_MS, DATA_DIR, GROUPS_DIR } from '../config.js';
 import { runContainerAgent } from '../container-runner.js';
 import { getAuditDb } from '../inspector/audit.js';
 import { logger } from '../logger.js';
@@ -134,7 +130,9 @@ function loadPsycheMd(): string {
   try {
     return fs.readFileSync(p, 'utf8');
   } catch {
-    logger.warn('Cato: PSYCHE.md not found — audit container will run without it');
+    logger.warn(
+      'Cato: PSYCHE.md not found — audit container will run without it',
+    );
     return '';
   }
 }
@@ -268,10 +266,7 @@ export async function runCatoAudit(): Promise<void> {
       ? (parsedFindings as Record<string, unknown>).status
       : 'unknown';
 
-  logger.info(
-    { reportPath, status: reportStatus },
-    'Cato: audit complete',
-  );
+  logger.info({ reportPath, status: reportStatus }, 'Cato: audit complete');
 
   if (reportStatus === 'alert') {
     logger.warn(
