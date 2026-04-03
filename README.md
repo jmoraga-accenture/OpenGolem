@@ -62,6 +62,15 @@ For OneCLI backend: `ONECLI_GATEWAY_URL`, `ONECLI_GATEWAY_TOKEN`.
 
 **Microsoft Teams:** Not a packaged skill — the Azure Bot / webhook model is incompatible with self-hosted zero-infra deployment. Two bridging approaches (Power Automate flow, Graph API polling) are documented in [docs/PLAN.md](docs/PLAN.md).
 
+## Shared context (`data/extra/`)
+
+Drop files into `data/extra/` on the host and every agent container will find them at `/workspace/extra` (read-only). Use it for shared reference documents, instructions, or datasets that all groups should be able to access. Containers cannot write to this directory — the host owns its contents.
+
+```bash
+echo "Company: Acme Corp" > data/extra/context.md
+# Agent can now: cat /workspace/extra/context.md
+```
+
 ## Security model
 
 Agents never hold real API credentials. The flow for every API call:

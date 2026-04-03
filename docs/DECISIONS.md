@@ -167,3 +167,15 @@ The Rust rewrite (Phase 2) proceeds crate-by-crate, replacing TypeScript compone
 - M6 = Cato inline hook + scheduled audit + PSYCHE.md + dao_score pipeline.
 - `assertiveness_level` is Alef's dial. Cato has no dial — it either allows or blocks.
 - See SPECS.md §7 (revised v0.4) for the authoritative definition.
+
+---
+
+## Decision 11: Shared read-only agent context directory (`data/extra/`) (April 2026)
+
+**Question:** How should the user provide shared reference material (documents, standing instructions, datasets) that all agents across all groups should be able to read?
+
+**Decision:** Bind-mount `data/extra/` on the host at `/workspace/extra` (read-only) inside every agent container at spawn. The host owns the directory; containers have no write access. No per-group configuration is needed — it applies universally.
+
+**Rationale:** The per-group filesystem (`/workspace/group`) is already isolated by design (contexts cannot read each other's data). A separate shared directory is the clean solution: it is clearly scoped, clearly read-only, and does not require any change to the per-context isolation model. The audit trail is preserved — every container spawn logs its mounts including `/workspace/extra`. Agents attempting to write will receive a permission denied error from the OS, not a silent no-op.
+
+**What was explicitly not done:** Making the directory writable (would allow agents to modify shared state and create cross-context interference), or making it per-group configurable (unnecessary complexity for the current use case). Writability for agents is a future skill-level decision, not a default.

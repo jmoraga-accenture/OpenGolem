@@ -273,6 +273,10 @@ Three bugs in the main happy path were not caught by the test suite. All were fi
 
 **Root cause of all three:** M4 had unit test coverage of individual functions but no end-to-end path test from "service starts under systemd with `.env`" to "Telegram DM message is delivered to agent". All three bugs are on that path and none were on a code branch exercised by any test.
 
+**Post-refactor additions (2026-04-03):**
+
+4. **`data/extra/` shared read-only mount:** A host directory (`data/extra/`) is now bind-mounted at `/workspace/extra` (read-only) inside every agent container — main and non-main alike. Agents and subagents can read shared context files (reference docs, shared instructions, datasets) without any per-group configuration. The host owns the directory and its contents; containers have no write access. The directory is created automatically on first container spawn if absent. Implemented in `src/container-runner.ts` (`buildVolumeMounts`); `EXTRA_DIR` constant in `src/config.ts`. See Decision 11 in `docs/DECISIONS.md`.
+
 ---
 
 ### Note: Microsoft Teams — not a packaged skill
