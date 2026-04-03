@@ -124,15 +124,13 @@ export function logFlagEvent(event: FlagEvent): void {
 export function getRecentFlagEvents(limit = 10): FlagEvent[] {
   return (
     getAuditDb()
-      .prepare(
-        'SELECT * FROM flag_events ORDER BY ts DESC LIMIT ?',
-      )
+      .prepare('SELECT * FROM flag_events ORDER BY ts DESC LIMIT ?')
       .all(limit) as Array<{
-        group_jid: string;
-        group_folder: string;
-        assertiveness_level: number;
-        response_snippet: string;
-      }>
+      group_jid: string;
+      group_folder: string;
+      assertiveness_level: number;
+      response_snippet: string;
+    }>
   ).map((row) => ({
     groupJid: row.group_jid,
     groupFolder: row.group_folder,

@@ -270,11 +270,7 @@ describe('messageSatisfiesGroupTrigger', () => {
 
   it('non-Telegram: only whole-message trim start counts', () => {
     expect(
-      messageSatisfiesGroupTrigger(
-        wa,
-        `hey\n@${ASSISTANT_NAME} hi`,
-        undefined,
-      ),
+      messageSatisfiesGroupTrigger(wa, `hey\n@${ASSISTANT_NAME} hi`, undefined),
     ).toBe(false);
     expect(
       messageSatisfiesGroupTrigger(wa, `@${ASSISTANT_NAME} hi`, undefined),

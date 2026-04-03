@@ -325,7 +325,11 @@ describe('TelegramChannel', () => {
       await triggerTextMessage(ctx);
 
       // Auto-registration should fire
-      expect(opts.onAutoRegisterGroup).toHaveBeenCalledWith('tg:999999', 'Alice', false);
+      expect(opts.onAutoRegisterGroup).toHaveBeenCalledWith(
+        'tg:999999',
+        'Alice',
+        false,
+      );
       // Message should be delivered (not dropped)
       expect(opts.onMessage).toHaveBeenCalledWith(
         'tg:999999',
@@ -921,7 +925,11 @@ describe('TelegramChannel', () => {
       await triggerMediaMessage('message:photo', ctx);
       await flushPromises();
 
-      expect(opts.onAutoRegisterGroup).toHaveBeenCalledWith('tg:999999', expect.any(String), false);
+      expect(opts.onAutoRegisterGroup).toHaveBeenCalledWith(
+        'tg:999999',
+        expect.any(String),
+        false,
+      );
       expect(opts.onMessage).toHaveBeenCalled();
     });
 
@@ -1373,11 +1381,9 @@ describe('TelegramChannel', () => {
 
     it('returns false without me username when only plain @handle in text', () => {
       expect(
-        shouldPrependAssistantTriggerForBotMention(
-          'yo @alef-mark-01',
-          [],
-          { id: 42 },
-        ),
+        shouldPrependAssistantTriggerForBotMention('yo @alef-mark-01', [], {
+          id: 42,
+        }),
       ).toBe(false);
     });
 

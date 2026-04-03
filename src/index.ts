@@ -308,7 +308,10 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
             responseSnippet: text.slice(0, 200),
           });
           logger.info(
-            { group: group.name, assertivenessLevel: group.assertivenessLevel ?? 10 },
+            {
+              group: group.name,
+              assertivenessLevel: group.assertivenessLevel ?? 10,
+            },
             '[FLAG] response detected and logged to audit',
           );
         }
@@ -538,7 +541,11 @@ async function startMessageLoop(): Promise<void> {
           if (needsTrigger) {
             const hasTrigger = groupMessagesAllowed.some(
               (m) =>
-                messageSatisfiesGroupTrigger(chatJid, m.content, group.trigger) &&
+                messageSatisfiesGroupTrigger(
+                  chatJid,
+                  m.content,
+                  group.trigger,
+                ) &&
                 (m.is_from_me ||
                   isTriggerAllowed(chatJid, m.sender, allowlistCfg)),
             );
@@ -769,13 +776,23 @@ async function main(): Promise<void> {
       if (trimmed === '/new' || trimmed === '/reset') {
         const group = registeredGroups[chatJid];
         if (group) {
-          deleteSession(group.folder);       // persist: remove from DB
-          delete sessions[group.folder];    // in-memory: clear so next runAgent starts fresh
-          logger.info({ chatJid, folder: group.folder }, 'Session reset via /new');
-          const channel = channels.find((c) => c.ownsJid(chatJid) && c.isConnected());
+          deleteSession(group.folder); // persist: remove from DB
+          delete sessions[group.folder]; // in-memory: clear so next runAgent starts fresh
+          logger.info(
+            { chatJid, folder: group.folder },
+            'Session reset via /new',
+          );
+          const channel = channels.find(
+            (c) => c.ownsJid(chatJid) && c.isConnected(),
+          );
           channel
-            ?.sendMessage(chatJid, `Session cleared. Next message starts a fresh conversation with ${ASSISTANT_NAME}.`)
-            .catch((err) => logger.error({ err, chatJid }, '/new reply failed'));
+            ?.sendMessage(
+              chatJid,
+              `Session cleared. Next message starts a fresh conversation with ${ASSISTANT_NAME}.`,
+            )
+            .catch((err) =>
+              logger.error({ err, chatJid }, '/new reply failed'),
+            );
         }
         return;
       }
@@ -846,7 +863,10 @@ async function main(): Promise<void> {
         assertivenessLevel: 10,
       };
       registerGroup(jid, group);
-      logger.info({ jid, folder, name, isGroup }, 'Auto-registered Telegram chat');
+      logger.info(
+        { jid, folder, name, isGroup },
+        'Auto-registered Telegram chat',
+      );
     },
   };
 

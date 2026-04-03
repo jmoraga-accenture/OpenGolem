@@ -40,7 +40,14 @@ function escapeTriggerRegexSegment(s: string): string {
  */
 export function shouldPrependAssistantTriggerForBotMention(
   content: string,
-  entities: ReadonlyArray<{ type: string; offset: number; length: number; user?: { id: number } }> | undefined,
+  entities:
+    | ReadonlyArray<{
+        type: string;
+        offset: number;
+        length: number;
+        user?: { id: number };
+      }>
+    | undefined,
   me?: { id: number; username?: string },
 ): boolean {
   const trimmed = content.trim();
@@ -67,10 +74,7 @@ export function shouldPrependAssistantTriggerForBotMention(
   }
 
   if (botUsername) {
-    const re = new RegExp(
-      `@${escapeTriggerRegexSegment(botUsername)}\\b`,
-      'i',
-    );
+    const re = new RegExp(`@${escapeTriggerRegexSegment(botUsername)}\\b`, 'i');
     if (re.test(content)) return true;
   }
 
@@ -230,7 +234,10 @@ export class TelegramChannel implements Channel {
       // Auto-register on first /chatid so groups bootstrap without needing a text message
       if (!this.opts.registeredGroups()[chatJid]) {
         this.opts.onAutoRegisterGroup(chatJid, chatName, isGroup);
-        logger.info({ chatJid, chatName, isGroup }, 'Telegram chat auto-registered via /chatid');
+        logger.info(
+          { chatJid, chatName, isGroup },
+          'Telegram chat auto-registered via /chatid',
+        );
       }
 
       await ctx.reply(
@@ -347,7 +354,10 @@ export class TelegramChannel implements Channel {
       // Auto-register on first contact if not yet registered
       if (!this.opts.registeredGroups()[chatJid]) {
         this.opts.onAutoRegisterGroup(chatJid, chatName, isGroup);
-        logger.info({ chatJid, chatName }, 'Telegram chat auto-registered on first message');
+        logger.info(
+          { chatJid, chatName },
+          'Telegram chat auto-registered on first message',
+        );
       }
 
       // Deliver message — startMessageLoop() will pick it up
@@ -388,10 +398,9 @@ export class TelegramChannel implements Channel {
       const isGroup =
         ctx.chat.type === 'group' || ctx.chat.type === 'supergroup';
       if (!this.opts.registeredGroups()[chatJid]) {
-        const chatName =
-          isGroup
-            ? (ctx.chat as { title?: string }).title || 'Unknown'
-            : ctx.from?.first_name || 'Unknown';
+        const chatName = isGroup
+          ? (ctx.chat as { title?: string }).title || 'Unknown'
+          : ctx.from?.first_name || 'Unknown';
         this.opts.onAutoRegisterGroup(chatJid, chatName, isGroup);
       }
 
@@ -428,7 +437,9 @@ export class TelegramChannel implements Channel {
         const filename =
           opts.filename ||
           `${placeholder.replace(/[\[\] ]/g, '').toLowerCase()}_${msgId}`;
-        const groupFolder = this.opts.registeredGroups()[chatJid]?.folder ?? chatJid.replace(':', '-');
+        const groupFolder =
+          this.opts.registeredGroups()[chatJid]?.folder ??
+          chatJid.replace(':', '-');
         this.downloadFile(opts.fileId, groupFolder, filename).then(
           (filePath) => {
             if (filePath) {
