@@ -1,5 +1,5 @@
 # OpenGolem — Implementation Plan
-*Produced: April 2026 | Last updated: 2026-04-03 | Tracks SPECS.md v0.4 | M4 complete + refactor sprint | 445 tests*
+*Produced: April 2026 | Last updated: 2026-04-04 | Tracks SPECS.md v0.4 | M6 complete | 487 tests*
 
 ---
 
@@ -12,7 +12,7 @@
 | M3 — Call Inspector | ✅ Complete | 5 checks; audit.db append-only; golem_guard/supervised/power modes |
 | M4 — Channel Adapters | ✅ Complete | TUI + Telegram tested; DM-only; TELEGRAM_VALID_USERS allowlist; Teams dropped (see note) |
 | M5 — SOUL.md (Alef's character + assertiveness) | ✅ Complete | SOUL.md prepended as system prompt; assertiveness_level per group; [FLAG] logged to audit |
-| M6 — Cato (hard oversight) + PSYCHE.md + dao_score | 🔲 Not started | Second protection layer: overrules user and Alef; feedback loop via dao_score |
+| M6 — Cato (hard oversight) + PSYCHE.md + dao_score | ✅ Complete | Inline hook (deterministic stub); scheduled audit every 6h; dao_score.db; PSYCHE.md |
 | M7 — TUI Health Dashboard | 🔲 Not started | |
 | M8 — Skill Schema | 🔲 Not started | |
 | M9 — Integration + Hardening | 🔲 Not started | |
@@ -362,6 +362,40 @@ Cato is not in the orchestrator's addressable agent map. No task-level token can
 - Escalation paths: what Cato does when hard violations, sustained drift, or external abuse patterns are detected. Escalation always surfaces to the user — Cato does not silently suppress; it blocks and reports.
 
 **Gate:** Cato inline socket independently blocks a cross-context memory access that the Call Inspector also blocks (defense in depth confirmed). Cato is absent from the orchestrator's addressable agent map. All three dao_score KPIs compute correctly from a fixture audit log. PSYCHE.md KPI names match `dao_score.ts` output fields.
+
+**What was actually done (M6 complete — 2026-04-03):**
+
+- **`PSYCHE.md`** — Cato's operating contract. Sections: identity, mandate, scheduled audit procedure, dao_score KPI definitions (authoritative formulas), alert thresholds, report JSON schema, escalation protocol, what Cato is not. Used as Cato's system prompt prefix when its LLM container runs.
+
+- **`src/cato/inline.ts`** — Unix socket server at `data/cato.sock`. Phase 1 deterministic checks: path traversal in prompt, oversized prompt (>100 KB). Returns `{ allow, reason? }`. Fail-closed: socket unreachable → block. Caller: `catoCheck()` async client called by orchestrator before each `runContainerAgent`. See Decision 12 for the LLM stub rationale.
+
+- **`src/cato/dao-score.ts`** — Reads `audit.db`, computes the three KPIs from PSYCHE.md/Decision 5, writes snapshots to `data/dao_score.db`. `computeDaoScore(auditDb, periodMs)` is pure and testable. `saveDaoScore()` / `getLatestDaoScore()` handle persistence. KPI field names are contract-tested against PSYCHE.md names.
+
+- **`src/cato/scheduled-audit.ts`** — `runCatoAudit()`: computes dao_score, builds audit summary from recent calls and `[FLAG]` events, runs a Cato LLM container with PSYCHE.md as system prompt, parses JSON findings, writes `reports/cato-<timestamp>.json`. `startCatoScheduledAudit()` arms a `setInterval` (default 6h, `CATO_AUDIT_INTERVAL_MS`). Container uses `groups/cato/` as its workspace (not in `registeredGroups`).
+
+- **`src/index.ts`** — wired: `ensureCatoGroupFolder()` + `startCatoInlineHook()` + `startCatoScheduledAudit()` at startup; `catoCheck()` gate before each `runContainerAgent`; `stopCatoInlineHook()` + `stopCatoScheduledAudit()` on shutdown.
+
+- **`src/config.ts`** — added `CATO_SOCKET_PATH`, `DAO_SCORE_DB_PATH`, `CATO_AUDIT_INTERVAL_MS`.
+
+- **`src/bootstrap.ts`** — `CATO_AUDIT_INTERVAL_MS` added to CONFIG_KEYS.
+
+- **Tests**: `src/cato/inline.test.ts` (12 tests) + `src/cato/dao-score.test.ts` (13 tests). Total: **487 tests passing**.
+
+**Post-implementation fixes (2026-04-04, code review):**
+
+Three bugs found via subagent review and fixed before shipping:
+1. `startCatoInlineHook()` did not call `fs.mkdirSync()` for the socket directory — would fail on a fresh install before `data/` is created by other startup code.
+2. `stopCatoInlineHook()` closed the server but did not unlink the socket file — stale socket could accumulate across restarts.
+3. `reports/` was not in `.gitignore` — audit report files (security findings, KPI data) would have been committed to the repository.
+
+**Gate status:**
+- ✅ Inline socket blocks path traversal independently (confirmed by test)
+- ✅ Cato absent from `registeredGroups` — not addressable by any JID or token
+- ✅ All three dao_score KPIs compute correctly from fixture audit data
+- ✅ PSYCHE.md KPI names match `dao-score.ts` field names (contract test)
+- ✅ Socket directory created on startup; socket file cleaned on shutdown
+- ✅ `reports/` excluded from version control
+- ⬜ LLM escalation in inline hook — deferred to Phase 2 (Decision 12)
 
 ---
 

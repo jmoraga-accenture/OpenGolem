@@ -43,6 +43,14 @@ export const GROUPS_DIR = path.resolve(PROJECT_ROOT, 'groups');
 export const DATA_DIR = path.resolve(PROJECT_ROOT, 'data');
 export const EXTRA_DIR = path.resolve(PROJECT_ROOT, 'data', 'extra');
 
+// Cato oversight layer paths (M6)
+export const CATO_SOCKET_PATH = path.join(DATA_DIR, 'cato.sock');
+export const DAO_SCORE_DB_PATH = path.join(DATA_DIR, 'dao_score.db');
+export const CATO_AUDIT_INTERVAL_MS = parseInt(
+  process.env.CATO_AUDIT_INTERVAL_MS || String(6 * 60 * 60 * 1000),
+  10,
+);
+
 export const CONTAINER_IMAGE =
   process.env.CONTAINER_IMAGE || 'opengolem-agent:latest';
 export const CONTAINER_TIMEOUT = parseInt(

@@ -170,6 +170,25 @@ The Rust rewrite (Phase 2) proceeds crate-by-crate, replacing TypeScript compone
 
 ---
 
+## Decision 12: Cato inline hook as deterministic stub (M6, April 2026)
+
+**Question:** The spec calls for Cato's inline hook to run LLM judgment when deterministic checks are inconclusive. Should M6 implement the LLM path?
+
+**Decision:** No. M6 implements the inline hook as a **deterministic stub only**. The Unix socket boundary is preserved — the caller interface (`catoCheck(req)` → `{ allow, reason? }`) is identical to what the LLM path will use. Only the implementation inside the server changes in Phase 2.
+
+**Phase 1 deterministic checks:**
+1. **Path traversal in prompt** (`../` or `..\`) — indicates potential filesystem escape attempt via prompt injection
+2. **Oversized prompt** (>100 KB) — protects against context stuffing attacks
+
+**Why not LLM escalation now:**
+- Cato's LLM judgment requires its own context, separate from Alef's. That context (PSYCHE.md, audit history, pattern memory) needs to stabilise before it can make reliable inline decisions.
+- LLM calls are synchronous gates — a poorly calibrated Cato would block legitimate actions and erode trust before any safety benefit is demonstrated.
+- The deterministic checks cover the highest-confidence attack vectors. Everything else is better caught by the scheduled audit (retrospective, not real-time).
+
+**Upgrade path:** Replace `runDeterministicChecks()` in `src/cato/inline.ts` with an LLM call when the deterministic pass returns inconclusive. The socket stays; the server implementation changes. Nothing outside `inline.ts` is affected.
+
+---
+
 ## Decision 11: Shared read-only agent context directory (`data/extra/`) (April 2026)
 
 **Question:** How should the user provide shared reference material (documents, standing instructions, datasets) that all agents across all groups should be able to read?

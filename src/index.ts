@@ -70,6 +70,16 @@ import {
   telegramGroupHasExplicitAllowlist,
 } from './sender-allowlist.js';
 import { startSchedulerLoop } from './task-scheduler.js';
+import {
+  catoCheck,
+  startCatoInlineHook,
+  stopCatoInlineHook,
+} from './cato/inline.js';
+import {
+  ensureCatoGroupFolder,
+  startCatoScheduledAudit,
+  stopCatoScheduledAudit,
+} from './cato/scheduled-audit.js';
 import { isChannelEnabled } from './channels/channel-enabled.js';
 import { TUI_CONSOLE_JID } from './channels/tui.js';
 import { Channel, NewMessage, RegisteredGroup } from './types.js';
@@ -283,6 +293,26 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
       queue.closeStdin(chatJid);
     }, IDLE_TIMEOUT);
   };
+
+  // Cato inline check — synchronous gate before any container is started.
+  // Run here (not inside runAgent) so we have access to channel for user
+  // notification and can advance the cursor cleanly without a retry loop.
+  const catoResult = await catoCheck({
+    type: 'check_action',
+    groupFolder: group.folder,
+    prompt,
+  });
+  if (!catoResult.allow) {
+    logger.warn(
+      { group: group.name, reason: catoResult.reason },
+      'Cato: action blocked by inline hook',
+    );
+    await channel.sendMessage(
+      chatJid,
+      `[Cato] Action blocked (${catoResult.reason ?? 'policy'}). The message was not sent to the agent.`,
+    );
+    return true; // cursor already advanced above; do not retry
+  }
 
   await channel.setTyping?.(chatJid, true);
   let hadError = false;
@@ -690,6 +720,11 @@ async function main(): Promise<void> {
   seedTuiGroupIfNeeded();
   seedTelegramDmGroupsIfNeeded();
 
+  // Cato — hard oversight layer (M6)
+  ensureCatoGroupFolder();
+  startCatoInlineHook();
+  startCatoScheduledAudit();
+
   // Start the Token Broker (M2). Issues scoped HMAC-signed tokens to containers,
   // enabling future per-container credential mediation and budget enforcement.
   broker = startBroker();
@@ -704,6 +739,8 @@ async function main(): Promise<void> {
   // Graceful shutdown handlers
   const shutdown = async (signal: string) => {
     logger.info({ signal }, 'Shutdown signal received');
+    stopCatoScheduledAudit();
+    stopCatoInlineHook();
     await queue.shutdown(10000);
     for (const ch of channels) await ch.disconnect();
     broker?.close();
