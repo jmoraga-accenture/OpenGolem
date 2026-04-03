@@ -1,6 +1,6 @@
 # OpenGolem
 
-Security-first personal AI assistant. See `docs/SPECS.md` for architecture. See `docs/PLAN.md` for implementation status.
+Security-first personal AI assistant. See `docs/SPECS.md` for architecture. See `docs/PLAN.md` for implementation status. Human-facing overview: `README.md`. Cursor layout: `CURSOR.md` and `.cursor/rules/opengolem.mdc`.
 
 ## Quick Context
 
@@ -27,6 +27,8 @@ Single Node.js process (Phase 1 TypeScript baseline). Channels (Telegram, WhatsA
 | `docs/PLAN.md` | Implementation plan with milestone status |
 | `docs/SECURITY_AUDIT.md` | Security audit findings and fixes |
 | `docs/DECISIONS.md` | Architecture decision records |
+| `README.md` | Overview, quick start, credits (lineage vs new work) |
+| `.cursor/rules/opengolem.mdc` | Cursor IDE always-on project rules |
 
 ## Secrets / Credentials
 

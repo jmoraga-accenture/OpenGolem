@@ -75,10 +75,7 @@ export class TuiChannel implements Channel {
     });
 
     this.connected = true;
-    logger.info(
-      { jid: TUI_CONSOLE_JID },
-      'TUI channel ready — type messages at the prompt; register this JID with your main group if needed',
-    );
+    logger.debug({ jid: TUI_CONSOLE_JID }, 'TUI channel ready');
   }
 
   async sendMessage(jid: string, text: string): Promise<void> {

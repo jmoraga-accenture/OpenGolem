@@ -15,7 +15,7 @@ Works with Doom Emacs, Spacemacs, and vanilla Emacs 27.1+.
 - **Meeting notes** — send an org agenda entry; get a summary or action item list back as a child node
 - **Draft writing** — send org prose; receive revisions or continuations in place
 - **Research capture** — ask a question directly in your org notes; the answer lands exactly where you need it
-- **Schedule tasks** — ask Andy to set a reminder or create a scheduled OpenGolem task (e.g. "remind me tomorrow to review the PR")
+- **Schedule tasks** — ask Alef to set a reminder or create a scheduled OpenGolem task (e.g. "remind me tomorrow to review the PR")
 
 ## Phase 1: Pre-flight
 
@@ -185,7 +185,7 @@ Tell the user:
 
 > 1. Open the chat buffer with your keybinding (`SPC N c`, `SPC a N c`, or `C-c n c`)
 > 2. Type a message and press `RET`
-> 3. A response from Andy should appear within a few seconds
+> 3. A response from Alef should appear within a few seconds
 >
 > For org-mode: open any `.org` file, position the cursor on a heading, and use `SPC N o` / `SPC a N o` / `C-c n o`
 

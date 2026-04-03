@@ -88,7 +88,7 @@ function loadState(): void {
   }
   sessions = getAllSessions();
   registeredGroups = getAllRegisteredGroups();
-  logger.info(
+  logger.debug(
     { groupCount: Object.keys(registeredGroups).length },
     'State loaded',
   );
@@ -149,9 +149,9 @@ function registerGroup(jid: string, group: RegisteredGroup): void {
     );
     if (fs.existsSync(templateFile)) {
       let content = fs.readFileSync(templateFile, 'utf-8');
-      if (ASSISTANT_NAME !== 'Andy') {
-        content = content.replace(/^# Andy$/m, `# ${ASSISTANT_NAME}`);
-        content = content.replace(/You are Andy/g, `You are ${ASSISTANT_NAME}`);
+      if (ASSISTANT_NAME !== 'Alef') {
+        content = content.replace(/^# Alef$/m, `# ${ASSISTANT_NAME}`);
+        content = content.replace(/You are Alef/g, `You are ${ASSISTANT_NAME}`);
       }
       fs.writeFileSync(groupMdFile, content);
       logger.info({ folder: group.folder }, 'Created CLAUDE.md from template');
@@ -551,7 +551,9 @@ function ensureContainerSystemRunning(): void {
 function seedTuiGroupIfNeeded(): void {
   if (!isChannelEnabled('tui')) return;
   if (registeredGroups[TUI_CONSOLE_JID]) return;
-  logger.info('TUI enabled — auto-registering tui:console as default console group');
+  logger.info(
+    'TUI enabled — auto-registering tui:console as default console group',
+  );
   registerGroup(TUI_CONSOLE_JID, {
     name: 'Console',
     folder: 'tui',
@@ -565,7 +567,7 @@ function seedTuiGroupIfNeeded(): void {
 async function main(): Promise<void> {
   ensureContainerSystemRunning();
   initDatabase();
-  logger.info('Database initialized');
+  logger.debug('Database initialized');
   loadState();
   seedTuiGroupIfNeeded();
 
@@ -676,9 +678,9 @@ async function main(): Promise<void> {
     const factory = getChannelFactory(channelName)!;
     const channel = factory(channelOpts);
     if (!channel) {
-      logger.warn(
+      logger.debug(
         { channel: channelName },
-        'Channel installed but credentials missing — skipping. Check .env or re-run the channel skill.',
+        'Channel not active (disabled or credentials not configured)',
       );
       continue;
     }

@@ -7,16 +7,16 @@
 
 | Milestone | Status | Notes |
 |---|---|---|
-| M1 — Repository Scaffold | ✅ Complete | NanoClaw copied, stripped, security-hardened, builds clean (246 tests pass) |
-| M2 — Token Broker | 🔲 Not started | |
+| M1 — Repository Scaffold | ✅ Complete | 304 tests passing; TUI live; Telegram pulled, inactive by default; assistant named Alef |
+| M2 — Token Broker | 🔧 In progress | |
 | M3 — Call Inspector | 🔲 Not started | |
-| M4 — Channel Adapters (TUI + Teams) | 🔲 Not started | |
+| M4 — Channel Adapters (Teams) | 🔲 Not started | TUI completed in M1; Teams remains |
 | M5 — Jiminy Cricket + SOUL.md | 🔲 Not started | |
 | M6 — Safety Agent + Security Agent + dao_score | 🔲 Not started | |
 | M7 — TUI Health Dashboard | 🔲 Not started | |
 | M8 — Skill Schema | 🔲 Not started | |
 | M9 — Integration + Hardening | 🔲 Not started | |
-| **Phase 2 — OpenGolem-RS** | 🔲 Not started | Begins after M9 |
+| **Phase 2 — OpenGolem-v2 (clean lab)** | 🔲 Not started | Incremental TypeScript rewrite from specs; begins after M9 |
 
 ---
 

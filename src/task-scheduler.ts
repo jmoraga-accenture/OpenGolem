@@ -248,7 +248,7 @@ export function startSchedulerLoop(deps: SchedulerDependencies): void {
     return;
   }
   schedulerRunning = true;
-  logger.info('Scheduler loop started');
+  logger.debug('Scheduler loop started');
 
   const loop = async () => {
     try {

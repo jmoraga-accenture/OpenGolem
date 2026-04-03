@@ -230,6 +230,8 @@ async function buildContainerArgs(
 
   // Pass host timezone so container's local time matches the user's
   args.push('-e', `TZ=${TIMEZONE}`);
+  // Suppress npm update notices which otherwise pollute container stdout
+  args.push('-e', 'NO_UPDATE_NOTIFIER=1');
 
   // Credential proxy: containers call http://host.docker.internal:<port>
   // which is the native credential proxy running on the host. The proxy
@@ -382,6 +384,13 @@ export async function runContainerAgent(
             if (parsed.newSessionId) {
               newSessionId = parsed.newSessionId;
             }
+            if (
+              parsed.status === 'error' &&
+              parsed.error &&
+              /no conversation found|session.*not found/i.test(parsed.error)
+            ) {
+              staleSessionDetected = true;
+            }
             hadStreamingOutput = true;
             // Activity detected — reset the hard timeout
             resetTimeout();
@@ -422,6 +431,7 @@ export async function runContainerAgent(
 
     let timedOut = false;
     let hadStreamingOutput = false;
+    let staleSessionDetected = false;
     const configTimeout = group.containerConfig?.timeout || CONTAINER_TIMEOUT;
     // Grace period: hard timeout must be at least IDLE_TIMEOUT + 30s so the
     // graceful _close sentinel has time to trigger before the hard kill fires.
@@ -589,7 +599,10 @@ export async function runContainerAgent(
           result: null,
           // SECURITY: Log full stderr server-side; return only exit code to caller
           // to prevent leaking file paths, stack traces, or API errors.
-          error: `Container exited with code ${code}`,
+          // Exception: surface stale-session signal so index.ts can clear the session.
+          error: staleSessionDetected
+            ? 'No conversation found — stale session cleared'
+            : `Container exited with code ${code}`,
         });
         return;
       }
