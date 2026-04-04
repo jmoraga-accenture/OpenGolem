@@ -16,7 +16,9 @@ vi.mock('./config.js', () => ({
   MOUNT_ALLOWLIST_PATH: '/test/mount-allowlist.json',
 }));
 
-const allowlistJson = (extra?: Partial<{ roots: unknown[]; patterns: string[] }>) =>
+const allowlistJson = (
+  extra?: Partial<{ roots: unknown[]; patterns: string[] }>,
+) =>
   JSON.stringify({
     allowedRoots: extra?.roots ?? [
       { path: '/allowed/proj', allowReadWrite: true, description: 'dev' },
@@ -63,9 +65,7 @@ describe('mount-security', () => {
   });
 
   it('loadMountAllowlist can succeed on a later call after file appears', async () => {
-    vi.mocked(fs.existsSync)
-      .mockReturnValueOnce(false)
-      .mockReturnValue(true);
+    vi.mocked(fs.existsSync).mockReturnValueOnce(false).mockReturnValue(true);
     vi.mocked(fs.readFileSync).mockReturnValue(allowlistJson());
 
     const { loadMountAllowlist } = await import('./mount-security.js');
@@ -136,9 +136,8 @@ describe('mount-security', () => {
     vi.mocked(fs.realpathSync).mockImplementation(() => {
       throw new Error('ENOENT');
     });
-    const { loadMountAllowlist, validateMount } = await import(
-      './mount-security.js'
-    );
+    const { loadMountAllowlist, validateMount } =
+      await import('./mount-security.js');
     loadMountAllowlist();
     const r = validateMount({ hostPath: '/allowed/proj/nope' }, true);
     expect(r.allowed).toBe(false);
@@ -149,9 +148,8 @@ describe('mount-security', () => {
     vi.mocked(fs.existsSync).mockReturnValue(true);
     vi.mocked(fs.readFileSync).mockReturnValue(allowlistJson());
     vi.mocked(fs.realpathSync).mockImplementation((p) => String(p));
-    const { loadMountAllowlist, validateMount } = await import(
-      './mount-security.js'
-    );
+    const { loadMountAllowlist, validateMount } =
+      await import('./mount-security.js');
     loadMountAllowlist();
     const r = validateMount({ hostPath: '/allowed/proj/.ssh/keys' }, true);
     expect(r.allowed).toBe(false);
@@ -162,9 +160,8 @@ describe('mount-security', () => {
     vi.mocked(fs.existsSync).mockReturnValue(true);
     vi.mocked(fs.readFileSync).mockReturnValue(allowlistJson());
     vi.mocked(fs.realpathSync).mockImplementation((p) => String(p));
-    const { loadMountAllowlist, validateMount } = await import(
-      './mount-security.js'
-    );
+    const { loadMountAllowlist, validateMount } =
+      await import('./mount-security.js');
     loadMountAllowlist();
     const r = validateMount({ hostPath: '/etc/passwd' }, true);
     expect(r.allowed).toBe(false);
@@ -175,9 +172,8 @@ describe('mount-security', () => {
     vi.mocked(fs.existsSync).mockReturnValue(true);
     vi.mocked(fs.readFileSync).mockReturnValue(allowlistJson());
     vi.mocked(fs.realpathSync).mockImplementation((p) => String(p));
-    const { loadMountAllowlist, validateMount } = await import(
-      './mount-security.js'
-    );
+    const { loadMountAllowlist, validateMount } =
+      await import('./mount-security.js');
     loadMountAllowlist();
     const r = validateMount({ hostPath: '/allowed/proj/repo' }, true);
     expect(r.allowed).toBe(true);
@@ -190,9 +186,8 @@ describe('mount-security', () => {
     vi.mocked(fs.existsSync).mockReturnValue(true);
     vi.mocked(fs.readFileSync).mockReturnValue(allowlistJson());
     vi.mocked(fs.realpathSync).mockImplementation((p) => String(p));
-    const { loadMountAllowlist, validateMount } = await import(
-      './mount-security.js'
-    );
+    const { loadMountAllowlist, validateMount } =
+      await import('./mount-security.js');
     loadMountAllowlist();
     vi.clearAllMocks();
     const r = validateMount(
@@ -210,14 +205,10 @@ describe('mount-security', () => {
       allowlistJson({ roots: [{ path: '/allowed', allowReadWrite: true }] }),
     );
     vi.mocked(fs.realpathSync).mockImplementation((p) => String(p));
-    const { loadMountAllowlist, validateMount } = await import(
-      './mount-security.js'
-    );
+    const { loadMountAllowlist, validateMount } =
+      await import('./mount-security.js');
     loadMountAllowlist();
-    const r = validateMount(
-      { hostPath: '/allowed/x', readonly: false },
-      false,
-    );
+    const r = validateMount({ hostPath: '/allowed/x', readonly: false }, false);
     expect(r.allowed).toBe(true);
     expect(r.effectiveReadonly).toBe(true);
     expect(logger.info).toHaveBeenCalledWith(
@@ -230,15 +221,11 @@ describe('mount-security', () => {
     vi.mocked(fs.existsSync).mockReturnValue(true);
     vi.mocked(fs.readFileSync).mockReturnValue(allowlistJson());
     vi.mocked(fs.realpathSync).mockImplementation((p) => String(p));
-    const { loadMountAllowlist, validateAdditionalMounts } = await import(
-      './mount-security.js'
-    );
+    const { loadMountAllowlist, validateAdditionalMounts } =
+      await import('./mount-security.js');
     loadMountAllowlist();
     const out = validateAdditionalMounts(
-      [
-        { hostPath: '/allowed/proj/good' },
-        { hostPath: '/etc/secret' },
-      ],
+      [{ hostPath: '/allowed/proj/good' }, { hostPath: '/etc/secret' }],
       'g1',
       true,
     );

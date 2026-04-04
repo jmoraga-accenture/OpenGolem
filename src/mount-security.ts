@@ -4,11 +4,7 @@ import path from 'path';
 
 import { MOUNT_ALLOWLIST_PATH } from './config.js';
 import { logger } from './logger.js';
-import type {
-  AdditionalMount,
-  AllowedRoot,
-  MountAllowlist,
-} from './types.js';
+import type { AdditionalMount, AllowedRoot, MountAllowlist } from './types.js';
 
 export interface MountValidationResult {
   allowed: boolean;
@@ -219,7 +215,10 @@ export function validateMount(
     };
   }
 
-  const blockedMatch = matchesBlockedPattern(realPath, allowlist.blockedPatterns);
+  const blockedMatch = matchesBlockedPattern(
+    realPath,
+    allowlist.blockedPatterns,
+  );
   if (blockedMatch !== null) {
     return {
       allowed: false,
@@ -255,9 +254,7 @@ export function validateMount(
     }
   }
 
-  const desc = allowedRoot.description
-    ? ` (${allowedRoot.description})`
-    : '';
+  const desc = allowedRoot.description ? ` (${allowedRoot.description})` : '';
   return {
     allowed: true,
     reason: `Allowed under root "${allowedRoot.path}"${desc}`,
