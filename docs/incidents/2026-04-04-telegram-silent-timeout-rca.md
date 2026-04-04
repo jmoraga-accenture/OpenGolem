@@ -124,19 +124,21 @@ Reference (timeout reset only on markers):
 
 ### 6.3 What logs cannot prove
 
-- Per-request Anthropic payloads/responses at default log level.  
+- Per-request Anthropic payloads/responses at default log level.
 - Full in-container transcript without **verbose** container logs or Claude session files under the group workspace.
+
+The most actionable artifact for answering "what was the agent doing during those 30 minutes" is the **Claude session `.jsonl` file** in `groups/<folder>/.claude/projects/<hash>/`. It contains the full turn-by-turn record of tool calls, API responses, and errors from inside the container. Check that file first when FM-1 recurs.
 
 ---
 
 ## 7. Recommended actions
 
 | Priority | Action | Owner |
-|----------|--------|--------|
+|----------|--------|-------|
 | P1 | For incidents: run with **`LOG_LEVEL=trace`** (or equivalent) so **stdout/stderr** are persisted in `groups/.../logs/container-*.log` on non-zero paths as already documented in `container-runner` | Ops |
-| P2 | **Metrics/alerts**: rate of `Container timed out with no output`, `Credential proxy upstream request timed out`, **time-to-first-marker** | Engineering |
-| P3 | **Product copy**: clarify in docs or skill that **`/status` full report is main-chat-only**; optional pointer to **`npm run status`** / **`/health`** for host operators | Docs / skills |
-| P4 | **Investigate** agent/SDK path when **no markers** for 30+ minutes (repro with captured session) | Engineering |
+| P2 | **Investigate** agent/SDK path when **no markers** for 30+ minutes — examine Claude session `.jsonl` in `groups/<folder>/.claude/projects/<hash>/` when FM-1 recurs (repro with captured session) | Engineering |
+| P3 | **Metrics/alerts**: rate of `Container timed out with no output`, `Credential proxy upstream request timed out`, **time-to-first-marker** | Engineering |
+| P4 | **Product copy**: clarify in docs or skill that **`/status` full report is main-chat-only**; optional pointer to **`npm run status`** / **`/health`** for host operators | Docs / skills |
 
 ---
 
