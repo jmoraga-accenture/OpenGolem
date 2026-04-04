@@ -1,5 +1,5 @@
 # OpenGolem — Technical Internals
-*Last updated: 2026-04-03*
+*Last updated: 2026-04-04*
 
 This document explains what actually happens when OpenGolem runs: how the process starts, how channels plug in, how messages travel from a user to an agent and back, and what you need to do to connect each channel type.
 
@@ -407,3 +407,13 @@ OpenGolem/
 ```
 
 Each group folder is the agent's writable workspace. The agent can create files, maintain notes, and access its own `CLAUDE.md` identity file. It cannot read other groups' folders (not mounted) or the host's `.env` (shadowed by an empty bind mount).
+
+---
+
+## 12. Incident reports
+
+Postmortems and RCAs for operational issues live under **`docs/incidents/`**.
+
+| Document | Summary |
+|----------|---------|
+| [2026-04-04 — Telegram silent runs / container timeouts](./incidents/2026-04-04-telegram-silent-timeout-rca.md) | Group chats: sparse or no stdout markers vs hard timeout; `/status` on non-main; credential proxy upstream timeouts; Cato parallel signal |
