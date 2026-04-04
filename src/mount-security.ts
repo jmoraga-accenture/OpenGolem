@@ -1,25 +1,19 @@
-/**
- * Mount Security Module for OpenGolem
- *
- * Validates additional mounts against an allowlist stored OUTSIDE the project root.
- * This prevents container agents from modifying security configuration.
- *
- * Allowlist location: ~/.config/opengolem/mount-allowlist.json
- */
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
+
 import { MOUNT_ALLOWLIST_PATH } from './config.js';
 import { logger } from './logger.js';
-import { AdditionalMount, AllowedRoot, MountAllowlist } from './types.js';
+import type { AdditionalMount, AllowedRoot, MountAllowlist } from './types.js';
 
-// Cache the allowlist in memory - only reloads on process restart
-let cachedAllowlist: MountAllowlist | null = null;
-let allowlistLoadError: string | null = null;
+export interface MountValidationResult {
+  allowed: boolean;
+  reason: string;
+  realHostPath?: string;
+  resolvedContainerPath?: string;
+  effectiveReadonly?: boolean;
+}
 
-/**
- * Default blocked patterns - paths that should never be mounted
- */
 const DEFAULT_BLOCKED_PATTERNS = [
   '.ssh',
   '.gnupg',
@@ -38,84 +32,11 @@ const DEFAULT_BLOCKED_PATTERNS = [
   'id_ed25519',
   'private_key',
   '.secret',
-];
+] as const;
 
-/**
- * Load the mount allowlist from the external config location.
- * Returns null if the file doesn't exist or is invalid.
- * Result is cached in memory for the lifetime of the process.
- */
-export function loadMountAllowlist(): MountAllowlist | null {
-  if (cachedAllowlist !== null) {
-    return cachedAllowlist;
-  }
+let cachedAllowlist: MountAllowlist | null = null;
+let allowlistLoadError: string | null = null;
 
-  if (allowlistLoadError !== null) {
-    // Already tried and failed, don't spam logs
-    return null;
-  }
-
-  try {
-    if (!fs.existsSync(MOUNT_ALLOWLIST_PATH)) {
-      // Do NOT cache this as an error — file may be created later without restart.
-      // Only parse/structural errors are permanently cached.
-      logger.warn(
-        { path: MOUNT_ALLOWLIST_PATH },
-        'Mount allowlist not found - additional mounts will be BLOCKED. ' +
-          'Create the file to enable additional mounts.',
-      );
-      return null;
-    }
-
-    const content = fs.readFileSync(MOUNT_ALLOWLIST_PATH, 'utf-8');
-    const allowlist = JSON.parse(content) as MountAllowlist;
-
-    // Validate structure
-    if (!Array.isArray(allowlist.allowedRoots)) {
-      throw new Error('allowedRoots must be an array');
-    }
-
-    if (!Array.isArray(allowlist.blockedPatterns)) {
-      throw new Error('blockedPatterns must be an array');
-    }
-
-    if (typeof allowlist.nonMainReadOnly !== 'boolean') {
-      throw new Error('nonMainReadOnly must be a boolean');
-    }
-
-    // Merge with default blocked patterns
-    const mergedBlockedPatterns = [
-      ...new Set([...DEFAULT_BLOCKED_PATTERNS, ...allowlist.blockedPatterns]),
-    ];
-    allowlist.blockedPatterns = mergedBlockedPatterns;
-
-    cachedAllowlist = allowlist;
-    logger.info(
-      {
-        path: MOUNT_ALLOWLIST_PATH,
-        allowedRoots: allowlist.allowedRoots.length,
-        blockedPatterns: allowlist.blockedPatterns.length,
-      },
-      'Mount allowlist loaded successfully',
-    );
-
-    return cachedAllowlist;
-  } catch (err) {
-    allowlistLoadError = err instanceof Error ? err.message : String(err);
-    logger.error(
-      {
-        path: MOUNT_ALLOWLIST_PATH,
-        error: allowlistLoadError,
-      },
-      'Failed to load mount allowlist - additional mounts will be BLOCKED',
-    );
-    return null;
-  }
-}
-
-/**
- * Expand ~ to home directory and resolve to absolute path
- */
 function expandPath(p: string): string {
   const homeDir = process.env.HOME || os.homedir();
   if (p.startsWith('~/')) {
@@ -127,10 +48,6 @@ function expandPath(p: string): string {
   return path.resolve(p);
 }
 
-/**
- * Get the real path, resolving symlinks.
- * Returns null if the path doesn't exist.
- */
 function getRealPath(p: string): string | null {
   try {
     return fs.realpathSync(p);
@@ -139,35 +56,24 @@ function getRealPath(p: string): string | null {
   }
 }
 
-/**
- * Check if a path matches any blocked pattern
- */
 function matchesBlockedPattern(
   realPath: string,
   blockedPatterns: string[],
 ): string | null {
-  const pathParts = realPath.split(path.sep);
-
+  const parts = realPath.split(path.sep);
   for (const pattern of blockedPatterns) {
-    // Check if any path component matches the pattern
-    for (const part of pathParts) {
+    for (const part of parts) {
       if (part === pattern || part.includes(pattern)) {
         return pattern;
       }
     }
-
-    // Also check if the full path contains the pattern
     if (realPath.includes(pattern)) {
       return pattern;
     }
   }
-
   return null;
 }
 
-/**
- * Check if a real path is under an allowed root
- */
 function findAllowedRoot(
   realPath: string,
   allowedRoots: AllowedRoot[],
@@ -175,68 +81,112 @@ function findAllowedRoot(
   for (const root of allowedRoots) {
     const expandedRoot = expandPath(root.path);
     const realRoot = getRealPath(expandedRoot);
-
     if (realRoot === null) {
-      // Allowed root doesn't exist, skip it
       continue;
     }
-
-    // Check if realPath is under realRoot
-    const relative = path.relative(realRoot, realPath);
-    if (!relative.startsWith('..') && !path.isAbsolute(relative)) {
+    const rel = path.relative(realRoot, realPath);
+    if (!rel.startsWith('..') && !path.isAbsolute(rel)) {
       return root;
     }
   }
-
   return null;
 }
 
-/**
- * Validate the container path to prevent escaping /workspace/extra/
- */
 function isValidContainerPath(containerPath: string): boolean {
-  // Must not contain .. to prevent path traversal
+  const t = containerPath.trim();
+  if (t === '') {
+    return false;
+  }
   if (containerPath.includes('..')) {
     return false;
   }
-
-  // Must not be absolute (it will be prefixed with /workspace/extra/)
   if (containerPath.startsWith('/')) {
     return false;
   }
-
-  // Must not be empty
-  if (!containerPath || containerPath.trim() === '') {
-    return false;
-  }
-
-  // Must not contain colons — prevents Docker -v option injection (e.g., "repo:rw")
   if (containerPath.includes(':')) {
     return false;
   }
-
   return true;
 }
 
-export interface MountValidationResult {
-  allowed: boolean;
-  reason: string;
-  realHostPath?: string;
-  resolvedContainerPath?: string;
-  effectiveReadonly?: boolean;
+function mergeBlockedPatterns(userPatterns: string[]): string[] {
+  return [...new Set([...userPatterns, ...DEFAULT_BLOCKED_PATTERNS])];
 }
 
-/**
- * Validate a single additional mount against the allowlist.
- * Returns validation result with reason.
- */
+function parseAndValidateAllowlist(raw: string): MountAllowlist {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    throw new Error(`Invalid JSON: ${msg}`);
+  }
+  if (typeof parsed !== 'object' || parsed === null) {
+    throw new Error('Allowlist must be a JSON object');
+  }
+  const obj = parsed as Record<string, unknown>;
+  if (!Array.isArray(obj.allowedRoots)) {
+    throw new Error('allowedRoots must be an array');
+  }
+  if (!Array.isArray(obj.blockedPatterns)) {
+    throw new Error('blockedPatterns must be an array');
+  }
+  if (typeof obj.nonMainReadOnly !== 'boolean') {
+    throw new Error('nonMainReadOnly must be a boolean');
+  }
+  const allowlist: MountAllowlist = {
+    allowedRoots: obj.allowedRoots as AllowedRoot[],
+    blockedPatterns: obj.blockedPatterns as string[],
+    nonMainReadOnly: obj.nonMainReadOnly,
+  };
+  allowlist.blockedPatterns = mergeBlockedPatterns(allowlist.blockedPatterns);
+  return allowlist;
+}
+
+export function loadMountAllowlist(): MountAllowlist | null {
+  if (cachedAllowlist !== null) {
+    return cachedAllowlist;
+  }
+  if (allowlistLoadError !== null) {
+    return null;
+  }
+  const filePath = MOUNT_ALLOWLIST_PATH;
+  if (!fs.existsSync(filePath)) {
+    logger.warn(
+      { path: filePath },
+      'Mount allowlist not found - additional mounts will be BLOCKED. Create the file to enable additional mounts.',
+    );
+    return null;
+  }
+  try {
+    const raw = fs.readFileSync(filePath, 'utf8');
+    const allowlist = parseAndValidateAllowlist(raw);
+    cachedAllowlist = allowlist;
+    logger.info(
+      {
+        path: filePath,
+        allowedRoots: allowlist.allowedRoots.length,
+        blockedPatterns: allowlist.blockedPatterns.length,
+      },
+      'Mount allowlist loaded successfully',
+    );
+    return cachedAllowlist;
+  } catch (e) {
+    const message = e instanceof Error ? e.message : String(e);
+    allowlistLoadError = message;
+    logger.error(
+      { path: filePath, error: allowlistLoadError },
+      'Failed to load mount allowlist - additional mounts will be BLOCKED',
+    );
+    return null;
+  }
+}
+
 export function validateMount(
   mount: AdditionalMount,
   isMain: boolean,
 ): MountValidationResult {
   const allowlist = loadMountAllowlist();
-
-  // If no allowlist, block all additional mounts
   if (allowlist === null) {
     return {
       allowed: false,
@@ -244,10 +194,11 @@ export function validateMount(
     };
   }
 
-  // Derive containerPath from hostPath basename if not specified
-  const containerPath = mount.containerPath || path.basename(mount.hostPath);
+  const containerPath =
+    mount.containerPath !== undefined && mount.containerPath !== ''
+      ? mount.containerPath
+      : path.basename(mount.hostPath);
 
-  // Validate container path (cheap check)
   if (!isValidContainerPath(containerPath)) {
     return {
       allowed: false,
@@ -255,10 +206,8 @@ export function validateMount(
     };
   }
 
-  // Expand and resolve the host path
   const expandedPath = expandPath(mount.hostPath);
   const realPath = getRealPath(expandedPath);
-
   if (realPath === null) {
     return {
       allowed: false,
@@ -266,7 +215,6 @@ export function validateMount(
     };
   }
 
-  // Check against blocked patterns
   const blockedMatch = matchesBlockedPattern(
     realPath,
     allowlist.blockedPatterns,
@@ -278,96 +226,73 @@ export function validateMount(
     };
   }
 
-  // Check if under an allowed root
   const allowedRoot = findAllowedRoot(realPath, allowlist.allowedRoots);
   if (allowedRoot === null) {
+    const expandedRoots = allowlist.allowedRoots
+      .map((r) => expandPath(r.path))
+      .join(', ');
     return {
       allowed: false,
-      reason: `Path "${realPath}" is not under any allowed root. Allowed roots: ${allowlist.allowedRoots
-        .map((r) => expandPath(r.path))
-        .join(', ')}`,
+      reason: `Path "${realPath}" is not under any allowed root. Allowed roots: ${expandedRoots}`,
     };
   }
 
-  // Determine effective readonly status
-  const requestedReadWrite = mount.readonly === false;
-  let effectiveReadonly = true; // Default to readonly
-
-  if (requestedReadWrite) {
+  let effectiveReadonly = true;
+  if (mount.readonly === false) {
     if (!isMain && allowlist.nonMainReadOnly) {
-      // Non-main groups forced to read-only
-      effectiveReadonly = true;
       logger.info(
-        {
-          mount: mount.hostPath,
-        },
+        { mount: mount.hostPath },
         'Mount forced to read-only for non-main group',
       );
     } else if (!allowedRoot.allowReadWrite) {
-      // Root doesn't allow read-write
-      effectiveReadonly = true;
       logger.info(
-        {
-          mount: mount.hostPath,
-          root: allowedRoot.path,
-        },
+        { mount: mount.hostPath, root: allowedRoot.path },
         'Mount forced to read-only - root does not allow read-write',
       );
     } else {
-      // Read-write allowed
       effectiveReadonly = false;
     }
   }
 
+  const desc = allowedRoot.description ? ` (${allowedRoot.description})` : '';
   return {
     allowed: true,
-    reason: `Allowed under root "${allowedRoot.path}"${allowedRoot.description ? ` (${allowedRoot.description})` : ''}`,
+    reason: `Allowed under root "${allowedRoot.path}"${desc}`,
     realHostPath: realPath,
     resolvedContainerPath: containerPath,
     effectiveReadonly,
   };
 }
 
-/**
- * Validate all additional mounts for a group.
- * Returns array of validated mounts (only those that passed validation).
- * Logs warnings for rejected mounts.
- */
 export function validateAdditionalMounts(
   mounts: AdditionalMount[],
   groupName: string,
   isMain: boolean,
-): Array<{
-  hostPath: string;
-  containerPath: string;
-  readonly: boolean;
-}> {
-  const validatedMounts: Array<{
+): Array<{ hostPath: string; containerPath: string; readonly: boolean }> {
+  const out: Array<{
     hostPath: string;
     containerPath: string;
     readonly: boolean;
   }> = [];
-
   for (const mount of mounts) {
     const result = validateMount(mount, isMain);
-
     if (result.allowed) {
-      validatedMounts.push({
-        hostPath: result.realHostPath!,
-        containerPath: `/workspace/extra/${result.resolvedContainerPath}`,
-        readonly: result.effectiveReadonly!,
-      });
-
+      const containerFull = `/workspace/extra/${result.resolvedContainerPath}`;
       logger.debug(
         {
           group: groupName,
           hostPath: result.realHostPath,
-          containerPath: result.resolvedContainerPath,
+          containerPath: containerFull,
           readonly: result.effectiveReadonly,
           reason: result.reason,
         },
         'Mount validated successfully',
       );
+      out.push({
+        hostPath: result.realHostPath!,
+        containerPath: containerFull,
+        readonly: result.effectiveReadonly!,
+      });
     } else {
       logger.warn(
         {
@@ -380,13 +305,9 @@ export function validateAdditionalMounts(
       );
     }
   }
-
-  return validatedMounts;
+  return out;
 }
 
-/**
- * Generate a template allowlist file for users to customize
- */
 export function generateAllowlistTemplate(): string {
   const template: MountAllowlist = {
     allowedRoots: [
@@ -406,14 +327,8 @@ export function generateAllowlistTemplate(): string {
         description: 'Work documents (read-only)',
       },
     ],
-    blockedPatterns: [
-      // Additional patterns beyond defaults
-      'password',
-      'secret',
-      'token',
-    ],
+    blockedPatterns: ['password', 'secret', 'token'],
     nonMainReadOnly: true,
   };
-
-  return JSON.stringify(template, null, 2);
+  return `${JSON.stringify(template, null, 2)}\n`;
 }

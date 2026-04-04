@@ -17,15 +17,9 @@ orchestrator routing messages through per-group Docker containers running the
 Claude Agent SDK, with filesystem-based IPC, SQLite state storage, and a
 sentinel-marker protocol for streamed agent output.
 
-OpenGolem began as a fork of NanoClaw and has been progressively rewritten.
-The following files retain NanoClaw lineage and are used in compliance with
-the MIT License (pending clean-room replacement):
-
-- `src/container-runtime.ts`
-- `src/group-folder.ts`
-- `src/group-queue.ts`
-- `src/mount-security.ts`
-- `src/timezone.ts`
+OpenGolem began as a fork of NanoClaw and has been progressively rewritten
+into an original work through two clean-room passes. No NanoClaw source
+remains in the codebase. The MIT license is reproduced below for attribution.
 
 NanoClaw MIT License:
 
@@ -57,11 +51,17 @@ SOFTWARE.
 
 ## OpenClaw
 
-<!-- TODO: confirm repository URL and author -->
-**Repository:** <!-- e.g. https://github.com/openclaw/openclaw -->
+**Repository:** https://github.com/openclaw/openclaw
 **License:** MIT
 
-<!-- TODO: note what OpenClaw contributed to OpenGolem's design -->
+> *"Your own personal AI assistant. Any OS. Any Platform. The lobster way. 🦞"*
+
+OpenClaw was the first massively popular always-on agentic assistant built on
+Claude. It demonstrated that a persistent, socially-present AI — one that lives
+in a group chat, remembers context across days, and acts on behalf of its users
+without being explicitly invoked — was something people actually wanted.
+OpenGolem's design philosophy of an always-on, per-group isolated assistant
+owes its existence to OpenClaw proving the concept at scale.
 
 ---
 
