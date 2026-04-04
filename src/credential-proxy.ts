@@ -156,7 +156,7 @@ export function startCredentialProxy(): { port: number; host: string } {
             path: req.url,
             method: req.method,
             headers: outHeaders,
-            timeout: 30000,
+            timeout: 90000,
           };
 
           const transport = isHttps ? https : http;
@@ -167,7 +167,7 @@ export function startCredentialProxy(): { port: number; host: string } {
 
           proxyReq.on('timeout', () => {
             logger.error(
-              'Credential proxy upstream request timed out after 30s',
+              'Credential proxy upstream request timed out after 90s',
             );
             proxyReq.destroy();
             if (!res.headersSent) res.writeHead(504);

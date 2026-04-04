@@ -5,6 +5,7 @@ import path from 'path';
 
 import {
   ASSISTANT_NAME,
+  DATA_DIR,
   DEFAULT_TRIGGER,
   getTelegramValidUserSet,
   GROUPS_DIR,
@@ -388,6 +389,10 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
   return true;
 }
 
+// Sessions larger than this are likely to exceed the credential proxy's upstream
+// timeout (empirical: 467 KB / 136 turns caused repeated 30-min timeouts).
+const MAX_SESSION_BYTES = 300_000;
+
 async function runAgent(
   group: RegisteredGroup,
   prompt: string,
@@ -396,6 +401,32 @@ async function runAgent(
 ): Promise<'success' | 'error'> {
   const isMain = group.isMain === true;
   const sessionId = sessions[group.folder];
+
+  // Guard: clear oversized sessions before spawning to prevent proxy timeouts.
+  if (sessionId) {
+    const sessionFile = path.join(
+      DATA_DIR,
+      'sessions',
+      group.folder,
+      '.claude',
+      'projects',
+      '-workspace-group',
+      `${sessionId}.jsonl`,
+    );
+    try {
+      const { size } = fs.statSync(sessionFile);
+      if (size > MAX_SESSION_BYTES) {
+        logger.warn(
+          { group: group.name, sessionSizeBytes: size, sessionId },
+          'Session too large — clearing before spawn to prevent proxy timeout',
+        );
+        delete sessions[group.folder];
+        deleteSession(group.folder);
+      }
+    } catch {
+      // File not found — stale session detection in container-runner handles this
+    }
+  }
 
   // Update tasks snapshot for container to read (filtered by group)
   const tasks = getAllTasks();
@@ -813,15 +844,18 @@ async function main(): Promise<void> {
         }
       }
 
-      // /new and /reset — clear session for this chat, reply with confirmation
+      // /new and /reset — clear session for this chat, stop any running container,
+      // reply with confirmation. Stopping the container means the fresh session
+      // takes effect on the next retry (seconds) rather than after the 30-min timeout.
       const trimmed = msg.content.trim();
       if (trimmed === '/new' || trimmed === '/reset') {
         const group = registeredGroups[chatJid];
         if (group) {
           deleteSession(group.folder); // persist: remove from DB
           delete sessions[group.folder]; // in-memory: clear so next runAgent starts fresh
+          const stopped = queue.stopCurrentContainer(chatJid);
           logger.info(
-            { chatJid, folder: group.folder },
+            { chatJid, folder: group.folder, stoppedContainer: stopped },
             'Session reset via /new',
           );
           const channel = channels.find(
@@ -836,6 +870,26 @@ async function main(): Promise<void> {
               logger.error({ err, chatJid }, '/new reply failed'),
             );
         }
+        return;
+      }
+
+      // /status — lightweight host-side status, works even when the container is broken
+      if (trimmed === '/status') {
+        const group = registeredGroups[chatJid];
+        const sessionId = group ? sessions[group.folder] : undefined;
+        const activeCount = queue.getActiveCount();
+        const lines = [
+          `${ASSISTANT_NAME} is running.`,
+          `Active containers: ${activeCount}`,
+          `Session: ${sessionId ? `active` : `none (next message starts fresh)`}`,
+        ];
+        if (group?.isMain) {
+          lines.push(`Registered groups: ${Object.keys(registeredGroups).length}`);
+        }
+        const channel = channels.find((c) => c.ownsJid(chatJid) && c.isConnected());
+        channel
+          ?.sendMessage(chatJid, lines.join('\n'))
+          .catch((err) => logger.error({ err, chatJid }, '/status reply failed'));
         return;
       }
 
@@ -988,6 +1042,15 @@ async function main(): Promise<void> {
     },
   });
   queue.setProcessMessagesFn(processGroupMessages);
+  queue.setOnMaxRetries((groupJid: string) => {
+    const channel = findChannel(channels, groupJid);
+    channel
+      ?.sendMessage(
+        groupJid,
+        `${ASSISTANT_NAME} is having trouble responding. Send /new to reset the session and try again.`,
+      )
+      .catch((err) => logger.error({ err, groupJid }, 'Max retries notification failed'));
+  });
   recoverPendingMessages();
   startMessageLoop().catch((err) => {
     logger.fatal({ err }, 'Message loop crashed unexpectedly');

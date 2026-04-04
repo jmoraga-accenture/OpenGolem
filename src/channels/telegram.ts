@@ -258,29 +258,31 @@ export class TelegramChannel implements Channel {
       await ctx.reply(`${ASSISTANT_NAME} is online.`);
     });
 
-    // /new and /reset — pass through to onMessage so orchestrator can clear the session
-    // and reply. We register them here only so they are listed in the bot command menu.
-    // The general handler forwards them to onMessage which does the actual work.
-    this.bot.command('new', async (ctx) => {
+    // /new, /reset, /status — pass through to onMessage so orchestrator handles them.
+    // Registered here so they appear in the bot command menu. The general handler
+    // skips them (via TELEGRAM_BOT_COMMANDS) to prevent double-delivery.
+    const forwardCommand = (cmd: string) => async (ctx: any) => {
       if (!acceptTelegramInboundChat(ctx.chat)) return;
-      // Forward to onMessage — orchestrator handles session deletion and reply
       const chatJid = `tg:${ctx.chat.id}`;
       const ts = new Date().toISOString();
       this.opts.onChatMetadata(chatJid, ts);
       this.opts.onMessage(chatJid, {
-        id: `tg-cmd-new-${Date.now()}`,
+        id: `tg-cmd-${cmd}-${Date.now()}`,
         chat_jid: chatJid,
         sender: ctx.from?.id.toString() || '',
         sender_name: ctx.from?.first_name || 'User',
-        content: '/new',
+        content: `/${cmd}`,
         timestamp: ts,
         is_from_me: false,
       });
-    });
+    };
+    this.bot.command('new', forwardCommand('new'));
+    this.bot.command('reset', forwardCommand('reset'));
+    this.bot.command('status', forwardCommand('status'));
 
     // Telegram bot commands handled above — skip them in the general handler
     // so they don't also get stored as messages. All other /commands flow through.
-    const TELEGRAM_BOT_COMMANDS = new Set(['chatid', 'ping', 'new']);
+    const TELEGRAM_BOT_COMMANDS = new Set(['chatid', 'ping', 'new', 'reset', 'status']);
 
     this.bot.on('message:text', async (ctx) => {
       if (ctx.message.text.startsWith('/')) {

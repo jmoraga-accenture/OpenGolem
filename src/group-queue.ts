@@ -3,6 +3,7 @@ import fs from 'fs';
 import path from 'path';
 
 import { DATA_DIR, MAX_CONCURRENT_CONTAINERS } from './config.js';
+import { stopContainer } from './container-runtime.js';
 import { logger } from './logger.js';
 
 interface QueuedTask {
@@ -34,6 +35,7 @@ export class GroupQueue {
   private processMessagesFn: ((groupJid: string) => Promise<boolean>) | null =
     null;
   private shuttingDown = false;
+  private onMaxRetriesFn: ((groupJid: string) => void) | null = null;
 
   private getGroup(groupJid: string): GroupState {
     let state = this.groups.get(groupJid);
@@ -57,6 +59,26 @@ export class GroupQueue {
 
   setProcessMessagesFn(fn: (groupJid: string) => Promise<boolean>): void {
     this.processMessagesFn = fn;
+  }
+
+  setOnMaxRetries(fn: (groupJid: string) => void): void {
+    this.onMaxRetriesFn = fn;
+  }
+
+  /**
+   * Stop the active container for a group immediately (e.g. on /new or /reset).
+   * The normal exit handler will fire, roll back the cursor, and retry with the
+   * now-cleared session.  Returns true if a container was stopped.
+   */
+  stopCurrentContainer(groupJid: string): boolean {
+    const state = this.groups.get(groupJid);
+    if (!state?.process || state.process.killed || !state.containerName) return false;
+    logger.info(
+      { groupJid, containerName: state.containerName },
+      'Stopping container on user request (/new or /reset)',
+    );
+    stopContainer(state.containerName);
+    return true;
   }
 
   enqueueMessageCheck(groupJid: string): void {
@@ -268,6 +290,7 @@ export class GroupQueue {
         'Max retries exceeded, dropping messages (will retry on next incoming message)',
       );
       state.retryCount = 0;
+      this.onMaxRetriesFn?.(groupJid);
       return;
     }
 
