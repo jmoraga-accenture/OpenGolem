@@ -17,15 +17,9 @@ orchestrator routing messages through per-group Docker containers running the
 Claude Agent SDK, with filesystem-based IPC, SQLite state storage, and a
 sentinel-marker protocol for streamed agent output.
 
-OpenGolem began as a fork of NanoClaw and has been progressively rewritten.
-The following files retain NanoClaw lineage and are used in compliance with
-the MIT License (pending clean-room replacement):
-
-- `src/container-runtime.ts`
-- `src/group-folder.ts`
-- `src/group-queue.ts`
-- `src/mount-security.ts`
-- `src/timezone.ts`
+OpenGolem began as a fork of NanoClaw and has been progressively rewritten
+into an original work through two clean-room passes. No NanoClaw source
+remains in the codebase. The MIT license is reproduced below for attribution.
 
 NanoClaw MIT License:
 
