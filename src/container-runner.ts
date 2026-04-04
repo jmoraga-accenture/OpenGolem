@@ -15,17 +15,17 @@ import {
   IDLE_TIMEOUT,
   TIMEZONE,
 } from './config.js';
-import {
-  detectAuthMode,
-  getContainerProxyUrl,
-} from './credential-proxy.js';
+import { detectAuthMode, getContainerProxyUrl } from './credential-proxy.js';
 import {
   CONTAINER_RUNTIME_BIN,
   hostGatewayArgs,
   readonlyMountArgs,
   stopContainer,
 } from './container-runtime.js';
-import { assertValidGroupFolder, resolveGroupFolderPath } from './group-folder.js';
+import {
+  assertValidGroupFolder,
+  resolveGroupFolderPath,
+} from './group-folder.js';
 import { logger } from './logger.js';
 import { validateAdditionalMounts } from './mount-security.js';
 import type { RegisteredGroup } from './types.js';
@@ -188,7 +188,10 @@ function prepareSessionLayout(
   }
   if (needCopy && fs.existsSync(agentRunnerSrc)) {
     fs.mkdirSync(agentRunnerDest, { recursive: true });
-    fs.cpSync(agentRunnerSrc, agentRunnerDest, { recursive: true, force: true });
+    fs.cpSync(agentRunnerSrc, agentRunnerDest, {
+      recursive: true,
+      force: true,
+    });
   }
 
   return {
@@ -268,11 +271,7 @@ function buildMounts(
 
   const extra = group.containerConfig?.additionalMounts;
   if (extra?.length) {
-    const validated = validateAdditionalMounts(
-      extra,
-      group.name,
-      input.isMain,
-    );
+    const validated = validateAdditionalMounts(extra, group.name, input.isMain);
     for (const m of validated) {
       mounts.push({
         hostPath: m.hostPath,
@@ -304,13 +303,10 @@ function parseMarkerPayload(jsonStr: string): ContainerOutput | null {
     const o = JSON.parse(trimmed) as Record<string, unknown>;
     const status = o.status === 'error' ? 'error' : 'success';
     const result =
-      o.result === undefined || o.result === null
-        ? null
-        : String(o.result);
+      o.result === undefined || o.result === null ? null : String(o.result);
     const newSessionId =
       typeof o.newSessionId === 'string' ? o.newSessionId : undefined;
-    const error =
-      typeof o.error === 'string' ? o.error : undefined;
+    const error = typeof o.error === 'string' ? o.error : undefined;
     return { status, result, newSessionId, error };
   } catch {
     return null;
@@ -503,10 +499,7 @@ export async function runContainerAgent(
   const logVerbose =
     process.env.LOG_LEVEL === 'debug' || process.env.LOG_LEVEL === 'trace';
 
-  function writeRunLog(
-    code: number | null,
-    errMsg?: string,
-  ): void {
+  function writeRunLog(code: number | null, errMsg?: string): void {
     const duration = Date.now() - startMs;
     const logName = `container-${new Date().toISOString().replace(/[:.]/g, '-')}.log`;
     const logPath = path.join(groupDir, 'logs', logName);
@@ -546,10 +539,7 @@ export async function runContainerAgent(
   }
 
   function markStaleFromOutput(o: ContainerOutput): void {
-    if (
-      textLooksStale(o.error) ||
-      textLooksStale(o.result)
-    ) {
+    if (textLooksStale(o.error) || textLooksStale(o.result)) {
       staleSessionDetected = true;
     }
   }
@@ -573,7 +563,10 @@ export async function runContainerAgent(
       try {
         stopContainer(containerName);
       } catch (err) {
-        logger.debug({ err }, 'stopContainer failed; sending SIGKILL to process');
+        logger.debug(
+          { err },
+          'stopContainer failed; sending SIGKILL to process',
+        );
         try {
           proc.kill('SIGKILL');
         } catch {
@@ -686,7 +679,10 @@ export async function runContainerAgent(
         const legacy = legacyResolve(stdoutAcc.buf);
         markStaleFromOutput(legacy);
         if (legacy.status === 'error' && staleSessionDetected) {
-          writeRunLog(exitCode, 'No conversation found — stale session cleared');
+          writeRunLog(
+            exitCode,
+            'No conversation found — stale session cleared',
+          );
           finish({
             status: 'error',
             result: null,

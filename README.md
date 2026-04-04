@@ -4,7 +4,7 @@ Security-first personal AI assistant: self-hosted, auditable, and designed so ag
 
 The host orchestrator is TypeScript/Node.js. Agents run the Claude Agent SDK inside Linux containers. Every outbound Anthropic API call passes through the Token Broker and Call Inspector before it reaches the network. Phase 2 is a clean-room TypeScript rewrite from first principles; a Rust decision point is deferred until after v2 stabilises. See [docs/SPECS.md](docs/SPECS.md) for the full architecture and [docs/PLAN.md](docs/PLAN.md) for milestone status.
 
-## What you get today (M1–M4)
+## What you get today (M1–M9)
 
 - **TUI by default** — `npm run dev` gives you an `opengolem> ` prompt; zero config, no cloud account needed to start
 - **Per-group isolation** — each group gets its own filesystem, `CLAUDE.md` memory, and container; groups cannot read each other's files
@@ -12,6 +12,9 @@ The host orchestrator is TypeScript/Node.js. Agents run the Claude Agent SDK ins
 - **Call Inspector (M3)** — five checks on every outbound API call (prompt injection, endpoint scope, call rate, skill whitelist, memory scope); append-only audit log in `data/audit.db`; three security modes: `golem_guard` (default), `supervised`, `power`
 - **Telegram** — optional; **DMs by default**; set `TELEGRAM_ALLOW_GROUPS=1` for supergroups/groups (requires explicit allowlist per `tg:-…` chat). `TELEGRAM_VALID_USERS` and `sender-allowlist.json`; `TELEGRAM_BOT_TOKEN` in `.env`
 - **Scheduled tasks** — cron and interval tasks created by agents via IPC
+- **Alef (SOUL.md, M5)** — assertive assistant with a character document; `assertiveness_level` dial (0–10) per group; `[FLAG]` protocol for audit-logged pushback
+- **Cato (M6)** — hard oversight layer; inline prompt checks (fail-closed Unix socket); scheduled LLM audit every 6h; dao_score KPIs in `data/dao_score.db`
+- **Health endpoint (M7)** — `GET http://127.0.0.1:3003/health` for system state; `npm run status` CLI
 
 ## Requirements
 
@@ -26,7 +29,7 @@ cp .env.example .env          # then add your Anthropic credential
 npm install
 npm run build
 ./container/build.sh          # build the agent container image (once)
-npm test                      # 445 tests, all green
+npm test                      # 505 tests, all green
 npm run dev                   # opengolem> prompt
 ```
 
@@ -48,6 +51,8 @@ All settings are optional environment variables; copy `.env.example` to `.env` a
 | `TELEGRAM_ALLOW_GROUPS` | off | Set `1` / `true` / `yes` to allow supergroups/groups + negative `tg:` ids (needs explicit allowlist per group JID) |
 | `TELEGRAM_VALID_USERS` | — | Comma-separated Telegram user IDs; unset = no env gate |
 | `CREDENTIAL_PROXY_PORT` | `3001` | Port the credential proxy binds on |
+| `HEALTH_PORT` | `3003` | Port the `/health` endpoint binds on (127.0.0.1 only) |
+| `CATO_AUDIT_INTERVAL_MS` | `21600000` | Cato scheduled audit interval in ms (default 6h) |
 
 For Bitwarden backend: `BW_SESSION`, `BW_ITEM_NAME`, `BW_FIELD_NAME`.
 For OneCLI backend: `ONECLI_GATEWAY_URL`, `ONECLI_GATEWAY_TOKEN`.
@@ -103,12 +108,8 @@ See [docs/INTERNALS.md](docs/INTERNALS.md) for the full architecture walkthrough
 
 MIT — see [LICENSE](LICENSE).
 
-## Credits
-
-OpenGolem incorporates **NanoClaw** code as its TypeScript baseline and reflects **MicroClaw**-style concepts in its security and isolation goals. Upstream lineage is summarised in [docs/PLAN.md](docs/PLAN.md).
-
 **(c) Jim Moraga <jim.moraga@pip.global>**
 
 ---
 
-*Last updated: 3 April 2026 — M5 complete (SOUL.md, assertiveness dial, [FLAG] audit); 451 tests green.*
+*Last updated: 3 April 2026 — M9 complete; 505 tests green.*

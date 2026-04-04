@@ -24,9 +24,19 @@ import {
   type AvailableGroup,
   type ContainerOutput,
 } from './container-runner.js';
-import { startCredentialProxy, stopCredentialProxy } from './credential-proxy.js';
-import { ensureContainerRuntimeRunning, cleanupOrphans } from './container-runtime.js';
-import { catoCheck, startCatoInlineHook, stopCatoInlineHook } from './cato/inline.js';
+import {
+  startCredentialProxy,
+  stopCredentialProxy,
+} from './credential-proxy.js';
+import {
+  ensureContainerRuntimeRunning,
+  cleanupOrphans,
+} from './container-runtime.js';
+import {
+  catoCheck,
+  startCatoInlineHook,
+  stopCatoInlineHook,
+} from './cato/inline.js';
 import {
   ensureCatoGroupFolder,
   startCatoScheduledAudit,
@@ -121,15 +131,15 @@ function saveState(): void {
   setRouterState('last_agent_timestamp', JSON.stringify(lastAgentTimestamp));
 }
 
-export function _setRegisteredGroups(groups: Record<string, RegisteredGroup>): void {
+export function _setRegisteredGroups(
+  groups: Record<string, RegisteredGroup>,
+): void {
   registeredGroups = { ...groups };
 }
 
 export function getAvailableGroups(): AvailableGroup[] {
   return getAllChats()
-    .filter(
-      (c) => c.jid !== '__group_sync__' && Number(c.is_group) === 1,
-    )
+    .filter((c) => c.jid !== '__group_sync__' && Number(c.is_group) === 1)
     .map((c) => ({
       jid: c.jid,
       name: c.name || c.jid,
@@ -235,7 +245,11 @@ function telegramFolderFromJid(jid: string): string {
   return rest.startsWith('-') ? `tg-g-${rest.slice(1)}` : `tg-${rest}`;
 }
 
-function onAutoRegisterGroup(jid: string, name: string, isGroup: boolean): void {
+function onAutoRegisterGroup(
+  jid: string,
+  name: string,
+  isGroup: boolean,
+): void {
   if (registeredGroups[jid]) return;
   if (!jid.startsWith('tg:')) return;
   registerGroup(jid, {
@@ -320,7 +334,10 @@ function buildChannelOpts() {
           `Active containers: ${queue.getActiveCount()}`,
           `Session: ${sid ? 'active' : 'none (next message starts fresh)'}`,
         ];
-        if (g?.isMain) lines.push(`Registered groups: ${Object.keys(registeredGroups).length}`);
+        if (g?.isMain)
+          lines.push(
+            `Registered groups: ${Object.keys(registeredGroups).length}`,
+          );
         const ch = findChannel(channels, chatJid);
         if (ch) await ch.sendMessage(chatJid, lines.join('\n'));
         return;
@@ -353,11 +370,7 @@ function buildChannelOpts() {
         return;
       }
 
-      if (
-        !msg.is_from_me &&
-        !msg.is_bot_message &&
-        registeredGroups[chatJid]
-      ) {
+      if (!msg.is_from_me && !msg.is_bot_message && registeredGroups[chatJid]) {
         if (
           shouldDropMessage(chatJid, cfg) &&
           !isSenderAllowed(chatJid, msg.sender, cfg)
@@ -756,12 +769,12 @@ async function main(): Promise<void> {
   queue.setProcessMessagesFn(processGroupMessages);
   queue.setOnMaxRetries((groupJid: string) => {
     const ch = findChannel(channels, groupJid);
-    ch
-      ?.sendMessage(
-        groupJid,
-        `${ASSISTANT_NAME} is having trouble responding. Send /new to reset the session and try again.`,
-      )
-      .catch((err) => logger.error({ err, groupJid }, 'Max retries notification failed'));
+    ch?.sendMessage(
+      groupJid,
+      `${ASSISTANT_NAME} is having trouble responding. Send /new to reset the session and try again.`,
+    ).catch((err) =>
+      logger.error({ err, groupJid }, 'Max retries notification failed'),
+    );
   });
 
   recoverPendingMessages();

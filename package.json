@@ -16,7 +16,6 @@
     "prepare": "husky",
     "setup": "tsx setup/index.ts",
     "setup:help": "tsx setup/index.ts --help",
-    "auth": "tsx src/whatsapp-auth.ts",
     "lint": "eslint src/",
     "lint:fix": "eslint src/ --fix",
     "test": "vitest run",

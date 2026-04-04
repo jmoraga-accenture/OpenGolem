@@ -72,7 +72,8 @@ export class GroupQueue {
    */
   stopCurrentContainer(groupJid: string): boolean {
     const state = this.groups.get(groupJid);
-    if (!state?.process || state.process.killed || !state.containerName) return false;
+    if (!state?.process || state.process.killed || !state.containerName)
+      return false;
     logger.info(
       { groupJid, containerName: state.containerName },
       'Stopping container on user request (/new or /reset)',

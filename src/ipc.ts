@@ -4,17 +4,8 @@ import fs from 'fs';
 import path from 'path';
 
 import type { AvailableGroup } from './container-runner.js';
-import {
-  createTask,
-  deleteTask,
-  getTaskById,
-  updateTask,
-} from './db.js';
-import {
-  DATA_DIR,
-  IPC_POLL_INTERVAL,
-  TIMEZONE,
-} from './config.js';
+import { createTask, deleteTask, getTaskById, updateTask } from './db.js';
+import { DATA_DIR, IPC_POLL_INTERVAL, TIMEZONE } from './config.js';
 import { isValidGroupFolder } from './group-folder.js';
 import { logger } from './logger.js';
 import type { ContainerConfig, RegisteredGroup } from './types.js';
@@ -198,7 +189,10 @@ export async function processTaskIpc(
 
       const targetGroup = registered[targetJid];
       if (!targetGroup) {
-        logger.warn({ targetJid }, 'IPC schedule_task: unregistered target JID');
+        logger.warn(
+          { targetJid },
+          'IPC schedule_task: unregistered target JID',
+        );
         return;
       }
 
@@ -310,7 +304,8 @@ export async function processTaskIpc(
         updates.schedule_type !== undefined ||
         updates.schedule_value !== undefined
       ) {
-        const st = (updates.schedule_type ?? task.schedule_type) as ScheduleKind;
+        const st = (updates.schedule_type ??
+          task.schedule_type) as ScheduleKind;
         const sv = updates.schedule_value ?? task.schedule_value;
         const nr = computeNextRunForUpdate(st, sv);
         if (!nr) return;

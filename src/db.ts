@@ -5,7 +5,12 @@ import path from 'path';
 import { ASSISTANT_NAME, DATA_DIR, STORE_DIR } from './config.js';
 import { isValidGroupFolder } from './group-folder.js';
 import { logger } from './logger.js';
-import type { NewMessage, RegisteredGroup, ScheduledTask, TaskRunLog } from './types.js';
+import type {
+  NewMessage,
+  RegisteredGroup,
+  ScheduledTask,
+  TaskRunLog,
+} from './types.js';
 
 export interface ChatInfo {
   jid: string;
@@ -193,7 +198,8 @@ function rowToScheduledTask(row: Record<string, unknown>): ScheduledTask {
     script: (row.script as string | null) ?? null,
     schedule_type: row.schedule_type as ScheduledTask['schedule_type'],
     schedule_value: row.schedule_value as string,
-    context_mode: (row.context_mode as ScheduledTask['context_mode']) || 'isolated',
+    context_mode:
+      (row.context_mode as ScheduledTask['context_mode']) || 'isolated',
     next_run: (row.next_run as string | null) ?? null,
     last_run: (row.last_run as string | null) ?? null,
     last_result: (row.last_result as string | null) ?? null,
@@ -208,7 +214,10 @@ function mapRegisteredRow(
 ): (RegisteredGroup & { jid: string }) | undefined {
   const folder = row.folder as string;
   if (!isValidGroupFolder(folder)) {
-    logger.warn({ jid, folder }, 'Skipping registered group with invalid folder');
+    logger.warn(
+      { jid, folder },
+      'Skipping registered group with invalid folder',
+    );
     return undefined;
   }
 
@@ -216,7 +225,9 @@ function mapRegisteredRow(
   const rawCfg = row.container_config as string | null;
   if (rawCfg) {
     try {
-      containerConfig = JSON.parse(rawCfg) as RegisteredGroup['containerConfig'];
+      containerConfig = JSON.parse(
+        rawCfg,
+      ) as RegisteredGroup['containerConfig'];
     } catch {
       containerConfig = undefined;
     }
@@ -318,7 +329,11 @@ function migrateJsonState(): void {
   }
 
   const sessionsData = migrateFile('sessions.json', 'sessions.migrated');
-  if (sessionsData && typeof sessionsData === 'object' && sessionsData !== null) {
+  if (
+    sessionsData &&
+    typeof sessionsData === 'object' &&
+    sessionsData !== null
+  ) {
     const ins = d.prepare(
       `INSERT INTO sessions (group_folder, session_id) VALUES (?, ?)
        ON CONFLICT(group_folder) DO UPDATE SET session_id = excluded.session_id`,
@@ -341,7 +356,10 @@ function migrateJsonState(): void {
       regData as Record<string, RegisteredGroup>,
     )) {
       if (!group?.folder || !isValidGroupFolder(group.folder)) {
-        logger.warn({ jid, folder: group?.folder }, 'Skipping invalid registered group during JSON migration');
+        logger.warn(
+          { jid, folder: group?.folder },
+          'Skipping invalid registered group during JSON migration',
+        );
         continue;
       }
       try {
@@ -602,9 +620,11 @@ export function setRegisteredGroup(jid: string, group: RegisteredGroup): void {
     group.containerConfig === undefined
       ? null
       : JSON.stringify(group.containerConfig);
-  const req = group.requiresTrigger === undefined ? 1 : group.requiresTrigger ? 1 : 0;
+  const req =
+    group.requiresTrigger === undefined ? 1 : group.requiresTrigger ? 1 : 0;
   const main = group.isMain ? 1 : 0;
-  const al = group.assertivenessLevel === undefined ? 10 : group.assertivenessLevel;
+  const al =
+    group.assertivenessLevel === undefined ? 10 : group.assertivenessLevel;
   d.prepare(
     `INSERT INTO registered_groups (
       jid, name, folder, trigger_pattern, added_at, container_config,
@@ -708,9 +728,10 @@ export function getTasksForGroup(groupFolder: string): ScheduledTask[] {
 
 export function getAllTasks(): ScheduledTask[] {
   const d = requireDb();
-  const rows = d
-    .prepare(`SELECT * FROM scheduled_tasks`)
-    .all() as Record<string, unknown>[];
+  const rows = d.prepare(`SELECT * FROM scheduled_tasks`).all() as Record<
+    string,
+    unknown
+  >[];
   return rows.map(rowToScheduledTask);
 }
 
