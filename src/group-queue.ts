@@ -71,11 +71,7 @@ export class GroupQueue {
 
   stopCurrentContainer(groupJid: string): boolean {
     const state = this.groups.get(groupJid);
-    if (
-      !state?.process ||
-      state.process.killed ||
-      !state.containerName
-    ) {
+    if (!state?.process || state.process.killed || !state.containerName) {
       return false;
     }
     logger.info(
@@ -93,7 +89,7 @@ export class GroupQueue {
     const state = this.getGroup(groupJid);
     if (state.active) {
       state.pendingMessages = true;
-      logger.debug('Container active, message queued');
+      logger.debug({ groupJid }, 'Container active, message queued');
       return;
     }
     if (this.activeCount >= MAX_CONCURRENT_CONTAINERS) {
@@ -101,29 +97,28 @@ export class GroupQueue {
       if (!this.waitingGroups.includes(groupJid)) {
         this.waitingGroups.push(groupJid);
       }
-      logger.debug('At concurrency limit, message queued');
+      logger.debug(
+        { groupJid, activeCount: this.activeCount },
+        'At concurrency limit, message queued',
+      );
       return;
     }
     void this.runForGroup(groupJid, 'messages').catch((err) => {
-      logger.error({ groupJid, err }, 'runForGroup rejected');
+      logger.error({ groupJid, err }, 'Unhandled error in runForGroup');
     });
   }
 
-  enqueueTask(
-    groupJid: string,
-    taskId: string,
-    fn: () => Promise<void>,
-  ): void {
+  enqueueTask(groupJid: string, taskId: string, fn: () => Promise<void>): void {
     if (this.shuttingDown) {
       return;
     }
     const state = this.getGroup(groupJid);
     if (state.runningTaskId === taskId) {
-      logger.debug('Task already running, skipping');
+      logger.debug({ groupJid, taskId }, 'Task already running, skipping');
       return;
     }
     if (state.pendingTasks.some((t) => t.id === taskId)) {
-      logger.debug('Task already queued, skipping');
+      logger.debug({ groupJid, taskId }, 'Task already queued, skipping');
       return;
     }
     const task: QueuedTask = { id: taskId, groupJid, fn };
@@ -132,7 +127,7 @@ export class GroupQueue {
       if (state.idleWaiting) {
         this.closeStdin(groupJid);
       }
-      logger.debug('Container active, task queued');
+      logger.debug({ groupJid, taskId }, 'Container active, task queued');
       return;
     }
     if (this.activeCount >= MAX_CONCURRENT_CONTAINERS) {
@@ -140,11 +135,14 @@ export class GroupQueue {
       if (!this.waitingGroups.includes(groupJid)) {
         this.waitingGroups.push(groupJid);
       }
-      logger.debug('At concurrency limit, task queued');
+      logger.debug(
+        { groupJid, taskId, activeCount: this.activeCount },
+        'At concurrency limit, task queued',
+      );
       return;
     }
     void this.runTask(groupJid, task).catch((err) => {
-      logger.error({ groupJid, taskId, err }, 'runTask rejected');
+      logger.error({ groupJid, taskId, err }, 'Unhandled error in runTask');
     });
   }
 
@@ -176,12 +174,7 @@ export class GroupQueue {
       return false;
     }
     state.idleWaiting = false;
-    const inputDir = path.join(
-      DATA_DIR,
-      'ipc',
-      state.groupFolder,
-      'input',
-    );
+    const inputDir = path.join(DATA_DIR, 'ipc', state.groupFolder, 'input');
     try {
       fs.mkdirSync(inputDir, { recursive: true });
       const baseName = `${Date.now()}-${Math.random().toString(36).slice(2, 6)}.json`;
@@ -201,12 +194,7 @@ export class GroupQueue {
     if (!state.active || !state.groupFolder) {
       return;
     }
-    const inputDir = path.join(
-      DATA_DIR,
-      'ipc',
-      state.groupFolder,
-      'input',
-    );
+    const inputDir = path.join(DATA_DIR, 'ipc', state.groupFolder, 'input');
     try {
       fs.mkdirSync(inputDir, { recursive: true });
       fs.writeFileSync(path.join(inputDir, '_close'), '');
@@ -286,10 +274,7 @@ export class GroupQueue {
     try {
       await task.fn();
     } catch (err) {
-      logger.error(
-        { groupJid, taskId: task.id, err },
-        'Error running task',
-      );
+      logger.error({ groupJid, taskId: task.id, err }, 'Error running task');
     } finally {
       state.active = false;
       state.isTaskContainer = false;
@@ -333,13 +318,19 @@ export class GroupQueue {
     if (state.pendingTasks.length > 0) {
       const next = state.pendingTasks.shift()!;
       void this.runTask(groupJid, next).catch((err) => {
-        logger.error({ groupJid, taskId: next.id, err }, 'runTask rejected');
+        logger.error(
+          { groupJid, taskId: next.id, err },
+          'Unhandled error in runTask (drain)',
+        );
       });
       return;
     }
     if (state.pendingMessages) {
       void this.runForGroup(groupJid, 'drain').catch((err) => {
-        logger.error({ groupJid, err }, 'runForGroup rejected');
+        logger.error(
+          { groupJid, err },
+          'Unhandled error in runForGroup (drain)',
+        );
       });
       return;
     }
@@ -358,12 +349,15 @@ export class GroupQueue {
         void this.runTask(nextJid, task).catch((err) => {
           logger.error(
             { groupJid: nextJid, taskId: task.id, err },
-            'runTask rejected',
+            'Unhandled error in runTask (waiting)',
           );
         });
       } else if (st.pendingMessages) {
         void this.runForGroup(nextJid, 'drain').catch((err) => {
-          logger.error({ groupJid: nextJid, err }, 'runForGroup rejected');
+          logger.error(
+            { groupJid: nextJid, err },
+            'Unhandled error in runForGroup (waiting)',
+          );
         });
       }
     }

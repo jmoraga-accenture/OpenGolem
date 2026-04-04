@@ -51,11 +51,17 @@ SOFTWARE.
 
 ## OpenClaw
 
-<!-- TODO: confirm repository URL and author -->
-**Repository:** <!-- e.g. https://github.com/openclaw/openclaw -->
+**Repository:** https://github.com/openclaw/openclaw
 **License:** MIT
 
-<!-- TODO: note what OpenClaw contributed to OpenGolem's design -->
+> *"Your own personal AI assistant. Any OS. Any Platform. The lobster way. 🦞"*
+
+OpenClaw was the first massively popular always-on agentic assistant built on
+Claude. It demonstrated that a persistent, socially-present AI — one that lives
+in a group chat, remembers context across days, and acts on behalf of its users
+without being explicitly invoked — was something people actually wanted.
+OpenGolem's design philosophy of an always-on, per-group isolated assistant
+owes its existence to OpenClaw proving the concept at scale.
 
 ---
 
