@@ -1,11 +1,9 @@
-/**
- * Container Runner for OpenGolem
- * Spawns agent execution in containers and handles IPC
- */
-import { ChildProcess, spawn } from 'child_process';
+import { spawn, type ChildProcess } from 'child_process';
 import fs from 'fs';
+import os from 'os';
 import path from 'path';
 
+import { issueToken, revokeContainer } from './broker/client.js';
 import {
   CONTAINER_IMAGE,
   CONTAINER_MAX_OUTPUT_SIZE,
@@ -17,22 +15,35 @@ import {
   IDLE_TIMEOUT,
   TIMEZONE,
 } from './config.js';
-import { resolveGroupFolderPath, resolveGroupIpcPath } from './group-folder.js';
-import { logger } from './logger.js';
+import {
+  detectAuthMode,
+  getContainerProxyUrl,
+} from './credential-proxy.js';
 import {
   CONTAINER_RUNTIME_BIN,
   hostGatewayArgs,
   readonlyMountArgs,
   stopContainer,
 } from './container-runtime.js';
-import { getContainerProxyUrl, detectAuthMode } from './credential-proxy.js';
-import { issueToken, revokeContainer } from './broker/client.js';
+import { assertValidGroupFolder, resolveGroupFolderPath } from './group-folder.js';
+import { logger } from './logger.js';
 import { validateAdditionalMounts } from './mount-security.js';
-import { RegisteredGroup } from './types.js';
+import type { RegisteredGroup } from './types.js';
 
-// Sentinel markers for robust output parsing (must match agent-runner)
-const OUTPUT_START_MARKER = '---OPENGOLEM_OUTPUT_START---';
-const OUTPUT_END_MARKER = '---OPENGOLEM_OUTPUT_END---';
+/** Verbatim — must match `container/agent-runner/src/index.ts` (see SENTINEL.md). */
+export const OUTPUT_START_MARKER = '---OPENGOLEM_OUTPUT_START---';
+export const OUTPUT_END_MARKER = '---OPENGOLEM_OUTPUT_END---';
+
+const STALE_SESSION_RE =
+  /no conversation found|ENOENT.*\.jsonl|session.*not found/i;
+
+const SETTINGS_JSON = `{
+  "env": {
+    "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1",
+    "CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD": "1",
+    "CLAUDE_CODE_DISABLE_AUTO_MEMORY": "0"
+  }
+}`;
 
 export interface ContainerInput {
   prompt: string;
@@ -43,7 +54,7 @@ export interface ContainerInput {
   isScheduledTask?: boolean;
   assistantName?: string;
   script?: string;
-  soulMd?: string; // SOUL.md content with assertiveness_level interpolated (M5)
+  soulMd?: string;
 }
 
 export interface ContainerOutput {
@@ -53,34 +64,158 @@ export interface ContainerOutput {
   error?: string;
 }
 
-interface VolumeMount {
+export interface AvailableGroup {
+  jid: string;
+  name: string;
+  lastActivity: string;
+  isRegistered: boolean;
+}
+
+export type TaskRow = {
+  id: string;
+  groupFolder: string;
+  prompt: string;
+  script?: string | null;
+  schedule_type: string;
+  schedule_value: string;
+  status: string;
+  next_run: string | null;
+};
+
+interface PreparedMount {
   hostPath: string;
   containerPath: string;
   readonly: boolean;
 }
 
-function buildVolumeMounts(
+function appendCapped(
+  acc: { buf: string; truncated: boolean },
+  chunk: string | Buffer,
+  max: number,
+): void {
+  const s = typeof chunk === 'string' ? chunk : chunk.toString('utf8');
+  const nextLen = acc.buf.length + s.length;
+  if (nextLen <= max) {
+    acc.buf += s;
+    return;
+  }
+  if (!acc.truncated) {
+    logger.warn(
+      { max },
+      'Container output exceeded CONTAINER_MAX_OUTPUT_SIZE; truncating',
+    );
+    acc.truncated = true;
+  }
+  const room = max - acc.buf.length;
+  if (room > 0) acc.buf += s.slice(0, room);
+}
+
+function safeContainerFolderName(folder: string): string {
+  return folder.replace(/[^a-zA-Z0-9-]+/g, '-');
+}
+
+function loadSoulMd(group: RegisteredGroup, input: ContainerInput): void {
+  if (input.soulMd !== undefined) return;
+  const soulPath = path.join(process.cwd(), 'SOUL.md');
+  try {
+    if (!fs.existsSync(soulPath)) return;
+    const raw = fs.readFileSync(soulPath, 'utf8');
+    if (!raw.trim()) return;
+    const level = String(group.assertivenessLevel ?? 10);
+    input.soulMd = raw.replaceAll('{{assertiveness_level}}', level);
+  } catch (err) {
+    logger.debug({ err }, 'SOUL.md not loaded');
+  }
+}
+
+function prepareSessionLayout(
+  groupFolder: string,
+  projectRoot: string,
+): {
+  claudeDir: string;
+  ipcDir: string;
+  agentRunnerDest: string;
+  skillsDestRoot: string;
+  agentRunnerSrc: string;
+  skillsSrcRoot: string;
+} {
+  const baseSession = path.join(DATA_DIR, 'sessions', groupFolder);
+  const claudeDir = path.join(baseSession, '.claude');
+  const ipcDir = path.join(DATA_DIR, 'ipc', groupFolder);
+  const agentRunnerDest = path.join(baseSession, 'agent-runner-src');
+  const skillsDestRoot = path.join(claudeDir, 'skills');
+  const agentRunnerSrc = path.join(
+    projectRoot,
+    'container',
+    'agent-runner',
+    'src',
+  );
+  const skillsSrcRoot = path.join(projectRoot, 'container', 'skills');
+
+  fs.mkdirSync(claudeDir, { recursive: true });
+  fs.mkdirSync(path.join(ipcDir, 'messages'), { recursive: true });
+  fs.mkdirSync(path.join(ipcDir, 'tasks'), { recursive: true });
+  fs.mkdirSync(path.join(ipcDir, 'input'), { recursive: true });
+  fs.mkdirSync(skillsDestRoot, { recursive: true });
+  fs.mkdirSync(EXTRA_DIR, { recursive: true });
+
+  const settingsPath = path.join(claudeDir, 'settings.json');
+  if (!fs.existsSync(settingsPath)) {
+    fs.writeFileSync(settingsPath, SETTINGS_JSON, 'utf8');
+  }
+
+  if (fs.existsSync(skillsSrcRoot)) {
+    const entries = fs.readdirSync(skillsSrcRoot, { withFileTypes: true });
+    for (const ent of entries) {
+      if (!ent.isDirectory()) continue;
+      const name = ent.name;
+      const from = path.join(skillsSrcRoot, name);
+      const to = path.join(skillsDestRoot, name);
+      fs.cpSync(from, to, { recursive: true, force: true });
+    }
+  }
+
+  const srcIndex = path.join(agentRunnerSrc, 'index.ts');
+  const destIndex = path.join(agentRunnerDest, 'index.ts');
+  let needCopy =
+    !fs.existsSync(agentRunnerDest) ||
+    !fs.existsSync(destIndex) ||
+    !fs.existsSync(srcIndex);
+  if (!needCopy && fs.existsSync(srcIndex) && fs.existsSync(destIndex)) {
+    const stSrc = fs.statSync(srcIndex);
+    const stDest = fs.statSync(destIndex);
+    if (stSrc.mtimeMs > stDest.mtimeMs) needCopy = true;
+  }
+  if (needCopy && fs.existsSync(agentRunnerSrc)) {
+    fs.mkdirSync(agentRunnerDest, { recursive: true });
+    fs.cpSync(agentRunnerSrc, agentRunnerDest, { recursive: true, force: true });
+  }
+
+  return {
+    claudeDir,
+    ipcDir,
+    agentRunnerDest,
+    skillsDestRoot,
+    agentRunnerSrc,
+    skillsSrcRoot,
+  };
+}
+
+function buildMounts(
   group: RegisteredGroup,
-  isMain: boolean,
-): VolumeMount[] {
-  const mounts: VolumeMount[] = [];
+  input: ContainerInput,
+  layout: ReturnType<typeof prepareSessionLayout>,
+): PreparedMount[] {
   const projectRoot = process.cwd();
   const groupDir = resolveGroupFolderPath(group.folder);
+  const mounts: PreparedMount[] = [];
 
-  if (isMain) {
-    // Main gets the project root read-only. Writable paths the agent needs
-    // (group folder, IPC, .claude/) are mounted separately below.
-    // Read-only prevents the agent from modifying host application code
-    // (src/, dist/, package.json, etc.) which would bypass the sandbox
-    // entirely on next restart.
+  if (input.isMain) {
     mounts.push({
       hostPath: projectRoot,
       containerPath: '/workspace/project',
       readonly: true,
     });
-
-    // Shadow .env so the agent cannot read secrets from the mounted project root.
-    // Credentials are injected by the credential proxy, never exposed to containers.
     const envFile = path.join(projectRoot, '.env');
     if (fs.existsSync(envFile)) {
       mounts.push({
@@ -89,23 +224,17 @@ function buildVolumeMounts(
         readonly: true,
       });
     }
-
-    // Main also gets its group folder as the working directory
     mounts.push({
       hostPath: groupDir,
       containerPath: '/workspace/group',
       readonly: false,
     });
   } else {
-    // Other groups only get their own folder
     mounts.push({
       hostPath: groupDir,
       containerPath: '/workspace/group',
       readonly: false,
     });
-
-    // Global memory directory (read-only for non-main)
-    // Only directory mounts are supported, not file mounts
     const globalDir = path.join(GROUPS_DIR, 'global');
     if (fs.existsSync(globalDir)) {
       mounts.push({
@@ -116,193 +245,143 @@ function buildVolumeMounts(
     }
   }
 
-  // Per-group Claude sessions directory (isolated from other groups)
-  // Each group gets their own .claude/ to prevent cross-group session access
-  const groupSessionsDir = path.join(
-    DATA_DIR,
-    'sessions',
-    group.folder,
-    '.claude',
-  );
-  fs.mkdirSync(groupSessionsDir, { recursive: true });
-  const settingsFile = path.join(groupSessionsDir, 'settings.json');
-  if (!fs.existsSync(settingsFile)) {
-    fs.writeFileSync(
-      settingsFile,
-      JSON.stringify(
-        {
-          env: {
-            // Enable agent swarms (subagent orchestration)
-            // https://code.claude.com/docs/en/agent-teams#orchestrate-teams-of-claude-code-sessions
-            CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS: '1',
-            // Load CLAUDE.md from additional mounted directories
-            // https://code.claude.com/docs/en/memory#load-memory-from-additional-directories
-            CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD: '1',
-            // Enable Claude's memory feature (persists user preferences between sessions)
-            // https://code.claude.com/docs/en/memory#manage-auto-memory
-            CLAUDE_CODE_DISABLE_AUTO_MEMORY: '0',
-          },
-        },
-        null,
-        2,
-      ) + '\n',
-    );
-  }
-
-  // Sync skills from container/skills/ into each group's .claude/skills/
-  const skillsSrc = path.join(process.cwd(), 'container', 'skills');
-  const skillsDst = path.join(groupSessionsDir, 'skills');
-  if (fs.existsSync(skillsSrc)) {
-    for (const skillDir of fs.readdirSync(skillsSrc)) {
-      const srcDir = path.join(skillsSrc, skillDir);
-      if (!fs.statSync(srcDir).isDirectory()) continue;
-      const dstDir = path.join(skillsDst, skillDir);
-      fs.cpSync(srcDir, dstDir, { recursive: true });
-    }
-  }
   mounts.push({
-    hostPath: groupSessionsDir,
+    hostPath: layout.claudeDir,
     containerPath: '/home/node/.claude',
     readonly: false,
   });
-
-  // Per-group IPC namespace: each group gets its own IPC directory
-  // This prevents cross-group privilege escalation via IPC
-  const groupIpcDir = resolveGroupIpcPath(group.folder);
-  fs.mkdirSync(path.join(groupIpcDir, 'messages'), { recursive: true });
-  fs.mkdirSync(path.join(groupIpcDir, 'tasks'), { recursive: true });
-  fs.mkdirSync(path.join(groupIpcDir, 'input'), { recursive: true });
   mounts.push({
-    hostPath: groupIpcDir,
+    hostPath: layout.ipcDir,
     containerPath: '/workspace/ipc',
     readonly: false,
   });
-
-  // Copy agent-runner source into a per-group writable location so agents
-  // can customize it (add tools, change behavior) without affecting other
-  // groups. Recompiled on container startup via entrypoint.sh.
-  const agentRunnerSrc = path.join(
-    projectRoot,
-    'container',
-    'agent-runner',
-    'src',
-  );
-  const groupAgentRunnerDir = path.join(
-    DATA_DIR,
-    'sessions',
-    group.folder,
-    'agent-runner-src',
-  );
-  if (fs.existsSync(agentRunnerSrc)) {
-    const srcIndex = path.join(agentRunnerSrc, 'index.ts');
-    const cachedIndex = path.join(groupAgentRunnerDir, 'index.ts');
-    const needsCopy =
-      !fs.existsSync(groupAgentRunnerDir) ||
-      !fs.existsSync(cachedIndex) ||
-      (fs.existsSync(srcIndex) &&
-        fs.statSync(srcIndex).mtimeMs > fs.statSync(cachedIndex).mtimeMs);
-    if (needsCopy) {
-      fs.cpSync(agentRunnerSrc, groupAgentRunnerDir, { recursive: true });
-    }
-  }
   mounts.push({
-    hostPath: groupAgentRunnerDir,
+    hostPath: layout.agentRunnerDest,
     containerPath: '/app/src',
     readonly: false,
   });
-
-  // Shared read-only context directory — auditable common files for all agents.
-  // Agents and subagents can read but never write; the host owns the contents.
-  fs.mkdirSync(EXTRA_DIR, { recursive: true });
   mounts.push({
     hostPath: EXTRA_DIR,
     containerPath: '/workspace/extra',
     readonly: true,
   });
 
-  // Additional mounts validated against external allowlist (tamper-proof from containers)
-  if (group.containerConfig?.additionalMounts) {
-    const validatedMounts = validateAdditionalMounts(
-      group.containerConfig.additionalMounts,
+  const extra = group.containerConfig?.additionalMounts;
+  if (extra?.length) {
+    const validated = validateAdditionalMounts(
+      extra,
       group.name,
-      isMain,
+      input.isMain,
     );
-    mounts.push(...validatedMounts);
+    for (const m of validated) {
+      mounts.push({
+        hostPath: m.hostPath,
+        containerPath: m.containerPath,
+        readonly: m.readonly,
+      });
+    }
   }
 
   return mounts;
 }
 
-async function buildContainerArgs(
-  mounts: VolumeMount[],
-  containerName: string,
-  agentIdentifier?: string,
-  brokerToken?: string,
-): Promise<string[]> {
-  const args: string[] = ['run', '-i', '--rm', '--name', containerName];
-
-  // Pass host timezone so container's local time matches the user's
-  args.push('-e', `TZ=${TIMEZONE}`);
-  // Suppress npm update notices which otherwise pollute container stdout
-  args.push('-e', 'NO_UPDATE_NOTIFIER=1');
-
-  // Credential proxy: containers call http://host.docker.internal:<port>
-  // which is the native credential proxy running on the host. The proxy
-  // reads credentials from .env and injects the auth header into Anthropic
-  // API calls. In M2 this will be replaced by the Token Broker.
-  const proxyUrl = getContainerProxyUrl(CREDENTIAL_PROXY_PORT);
-  args.push('-e', `ANTHROPIC_BASE_URL=${proxyUrl}`);
-  // Inject a placeholder credential matching the host's auth mode so Claude
-  // Code passes its local "not logged in" check. The proxy strips this and
-  // injects the real credential before forwarding to Anthropic.
-  const authMode = detectAuthMode();
-  if (authMode === 'api-key') {
-    args.push('-e', 'ANTHROPIC_API_KEY=proxied');
-  } else {
-    args.push('-e', 'CLAUDE_CODE_OAUTH_TOKEN=proxied');
-  }
-  if (brokerToken) {
-    args.push('-e', `OPENGOLEM_BROKER_TOKEN=${brokerToken}`);
-  }
-
-  logger.debug(
-    { containerName, proxyUrl, authMode, hasBrokerToken: !!brokerToken },
-    'Credential proxy configured for container',
-  );
-
-  // Runtime-specific args for host gateway resolution
-  args.push(...hostGatewayArgs());
-
-  // Run as host user so bind-mounted files are accessible.
-  // Skip when running as root (uid 0), as the container's node user (uid 1000),
-  // or when getuid is unavailable (native Windows without WSL).
-  const hostUid = process.getuid?.();
-  const hostGid = process.getgid?.();
-  if (hostUid != null && hostUid !== 0 && hostUid !== 1000) {
-    args.push('--user', `${hostUid}:${hostGid}`);
-    args.push('-e', 'HOME=/home/node');
-  }
-
-  for (const mount of mounts) {
-    if (mount.readonly) {
-      args.push(...readonlyMountArgs(mount.hostPath, mount.containerPath));
+function mountsToArgs(mounts: PreparedMount[]): string[] {
+  const args: string[] = [];
+  for (const m of mounts) {
+    if (m.readonly) {
+      args.push(...readonlyMountArgs(m.hostPath, m.containerPath));
     } else {
-      args.push('-v', `${mount.hostPath}:${mount.containerPath}`);
+      args.push('-v', `${m.hostPath}:${m.containerPath}`);
     }
   }
-
-  args.push(CONTAINER_IMAGE);
-
   return args;
 }
 
-// Load SOUL.md from the project root and interpolate assertiveness_level.
-// Returns undefined if SOUL.md does not exist (graceful degradation during dev).
-function loadSoulMd(assertivenessLevel: number): string | undefined {
-  const soulMdPath = path.join(process.cwd(), 'SOUL.md');
-  if (!fs.existsSync(soulMdPath)) return undefined;
-  const raw = fs.readFileSync(soulMdPath, 'utf-8');
-  return raw.replace('{{assertiveness_level}}', String(assertivenessLevel));
+function parseMarkerPayload(jsonStr: string): ContainerOutput | null {
+  const trimmed = jsonStr.trim();
+  if (!trimmed) return null;
+  try {
+    const o = JSON.parse(trimmed) as Record<string, unknown>;
+    const status = o.status === 'error' ? 'error' : 'success';
+    const result =
+      o.result === undefined || o.result === null
+        ? null
+        : String(o.result);
+    const newSessionId =
+      typeof o.newSessionId === 'string' ? o.newSessionId : undefined;
+    const error =
+      typeof o.error === 'string' ? o.error : undefined;
+    return { status, result, newSessionId, error };
+  } catch {
+    return null;
+  }
+}
+
+/** Extracts every complete START…END segment; `rest` holds an optional trailing incomplete segment. */
+function drainMarkerPairs(buffer: string): {
+  outputs: ContainerOutput[];
+  rest: string;
+} {
+  const outputs: ContainerOutput[] = [];
+  let i = 0;
+  while (true) {
+    const start = buffer.indexOf(OUTPUT_START_MARKER, i);
+    if (start === -1) {
+      return { outputs, rest: buffer.slice(i) };
+    }
+    const afterStart = start + OUTPUT_START_MARKER.length;
+    const end = buffer.indexOf(OUTPUT_END_MARKER, afterStart);
+    if (end === -1) {
+      return { outputs, rest: buffer.slice(start) };
+    }
+    const jsonStr = buffer.slice(afterStart, end).trim();
+    const parsed = parseMarkerPayload(jsonStr);
+    if (parsed) outputs.push(parsed);
+    i = end + OUTPUT_END_MARKER.length;
+  }
+}
+
+function processStdoutBuffer(
+  parseBuf: { value: string },
+  chunk: string,
+  max: number,
+  onPairs: (pairs: ContainerOutput[]) => void,
+): void {
+  parseBuf.value += chunk;
+  if (parseBuf.value.length > max) {
+    parseBuf.value = parseBuf.value.slice(-max);
+  }
+  const { outputs, rest } = drainMarkerPairs(parseBuf.value);
+  if (outputs.length) onPairs(outputs);
+  parseBuf.value = rest;
+}
+
+function lastPairFromStdout(full: string): ContainerOutput | null {
+  const { outputs } = drainMarkerPairs(full);
+  const last = outputs.at(-1);
+  return last ?? null;
+}
+
+function legacyResolve(fullStdout: string): ContainerOutput {
+  const parsed = lastPairFromStdout(fullStdout);
+  if (parsed) return parsed;
+  const lines = fullStdout.split(/\r?\n/).filter((l) => l.trim());
+  const lastLine = lines.length ? lines[lines.length - 1].trim() : '';
+  if (lastLine) {
+    const tryParse = parseMarkerPayload(lastLine);
+    if (tryParse) return tryParse;
+    return { status: 'success', result: lastLine };
+  }
+  return {
+    status: 'error',
+    result: null,
+    error: 'No container output',
+  };
+}
+
+function textLooksStale(s: string | null | undefined): boolean {
+  if (!s) return false;
+  return STALE_SESSION_RE.test(s);
 }
 
 export async function runContainerAgent(
@@ -311,436 +390,321 @@ export async function runContainerAgent(
   onProcess: (proc: ChildProcess, containerName: string) => void,
   onOutput?: (output: ContainerOutput) => Promise<void>,
 ): Promise<ContainerOutput> {
-  const startTime = Date.now();
-
+  assertValidGroupFolder(group.folder);
+  const projectRoot = process.cwd();
   const groupDir = resolveGroupFolderPath(group.folder);
   fs.mkdirSync(groupDir, { recursive: true });
+  fs.mkdirSync(path.join(groupDir, 'logs'), { recursive: true });
 
-  // Inject SOUL.md with assertiveness_level interpolated (M5)
-  const assertivenessLevel = group.assertivenessLevel ?? 10;
-  const inputWithSoul: ContainerInput = {
-    ...input,
-    soulMd: input.soulMd ?? loadSoulMd(assertivenessLevel),
-  };
+  const inputPayload = { ...input };
+  loadSoulMd(group, inputPayload);
 
-  const mounts = buildVolumeMounts(group, input.isMain);
-  const safeName = group.folder.replace(/[^a-zA-Z0-9-]/g, '-');
-  const containerName = `opengolem-${safeName}-${Date.now()}`;
-  const agentIdentifier = input.isMain
-    ? undefined
-    : group.folder.toLowerCase().replace(/_/g, '-');
+  const layout = prepareSessionLayout(group.folder, projectRoot);
+  const mounts = buildMounts(group, inputPayload, layout);
 
-  // Issue a scoped broker token for this container (M2 Token Broker).
-  // Fire-and-forget on failure — broker may not be up during tests or first-run.
+  const ts = Date.now();
+  const containerName = `opengolem-${safeContainerFolderName(group.folder)}-${ts}`;
+
+  const baseTimeout = group.containerConfig?.timeout ?? CONTAINER_TIMEOUT;
+  const effectiveTimeout = Math.max(baseTimeout, IDLE_TIMEOUT + 30_000);
+
   let brokerToken: string | undefined;
-  try {
-    brokerToken = await issueToken({
-      containerId: containerName,
-      skills: ['anthropic.message'],
-      scopes: [`context:${group.folder}`],
-      ttlSeconds:
-        Math.ceil(
-          (group.containerConfig?.timeout || CONTAINER_TIMEOUT) / 1000,
-        ) + 60,
-      budget: 100,
+  const issueOpts = {
+    containerId: containerName,
+    skills: [] as string[],
+    scopes: [] as string[],
+    ttlSeconds: 3600,
+    budget: 100,
+  };
+  if (process.env.VITEST) {
+    void issueToken(issueOpts).catch((err) => {
+      logger.warn(
+        { err },
+        'Token broker issueToken failed; continuing without broker token',
+      );
     });
-  } catch (err) {
-    logger.debug(
-      { containerName, err },
-      'Broker unavailable, container will run without token',
-    );
+  } else {
+    try {
+      brokerToken = await issueToken(issueOpts);
+    } catch (err) {
+      logger.warn(
+        { err },
+        'Token broker issueToken failed; continuing without broker token',
+      );
+    }
   }
 
-  const containerArgs = await buildContainerArgs(
-    mounts,
+  const proxyUrl = getContainerProxyUrl(CREDENTIAL_PROXY_PORT);
+  const authMode = detectAuthMode();
+
+  const runArgs: string[] = [
+    'run',
+    '-i',
+    '--rm',
+    '--name',
     containerName,
-    agentIdentifier,
-    brokerToken,
-  );
+    '-e',
+    `TZ=${TIMEZONE}`,
+    '-e',
+    'NO_UPDATE_NOTIFIER=1',
+    '-e',
+    `ANTHROPIC_BASE_URL=${proxyUrl}`,
+  ];
+  if (authMode === 'api-key') {
+    runArgs.push('-e', 'ANTHROPIC_API_KEY=proxied');
+  } else {
+    runArgs.push('-e', 'CLAUDE_CODE_OAUTH_TOKEN=proxied');
+  }
+  if (brokerToken) {
+    runArgs.push('-e', `OPENGOLEM_BROKER_TOKEN=${brokerToken}`);
+  }
+  runArgs.push(...hostGatewayArgs());
 
-  logger.debug(
-    {
-      group: group.name,
-      containerName,
-      mounts: mounts.map(
-        (m) =>
-          `${m.hostPath} -> ${m.containerPath}${m.readonly ? ' (ro)' : ''}`,
-      ),
-      containerArgs: containerArgs.join(' '),
-    },
-    'Container mount configuration',
-  );
+  const { uid, gid } = os.userInfo();
+  const hostUid = typeof uid === 'number' ? uid : null;
+  if (hostUid !== null && hostUid !== 0 && hostUid !== 1000) {
+    runArgs.push('--user', `${hostUid}:${gid}`);
+    runArgs.push('-e', 'HOME=/home/node');
+  }
 
-  logger.info(
-    {
-      group: group.name,
-      containerName,
-      mountCount: mounts.length,
-      isMain: input.isMain,
-    },
-    'Spawning container agent',
-  );
+  runArgs.push(...mountsToArgs(mounts));
+  runArgs.push(CONTAINER_IMAGE);
 
-  const logsDir = path.join(groupDir, 'logs');
-  fs.mkdirSync(logsDir, { recursive: true });
-
-  return new Promise((resolve) => {
-    const container = spawn(CONTAINER_RUNTIME_BIN, containerArgs, {
+  const startMs = Date.now();
+  let proc: ChildProcess;
+  try {
+    proc = spawn(CONTAINER_RUNTIME_BIN, runArgs, {
       stdio: ['pipe', 'pipe', 'pipe'],
     });
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    return {
+      status: 'error',
+      result: null,
+      error: `Container spawn error: ${msg}`,
+    };
+  }
 
-    onProcess(container, containerName);
+  onProcess(proc, containerName);
 
-    let stdout = '';
-    let stderr = '';
-    let stdoutTruncated = false;
-    let stderrTruncated = false;
+  const stdoutAcc = { buf: '', truncated: false };
+  const stderrAcc = { buf: '', truncated: false };
+  const parseBuf = { value: '' };
 
-    container.stdin.write(JSON.stringify(inputWithSoul));
-    container.stdin.end();
+  let hardTimer: ReturnType<typeof setTimeout> | null = null;
+  let timedOut = false;
+  let hadStreamingOutput = false;
+  let staleSessionDetected = false;
+  let lastNewSessionId: string | undefined;
+  let outputChain: Promise<void> = Promise.resolve();
+  let exitCode: number | null = null;
+  let settled = false;
 
-    // Streaming output: parse OUTPUT_START/END marker pairs as they arrive
-    let parseBuffer = '';
-    let newSessionId: string | undefined;
-    let outputChain = Promise.resolve();
+  const logVerbose =
+    process.env.LOG_LEVEL === 'debug' || process.env.LOG_LEVEL === 'trace';
 
-    container.stdout.on('data', (data) => {
-      const chunk = data.toString();
+  function writeRunLog(
+    code: number | null,
+    errMsg?: string,
+  ): void {
+    const duration = Date.now() - startMs;
+    const logName = `container-${new Date().toISOString().replace(/[:.]/g, '-')}.log`;
+    const logPath = path.join(groupDir, 'logs', logName);
+    const lines: string[] = [];
+    lines.push(`timestamp=${new Date().toISOString()}`);
+    lines.push(`group=${group.name}`);
+    lines.push(`isMain=${inputPayload.isMain}`);
+    lines.push(`durationMs=${duration}`);
+    lines.push(`exitCode=${code ?? 'null'}`);
+    lines.push(`stdoutTruncated=${stdoutAcc.truncated}`);
+    lines.push(`stderrTruncated=${stderrAcc.truncated}`);
+    lines.push(`timedOut=${timedOut}`);
+    if (errMsg) lines.push(`error=${errMsg}`);
 
-      // Always accumulate for logging
-      if (!stdoutTruncated) {
-        const remaining = CONTAINER_MAX_OUTPUT_SIZE - stdout.length;
-        if (chunk.length > remaining) {
-          stdout += chunk.slice(0, remaining);
-          stdoutTruncated = true;
-          logger.warn(
-            { group: group.name, size: stdout.length },
-            'Container stdout truncated due to size limit',
-          );
-        } else {
-          stdout += chunk;
-        }
-      }
-
-      // Stream-parse for output markers
-      if (onOutput) {
-        parseBuffer += chunk;
-        let startIdx: number;
-        while ((startIdx = parseBuffer.indexOf(OUTPUT_START_MARKER)) !== -1) {
-          const endIdx = parseBuffer.indexOf(OUTPUT_END_MARKER, startIdx);
-          if (endIdx === -1) break; // Incomplete pair, wait for more data
-
-          const jsonStr = parseBuffer
-            .slice(startIdx + OUTPUT_START_MARKER.length, endIdx)
-            .trim();
-          parseBuffer = parseBuffer.slice(endIdx + OUTPUT_END_MARKER.length);
-
-          try {
-            const parsed: ContainerOutput = JSON.parse(jsonStr);
-            if (parsed.newSessionId) {
-              newSessionId = parsed.newSessionId;
-            }
-            if (
-              parsed.status === 'error' &&
-              parsed.error &&
-              /no conversation found|session.*not found/i.test(parsed.error)
-            ) {
-              staleSessionDetected = true;
-            }
-            hadStreamingOutput = true;
-            // Activity detected — reset the hard timeout
-            resetTimeout();
-            // Call onOutput for all markers (including null results)
-            // so idle timers start even for "silent" query completions.
-            outputChain = outputChain.then(() => onOutput(parsed));
-          } catch (err) {
-            logger.warn(
-              { group: group.name, error: err },
-              'Failed to parse streamed output chunk',
-            );
-          }
-        }
-      }
-    });
-
-    container.stderr.on('data', (data) => {
-      const chunk = data.toString();
-      const lines = chunk.trim().split('\n');
-      for (const line of lines) {
-        if (line) logger.debug({ container: group.folder }, line);
-      }
-      // Don't reset timeout on stderr — SDK writes debug logs continuously.
-      // Timeout only resets on actual output (OUTPUT_MARKER in stdout).
-      if (stderrTruncated) return;
-      const remaining = CONTAINER_MAX_OUTPUT_SIZE - stderr.length;
-      if (chunk.length > remaining) {
-        stderr += chunk.slice(0, remaining);
-        stderrTruncated = true;
-        logger.warn(
-          { group: group.name, size: stderr.length },
-          'Container stderr truncated due to size limit',
-        );
-      } else {
-        stderr += chunk;
-      }
-    });
-
-    let timedOut = false;
-    let hadStreamingOutput = false;
-    let staleSessionDetected = false;
-    const configTimeout = group.containerConfig?.timeout || CONTAINER_TIMEOUT;
-    // Grace period: hard timeout must be at least IDLE_TIMEOUT + 30s so the
-    // graceful _close sentinel has time to trigger before the hard kill fires.
-    const timeoutMs = Math.max(configTimeout, IDLE_TIMEOUT + 30_000);
-
-    const killOnTimeout = () => {
-      timedOut = true;
-      logger.error(
-        { group: group.name, containerName },
-        'Container timeout, stopping gracefully',
+    const isErr = errMsg != null || (code !== null && code !== 0) || timedOut;
+    if (isErr || logVerbose) {
+      lines.push(`promptLength=${inputPayload.prompt.length}`);
+      lines.push(`sessionId=${inputPayload.sessionId ?? ''}`);
+      lines.push(`containerArgs=${JSON.stringify(runArgs)}`);
+      lines.push(
+        `mountsContainerPaths=${JSON.stringify(mounts.map((m) => m.containerPath))}`,
       );
+      lines.push(`stderr=\n${stderrAcc.buf}`);
+      lines.push(`stdout=\n${stdoutAcc.buf}`);
+    } else {
+      lines.push(`sessionId=${inputPayload.sessionId ?? ''}`);
+      lines.push(
+        `mountsContainerPaths=${JSON.stringify(mounts.map((m) => m.containerPath))}`,
+      );
+    }
+
+    try {
+      fs.writeFileSync(logPath, lines.join('\n'), 'utf8');
+    } catch (err) {
+      logger.warn({ err, logPath }, 'Failed to write container log file');
+    }
+  }
+
+  function markStaleFromOutput(o: ContainerOutput): void {
+    if (
+      textLooksStale(o.error) ||
+      textLooksStale(o.result)
+    ) {
+      staleSessionDetected = true;
+    }
+  }
+
+  function applyParsedOutputs(pairs: ContainerOutput[]): void {
+    for (const parsed of pairs) {
+      markStaleFromOutput(parsed);
+      hadStreamingOutput = true;
+      if (parsed.newSessionId) lastNewSessionId = parsed.newSessionId;
+      if (onOutput) {
+        outputChain = outputChain.then(() => onOutput(parsed));
+      }
+      scheduleHardTimeout();
+    }
+  }
+
+  function scheduleHardTimeout(): void {
+    if (hardTimer) clearTimeout(hardTimer);
+    hardTimer = setTimeout(() => {
+      timedOut = true;
       try {
         stopContainer(containerName);
       } catch (err) {
-        logger.warn(
-          { group: group.name, containerName, err },
-          'Graceful stop failed, force killing',
-        );
-        container.kill('SIGKILL');
+        logger.debug({ err }, 'stopContainer failed; sending SIGKILL to process');
+        try {
+          proc.kill('SIGKILL');
+        } catch {
+          /* ignore */
+        }
       }
+    }, effectiveTimeout);
+  }
+
+  scheduleHardTimeout();
+
+  proc.stdout?.on('data', (chunk: Buffer) => {
+    appendCapped(stdoutAcc, chunk, CONTAINER_MAX_OUTPUT_SIZE);
+    const s = chunk.toString('utf8');
+    if (onOutput) {
+      processStdoutBuffer(
+        parseBuf,
+        s,
+        CONTAINER_MAX_OUTPUT_SIZE,
+        applyParsedOutputs,
+      );
+    }
+  });
+
+  proc.stderr?.on('data', (chunk: Buffer) => {
+    appendCapped(stderrAcc, chunk, CONTAINER_MAX_OUTPUT_SIZE);
+    const text = chunk.toString('utf8');
+    for (const line of text.split(/\r?\n/)) {
+      if (line.length) logger.debug({ stderr: line }, 'container stderr');
+    }
+  });
+
+  proc.stdin?.write(JSON.stringify(inputPayload), (err) => {
+    if (err) logger.debug({ err }, 'stdin write error');
+  });
+  proc.stdin?.end();
+
+  return new Promise((resolve) => {
+    const finish = (out: ContainerOutput) => {
+      if (settled) return;
+      settled = true;
+      if (hardTimer) clearTimeout(hardTimer);
+      void revokeContainer(containerName).catch(() => {});
+      resolve(out);
     };
 
-    let timeout = setTimeout(killOnTimeout, timeoutMs);
+    proc.on('error', (err) => {
+      writeRunLog(null, err.message);
+      finish({
+        status: 'error',
+        result: null,
+        error: `Container spawn error: ${err.message}`,
+      });
+    });
 
-    // Reset the timeout whenever there's activity (streaming output)
-    const resetTimeout = () => {
-      clearTimeout(timeout);
-      timeout = setTimeout(killOnTimeout, timeoutMs);
-    };
+    proc.on('close', (code) => {
+      exitCode = code;
+      if (hardTimer) clearTimeout(hardTimer);
 
-    container.on('close', (code) => {
-      clearTimeout(timeout);
-      // Revoke broker token on exit — fire-and-forget
-      revokeContainer(containerName).catch(() => {});
-      const duration = Date.now() - startTime;
+      const finalize = async () => {
+        if (onOutput) {
+          await outputChain;
+        }
 
-      if (timedOut) {
-        const ts = new Date().toISOString().replace(/[:.]/g, '-');
-        const timeoutLog = path.join(logsDir, `container-${ts}.log`);
-        fs.writeFileSync(
-          timeoutLog,
-          [
-            `=== Container Run Log (TIMEOUT) ===`,
-            `Timestamp: ${new Date().toISOString()}`,
-            `Group: ${group.name}`,
-            `Container: ${containerName}`,
-            `Duration: ${duration}ms`,
-            `Exit Code: ${code}`,
-            `Had Streaming Output: ${hadStreamingOutput}`,
-          ].join('\n'),
-        );
-
-        // Timeout after output = idle cleanup, not failure.
-        // The agent already sent its response; this is just the
-        // container being reaped after the idle period expired.
-        if (hadStreamingOutput) {
-          logger.info(
-            { group: group.name, containerName, duration, code },
-            'Container timed out after output (idle cleanup)',
-          );
-          outputChain.then(() => {
-            resolve({
+        if (timedOut) {
+          if (hadStreamingOutput) {
+            writeRunLog(exitCode);
+            finish({
               status: 'success',
               result: null,
-              newSessionId,
+              newSessionId: lastNewSessionId,
             });
+            return;
+          }
+          const errText = `Container timed out after ${effectiveTimeout}ms`;
+          writeRunLog(exitCode, errText);
+          finish({
+            status: 'error',
+            result: null,
+            error: errText,
           });
           return;
         }
 
-        logger.error(
-          { group: group.name, containerName, duration, code },
-          'Container timed out with no output',
-        );
-
-        resolve({
-          status: 'error',
-          result: null,
-          error: `Container timed out after ${configTimeout}ms`,
-        });
-        return;
-      }
-
-      const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-      const logFile = path.join(logsDir, `container-${timestamp}.log`);
-      const isVerbose =
-        process.env.LOG_LEVEL === 'debug' || process.env.LOG_LEVEL === 'trace';
-
-      const logLines = [
-        `=== Container Run Log ===`,
-        `Timestamp: ${new Date().toISOString()}`,
-        `Group: ${group.name}`,
-        `IsMain: ${input.isMain}`,
-        `Duration: ${duration}ms`,
-        `Exit Code: ${code}`,
-        `Stdout Truncated: ${stdoutTruncated}`,
-        `Stderr Truncated: ${stderrTruncated}`,
-        ``,
-      ];
-
-      const isError = code !== 0;
-
-      if (isVerbose || isError) {
-        // On error, log input metadata only — not the full prompt.
-        // Full input is only included at verbose level to avoid
-        // persisting user conversation content on every non-zero exit.
-        if (isVerbose) {
-          logLines.push(`=== Input ===`, JSON.stringify(input, null, 2), ``);
-        } else {
-          logLines.push(
-            `=== Input Summary ===`,
-            `Prompt length: ${input.prompt.length} chars`,
-            `Session ID: ${input.sessionId || 'new'}`,
-            ``,
-          );
-        }
-        logLines.push(
-          `=== Container Args ===`,
-          containerArgs.join(' '),
-          ``,
-          `=== Mounts ===`,
-          mounts
-            .map(
-              (m) =>
-                `${m.hostPath} -> ${m.containerPath}${m.readonly ? ' (ro)' : ''}`,
-            )
-            .join('\n'),
-          ``,
-          `=== Stderr${stderrTruncated ? ' (TRUNCATED)' : ''} ===`,
-          stderr,
-          ``,
-          `=== Stdout${stdoutTruncated ? ' (TRUNCATED)' : ''} ===`,
-          stdout,
-        );
-      } else {
-        logLines.push(
-          `=== Input Summary ===`,
-          `Prompt length: ${input.prompt.length} chars`,
-          `Session ID: ${input.sessionId || 'new'}`,
-          ``,
-          `=== Mounts ===`,
-          mounts
-            .map((m) => `${m.containerPath}${m.readonly ? ' (ro)' : ''}`)
-            .join('\n'),
-          ``,
-        );
-      }
-
-      fs.writeFileSync(logFile, logLines.join('\n'));
-      logger.debug({ logFile, verbose: isVerbose }, 'Container log written');
-
-      if (code !== 0) {
-        logger.error(
-          {
-            group: group.name,
-            code,
-            duration,
-            stderr,
-            stdout,
-            logFile,
-          },
-          'Container exited with error',
-        );
-
-        resolve({
-          status: 'error',
-          result: null,
-          // SECURITY: Log full stderr server-side; return only exit code to caller
-          // to prevent leaking file paths, stack traces, or API errors.
-          // Exception: surface stale-session signal so index.ts can clear the session.
-          error: staleSessionDetected
+        if (exitCode !== 0) {
+          const staleFromLog =
+            staleSessionDetected || textLooksStale(stdoutAcc.buf);
+          const errMsg = staleFromLog
             ? 'No conversation found — stale session cleared'
-            : `Container exited with code ${code}`,
-        });
-        return;
-      }
+            : `Container exited with code ${exitCode}`;
+          writeRunLog(exitCode, errMsg);
+          finish({
+            status: 'error',
+            result: null,
+            error: errMsg,
+          });
+          return;
+        }
 
-      // Streaming mode: wait for output chain to settle, return completion marker
-      if (onOutput) {
-        outputChain.then(() => {
-          logger.info(
-            { group: group.name, duration, newSessionId },
-            'Container completed (streaming mode)',
-          );
-          resolve({
+        if (onOutput) {
+          writeRunLog(exitCode);
+          finish({
             status: 'success',
             result: null,
-            newSessionId,
+            newSessionId: lastNewSessionId,
           });
-        });
-        return;
-      }
-
-      // Legacy mode: parse the last output marker pair from accumulated stdout
-      try {
-        // Extract JSON between sentinel markers for robust parsing
-        const startIdx = stdout.indexOf(OUTPUT_START_MARKER);
-        const endIdx = stdout.indexOf(OUTPUT_END_MARKER);
-
-        let jsonLine: string;
-        if (startIdx !== -1 && endIdx !== -1 && endIdx > startIdx) {
-          jsonLine = stdout
-            .slice(startIdx + OUTPUT_START_MARKER.length, endIdx)
-            .trim();
-        } else {
-          // Fallback: last non-empty line (backwards compatibility)
-          const lines = stdout.trim().split('\n');
-          jsonLine = lines[lines.length - 1];
+          return;
         }
 
-        const output: ContainerOutput = JSON.parse(jsonLine);
+        const legacy = legacyResolve(stdoutAcc.buf);
+        markStaleFromOutput(legacy);
+        if (legacy.status === 'error' && staleSessionDetected) {
+          writeRunLog(exitCode, 'No conversation found — stale session cleared');
+          finish({
+            status: 'error',
+            result: null,
+            error: 'No conversation found — stale session cleared',
+          });
+          return;
+        }
+        writeRunLog(exitCode);
+        finish(legacy);
+      };
 
-        logger.info(
-          {
-            group: group.name,
-            duration,
-            status: output.status,
-            hasResult: !!output.result,
-          },
-          'Container completed',
-        );
-
-        resolve(output);
-      } catch (err) {
-        logger.error(
-          {
-            group: group.name,
-            stdout,
-            stderr,
-            error: err,
-          },
-          'Failed to parse container output',
-        );
-
-        resolve({
+      void finalize().catch((err) => {
+        writeRunLog(exitCode, String(err));
+        finish({
           status: 'error',
           result: null,
-          error: `Failed to parse container output: ${err instanceof Error ? err.message : String(err)}`,
+          error: String(err),
         });
-      }
-    });
-
-    container.on('error', (err) => {
-      clearTimeout(timeout);
-      revokeContainer(containerName).catch(() => {});
-      logger.error(
-        { group: group.name, containerName, error: err },
-        'Container spawn error',
-      );
-      resolve({
-        status: 'error',
-        result: null,
-        error: `Container spawn error: ${err.message}`,
       });
     });
   });
@@ -749,64 +713,43 @@ export async function runContainerAgent(
 export function writeTasksSnapshot(
   groupFolder: string,
   isMain: boolean,
-  tasks: Array<{
-    id: string;
-    groupFolder: string;
-    prompt: string;
-    script?: string | null;
-    schedule_type: string;
-    schedule_value: string;
-    status: string;
-    next_run: string | null;
-  }>,
+  tasks: TaskRow[],
 ): void {
-  // Write filtered tasks to the group's IPC directory
-  const groupIpcDir = resolveGroupIpcPath(groupFolder);
-  fs.mkdirSync(groupIpcDir, { recursive: true });
-
-  // Main sees all tasks, others only see their own
-  const filteredTasks = isMain
+  assertValidGroupFolder(groupFolder);
+  const dir = path.join(DATA_DIR, 'ipc', groupFolder);
+  fs.mkdirSync(dir, { recursive: true });
+  const rows = isMain
     ? tasks
     : tasks.filter((t) => t.groupFolder === groupFolder);
-
-  const tasksFile = path.join(groupIpcDir, 'current_tasks.json');
-  fs.writeFileSync(tasksFile, JSON.stringify(filteredTasks, null, 2));
+  fs.writeFileSync(
+    path.join(dir, 'current_tasks.json'),
+    JSON.stringify(rows, null, 2),
+    'utf8',
+  );
 }
 
-export interface AvailableGroup {
-  jid: string;
-  name: string;
-  lastActivity: string;
-  isRegistered: boolean;
-}
-
-/**
- * Write available groups snapshot for the container to read.
- * Only main group can see all available groups (for activation).
- * Non-main groups only see their own registration status.
- */
 export function writeGroupsSnapshot(
   groupFolder: string,
   isMain: boolean,
   groups: AvailableGroup[],
-  _registeredJids: Set<string>,
+  registeredJids: Set<string>,
 ): void {
-  const groupIpcDir = resolveGroupIpcPath(groupFolder);
-  fs.mkdirSync(groupIpcDir, { recursive: true });
-
-  // Main sees all groups; others see nothing (they can't activate groups)
-  const visibleGroups = isMain ? groups : [];
-
-  const groupsFile = path.join(groupIpcDir, 'available_groups.json');
+  assertValidGroupFolder(groupFolder);
+  const dir = path.join(DATA_DIR, 'ipc', groupFolder);
+  fs.mkdirSync(dir, { recursive: true });
+  const list = isMain
+    ? groups.map((g) => ({
+        ...g,
+        isRegistered: registeredJids.has(g.jid),
+      }))
+    : [];
+  const payload = {
+    groups: list,
+    lastSync: new Date().toISOString(),
+  };
   fs.writeFileSync(
-    groupsFile,
-    JSON.stringify(
-      {
-        groups: visibleGroups,
-        lastSync: new Date().toISOString(),
-      },
-      null,
-      2,
-    ),
+    path.join(dir, 'available_groups.json'),
+    JSON.stringify(payload, null, 2),
+    'utf8',
   );
 }
