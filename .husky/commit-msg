@@ -1,0 +1,7 @@
+#!/usr/bin/env sh
+# Normalize IDE-injected attribution trailer.
+msg="$1"
+[ -n "$msg" ] && [ -f "$msg" ] || exit 0
+if grep -qE '^Made-with:[[:space:]]*Cursor[[:space:]]*$' "$msg"; then
+  sed -E 's/^Made-with:[[:space:]]*Cursor[[:space:]]*$/Made-with: Cursor, Claude and human brains/' "$msg" >"$msg.tmp" && mv "$msg.tmp" "$msg"
+fi

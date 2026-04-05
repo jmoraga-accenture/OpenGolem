@@ -1,5 +1,5 @@
 # OpenGolem — Implementation Plan
-*Produced: April 2026 | Last updated: 2026-04-03 | Tracks SPECS.md v0.4 | M7 + M9 complete; SOUL.md [FLAG] revised | 505 tests*
+*Produced: April 2026 | Last updated: 2026-04-05 | Tracks SPECS.md v0.4 | M1–M7 + M9 complete; NanoClaw lineage cleared; architectural review complete | 520 tests*
 
 ---
 
@@ -14,9 +14,11 @@
 | M5 — SOUL.md (Alef's character + assertiveness) | ✅ Complete | SOUL.md prepended as system prompt; assertiveness_level per group; [FLAG] logged to audit; [FLAG] protocol revised 2026-04-03 |
 | M6 — Cato (hard oversight) + PSYCHE.md + dao_score | ✅ Complete | Inline hook (deterministic stub); scheduled audit every 6h; dao_score.db; PSYCHE.md |
 | M7 — /health endpoint + CLI status | ✅ Complete | GET /health JSON; `npm run status`; 127.0.0.1 only; no TUI split-pane (headless) |
-| M8 — Skill Schema | 🔲 Not started | |
+| M8 — Skill Schema | 🔲 Not started | Scope expanded by ARCHITECTURE_REVIEW.md: must cover MCP governance, provider compatibility, permission tiers |
 | M9 — Integration + Hardening | ✅ Complete | 11 integration tests; Cato gate in task-scheduler; audit append-only verified; CONFIG_KEYS audit |
-| **Phase 2 — OpenGolem-v2 (clean lab)** | 🔲 Not started | Incremental TypeScript rewrite from specs; begins after M9 |
+| NanoClaw Lineage Clearance | ✅ Complete | Two clean-room passes; five utility files rewritten; 15 new tests (mount-security); no NanoClaw source remains |
+| Architectural Review | ✅ Complete | docs/ARCHITECTURE_REVIEW.md; 6 propositions adopted; SPECS.md v0.5 update pending |
+| **Phase 2 — OpenGolem-v2 (clean lab)** | 🔲 Not started | Incremental TypeScript rewrite from specs; begins after M8 |
 
 ---
 
