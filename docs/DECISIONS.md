@@ -198,3 +198,277 @@ The Rust rewrite (Phase 2) proceeds crate-by-crate, replacing TypeScript compone
 **Rationale:** The per-group filesystem (`/workspace/group`) is already isolated by design (contexts cannot read each other's data). A separate shared directory is the clean solution: it is clearly scoped, clearly read-only, and does not require any change to the per-context isolation model. The audit trail is preserved — every container spawn logs its mounts including `/workspace/extra`. Agents attempting to write will receive a permission denied error from the OS, not a silent no-op.
 
 **What was explicitly not done:** Making the directory writable (would allow agents to modify shared state and create cross-context interference), or making it per-group configurable (unnecessary complexity for the current use case). Writability for agents is a future skill-level decision, not a default.
+
+---
+
+## Decision 13: remote-control.ts — Keep as TD-ADMIN surface (April 2026)
+
+**Question:** `remote-control.ts` (claude.ai bridge) is not described in ARCHITECTURE.md. Should it be retired, kept, or formally specified for v1.0?
+
+**Decision:** Keep for v1.0 as a TD-ADMIN operational surface. It is not given a full behavioral spec of its own. The Orchestrator spec (Stream E) will include a scoped paragraph covering its trust domain placement, failure mode (fail-closed if bridge is unreachable), and any audit obligations. It is treated as part of the Orchestrator component, not a standalone component.
+
+**Rationale:** The feature provides genuine operational value (remote agent invocation without a messaging channel) and poses no architectural contradiction — it sits naturally in TD-ADMIN/TD-ORCHESTRATOR. The risk of leaving it without an ADR was that Spec Writers might exclude it from the Orchestrator spec entirely, creating an undocumented surface. This decision closes that gap.
+
+**Implications:**
+- Not in the spec queue as a standalone item.
+- The Orchestrator Spec Writer reads this decision before writing Stream E.
+- If the remote-control surface grows (new endpoints, changed auth model), it graduates to its own spec at that point.
+
+---
+
+## Decision 14: Cato Scheduled Audit Mechanism — Hansei Inbox + Poll (April 2026)
+
+**Question:** v0.1 Cato delivers scheduled audit results by spawning an LLM-in-container that writes `reports/cato-*.json`. ARCHITECTURE.md §4.7 specifies a **hansei inbox drop + orchestrator poll** pattern. Which is the v1.0 target?
+
+**Decision:** Follow ARCHITECTURE.md §4.7. The v1.0 target is hansei inbox drop + orchestrator poll. The v0.1 container-report approach is reference material for the Cato Spec Writer — it is not the spec target.
+
+**Rationale:** The v0.1 mechanism (container spawning its own report) tightly couples the scheduled audit to a container runtime and produces output outside the unified governance flow. The hansei pattern keeps Cato's output inside the orchestrator's control loop — the orchestrator polls a well-defined inbox, routes the result into the audit log, and can act on it programmatically. This preserves the single governance loop and avoids a second out-of-band report surface.
+
+**Implications:**
+- The Cato behavioral spec (Stream B) describes the hansei inbox contract (§4.7) as the normative delivery mechanism.
+- The v0.1 `reports/cato-*.json` pattern is informational context only, referenced in the "v0.1 starting point" column of the development table.
+- Spec Writers do not need to accommodate both mechanisms.
+
+---
+
+## Decision 15: Unix Socket Paths for All Three IPC Sockets (April 2026)
+
+*Resolved from TBD-A1 in token-broker-spec.md. See also ARCHITECT_REVIEW.md TBD-A1.*
+
+**Question:** What are the concrete Unix socket paths for the three IPC sockets used by the Broker, Orchestrator, and Cato? These must not conflict with each other.
+
+**Decision:** All three sockets live under `data/sockets/` on the host filesystem, which is created at startup if absent. The paths are:
+
+| Socket | Owner (listener) | Path |
+|--------|------------------|------|
+| Token lifecycle | Token Broker | `data/sockets/broker.sock` |
+| Cato escalation relay | Orchestrator | `data/sockets/escalation.sock` |
+| Cato inline check | Cato | `data/sockets/cato.sock` |
+
+**Rationale:** A single well-known directory avoids scattered socket files and makes permissions straightforward (the directory is owned by the Golem service user; group-readable by each process). Flat names within that directory are unambiguous. Three distinct names eliminate any possibility of a process accidentally connecting to the wrong socket. Paths are relative to the project root at runtime; the orchestrator resolves them to absolute paths at startup.
+
+**Configuration:** The paths above are the compiled-in defaults. Each path is overridable by an environment variable (`BROKER_SOCKET_PATH`, `ESCALATION_SOCKET_PATH`, `CATO_SOCKET_PATH`) for deployments that need alternative locations (e.g. a tmpfs or a different service user home). Overrides are non-secret config vars and belong in `bootstrap.ts`'s `CONFIG_KEYS` whitelist per Decision 9.
+
+**Implications:**
+- The Cato spec, Token Broker spec, and Orchestrator spec must reference `data/sockets/` as the default socket directory.
+- `data/sockets/` must be added to `.gitignore`.
+- The Tester can verify socket separation per token-broker-spec AC-18 by connecting to each path separately.
+
+---
+
+## Decision 16: Token Store Exhaustion Behavior (April 2026)
+
+*Resolved from TBD-A2 in token-broker-spec.md. See also ARCHITECT_REVIEW.md TBD-A2.*
+
+**Question:** What does the Token Broker do when its in-memory token store reaches a maximum capacity? Three options were considered: (a) reject new `issueToken` requests with a JSON-RPC error until existing tokens expire/are revoked, (b) evict the oldest expired token, (c) log a critical alert and begin evicting least-recently-used.
+
+**Decision:** Option (a) — reject new `issueToken` requests with a JSON-RPC error when the store is at capacity. The error message must identify the reason as `token_store_full`. The maximum capacity is configurable via `TOKEN_STORE_MAX_CAPACITY` (default: 10,000 tokens). The broker does not auto-evict any token regardless of age or LRU status.
+
+**Rationale:**
+- Auto-eviction of valid tokens (options b and c) silently invalidates tokens that are in active use by running containers. Those containers would then receive HTTP 403 on their next proxied call — an unexpected, hard-to-diagnose failure. This is worse than the task queue blocking at the orchestrator level.
+- Rejecting new `issueToken` requests surfaces the problem immediately and in the right place (the orchestrator, which owns the task lifecycle). The orchestrator already handles Token Broker unavailability by queuing inbound messages — the same queue absorbs store-full conditions without data loss.
+- A store capacity of 10,000 is far above any realistic single-host deployment. If the limit is reached, it indicates a runaway token issuance pattern (a bug or attack), and the correct response is to surface it loudly, not to paper over it with eviction.
+- Expired tokens in the store are removed lazily at validation time (when a request bearing an expired token is checked). This keeps the store size bounded in normal operation without requiring a background sweeper.
+
+**Implications:**
+- The Token Broker spec must add a behavioral contract: "Given a `issueToken` request when the token store is at capacity, Must: reject with `{code: -32603, message: 'token_store_full'}`. No token is issued. Health status remains `ok` (store-full is not a credential backend failure)."
+- An alert-level audit log entry is written on the first store-full rejection in each 60-second window (to avoid flooding the log).
+- The Tester must verify store-full behavior (AC addition to the Token Broker spec).
+
+---
+
+## Decision 17: Cato Hash-Only vs Byte-Level Check — Content Excerpt Model (April 2026)
+
+*Resolved from TBD-B1 in cato-spec.md. See also ARCHITECT_REVIEW.md TBD-B1.*
+
+**Question:** The Cato inline check request carries only `payloadHash` and `payloadSize`. Cato's Phase 1 deterministic checks (path traversal, injection signatures, PII patterns) require inspecting byte content, not just a hash. Three options:
+- (a) Orchestrator includes a small signed content excerpt alongside the hash for pattern-check purposes.
+- (b) Pattern checks are moved to the orchestrator or Call Inspector (before the Cato gate).
+- (c) Cato receives full payload content for action types where pattern-checking is required, with PSYCHE.md defining which action types warrant content delivery.
+
+**Decision:** Option (a) — the orchestrator includes a content excerpt in the inline check request for the action types where byte-level pattern checks are required.
+
+**Implementation detail:**
+- The inline check request schema gains an optional field: `"contentExcerpt": "<base64-encoded-bytes>"`.
+- `contentExcerpt` is present only for action types that require byte-level inspection: `AGENT_PROMPT`, `OUTBOUND_API_CALL`, `MEMORY_WRITE`. It is absent (null or omitted) for `FILESYSTEM_WRITE` and `CREDENTIAL_REQUEST` (size check alone is sufficient for these in Phase 1).
+- The excerpt is the first 4 KB of the payload, base64-encoded. If the payload is shorter than 4 KB, the full payload is included.
+- The excerpt is included alongside the hash, not instead of it. The hash remains the authoritative content reference for the audit trail.
+- No signing of the excerpt is required in Phase 1. The orchestrator is in TD-ORCHESTRATOR and is trusted to provide an accurate excerpt. In Phase 2, if tampering becomes a concern, HMAC of the excerpt against the full payload hash can be added.
+
+**Why option (a) and not (b) or (c):**
+- Option (b) moves pattern checks into the orchestrator, blurring the enforcement boundary. The Call Inspector already handles prompt injection for proxied calls. Cato's inline gate is the authority for orchestrator-level actions (prompts, memory writes). Moving Cato's checks into the orchestrator gives the orchestrator safety responsibilities it should not own (§3.1 ARCHITECTURE.md: "does not own safety decisions"). Rejected.
+- Option (c) delivers full payload content to Cato. The ARCHITECTURE.md design intent (`payloadHash` and `payloadSize` only) is to prevent Cato from becoming a secondary surface where payload content is retained and auditable independently. A 4 KB excerpt is a practical compromise: enough for pattern matching, not a full content repository.
+- Option (a) preserves the hash-primary design while making deterministic checks functional. The excerpt is transient — Cato uses it for the check and does not log or persist it.
+
+**Implications:**
+- The Cato spec (§2.1) must add `contentExcerpt` as an optional field in the request schema, with documentation of which action types include it.
+- The Cato spec (§3.1) must be updated: the path traversal and injection checks operate on `contentExcerpt` when present; they are skipped when absent (e.g. for `FILESYSTEM_WRITE`).
+- Cato's invariant 6 ("payload content is not reproduced") is not violated — the excerpt is used for checking, not reproduced in responses or audit entries. The `reason` field constraint still applies.
+- The Cato spec's acceptance criteria must add: "AC-N: For action types `AGENT_PROMPT`, `OUTBOUND_API_CALL`, and `MEMORY_WRITE`, the request includes a `contentExcerpt` field. For `FILESYSTEM_WRITE` and `CREDENTIAL_REQUEST`, `contentExcerpt` is absent or null."
+
+---
+
+## Decision 18: Cato Scheduled Audit Interval Default and Configuration (April 2026)
+
+*Resolved from TBD-B2 in cato-spec.md. See also ARCHITECT_REVIEW.md TBD-B2.*
+
+**Question:** What is the default scheduled audit interval, and how is it configured?
+
+**Decision:** Default interval is **6 hours**. Configured via the environment variable `CATO_AUDIT_INTERVAL`, expressed as a Go-style duration string (e.g. `6h`, `30m`, `24h`). The minimum permitted value is `15m`; values below this are rejected at startup with a configuration error.
+
+**Rationale:**
+- 1 hour is aggressive for a personal assistant with low call volume — it adds frequent disk I/O and LLM overhead (Phase 2) for little governance benefit on quiet days.
+- 24 hours means a security anomaly from the morning is not surfaced until the next day, which is too slow for a responsive posture.
+- 6 hours balances timeliness with overhead. Four audit cycles per day means an anomaly pattern is surfaced within hours, not a full day. For deployments with higher call volume, the administrator can reduce to `1h` or `2h`.
+- A duration string (not seconds integer) is human-readable in config files and avoids unit confusion.
+
+**Implications:**
+- `CATO_AUDIT_INTERVAL` is a non-secret config var and belongs in `bootstrap.ts`'s `CONFIG_KEYS` whitelist per Decision 9.
+- Cato must validate the interval at startup and refuse to start if the value is below `15m` or unparseable.
+- The Cato spec §3.4 must replace "default interval: TBD" with "default interval: 6 hours; configured by `CATO_AUDIT_INTERVAL` (duration string, minimum `15m`)."
+
+---
+
+## Decision 19: Token Broker Notification Wire Format for Skill Registration (April 2026)
+
+*Resolved from TBD-C1 in skill-schema-spec.md. See also ARCHITECT_REVIEW.md TBD-C1.*
+
+**Question:** ARCHITECTURE.md §5.5 states "Token Broker notified of new skill scope" on skill registration but gives no JSON-RPC method or schema. What is the wire format, and does it use the existing token lifecycle socket or a new socket?
+
+**Decision:** The notification reuses the existing **token lifecycle socket** (§4.2.1, `data/sockets/broker.sock`). A new JSON-RPC method `registerSkillScope` is defined on that socket. No new socket is created.
+
+**Wire format:**
+
+```json
+// Registration (orchestrator → broker)
+{
+  "jsonrpc": "2.0",
+  "method": "registerSkillScope",
+  "params": {
+    "skillId": "<kebab-case-skill-id>",
+    "tokenScopes": ["<skill-id>", "..."],
+    "networkEndpoints": [
+      { "pattern": "<url-pattern>", "protocol": "https | wss" }
+    ]
+  },
+  "id": 10
+}
+
+// Success response
+{
+  "jsonrpc": "2.0",
+  "result": { "registered": true },
+  "id": 10
+}
+
+// Error response (e.g. duplicate skill ID from broker's perspective)
+{
+  "jsonrpc": "2.0",
+  "error": { "code": -32600, "message": "<reason>", "data": { "field": "<field>" } },
+  "id": 10
+}
+```
+
+**Deregistration (on skill removal):**
+```json
+{
+  "jsonrpc": "2.0",
+  "method": "deregisterSkillScope",
+  "params": { "skillId": "<kebab-case-skill-id>" },
+  "id": 11
+}
+
+// Success response
+{
+  "jsonrpc": "2.0",
+  "result": { "deregistered": true },
+  "id": 11
+}
+```
+
+**Rationale:**
+- Reusing the token lifecycle socket avoids a fourth socket and keeps all orchestrator→broker communication on one channel. The two-socket design (token lifecycle vs escalation) was motivated by direction inversion (§4.2 ADR-11); this notification is orchestrator-initiated, so it belongs on the existing orchestrator→broker socket.
+- Including `networkEndpoints` in the registration call lets the broker update the Call Inspector's endpoint constraint list in one atomic operation — the inspector always sees the complete declared endpoint set for any registered skill.
+- `tokenScopes` is the list of skill IDs to add to the allowed scope set (mirrors `token_scopes.skills` from `.intent.md`). It may be empty for skills that add endpoints but no token scope names.
+- The broker responds synchronously before the orchestrator reports success to the administrator. This preserves the skill-schema-spec's Invariant 4 (broker consistency).
+
+**Implications:**
+- The Token Broker spec must add `registerSkillScope` and `deregisterSkillScope` to its External Interface section (§4.2.1).
+- The Skill Schema spec must replace its "TBD" broker notification section with this wire format.
+- The Call Inspector's endpoint constraint list is updated by the broker (not directly by the orchestrator) when `registerSkillScope` is processed. This keeps the inspector's state within TD-BROKER.
+- The Tester should add an AC verifying that after `registerSkillScope`, subsequent `issueToken` calls include the new skill's scope in the issued token's claims.
+
+---
+
+## Decision 20: `router_state` Placement and Tier 2 Retention Scope (April 2026)
+
+*Resolves TBD-D1 and TBD-D2 from memory-tiers-spec.md. See also ARCHITECT_REVIEW.md TBD-D1 and TBD-D2.*
+
+### TBD-D1: `router_state` placement
+
+**Question:** Does outbound routing metadata (`router_state`) belong in Tier 2 `messages.db` (as a new table) or is it maintained in-process by the orchestrator only with no persistence?
+
+**Decision:** `router_state` is maintained **in-process by the orchestrator only** — no Tier 2 persistence.
+
+**Rationale:** Outbound routing metadata (which channel adapter, which conversation thread, pending delivery acknowledgments) is ephemeral operational state. It is needed only while the orchestrator is routing an outbound message — a transaction that completes in milliseconds. Persisting it to SQLite adds write latency and schema surface for no governance benefit: routing state is not an audit concern, not a Cato input, and not needed for session continuity (the channel thread ID is already carried in the inbound `messages` row). On orchestrator restart, any in-flight routing state is naturally reset; the orchestrator re-reads the message queue and re-routes. No Tier 2 schema changes are needed.
+
+**Implications:**
+- The Tier 2 schema remains as specified in the Memory Tiers spec (three tables: `messages`, `sessions`, `tasks`). No `router_state` table is added.
+- The Memory Tiers spec TBD note in the schema section can be closed with: "`router_state` is not persisted to Tier 2. Routing metadata is maintained in-process by the orchestrator."
+
+### TBD-D2: Session/task retention scope
+
+**Question:** When a pruning retention window is configured, does it apply only to the `messages` table, or also to `sessions` and `tasks` rows?
+
+**Decision:** The retention window applies to the **`messages` table only**. `sessions` and `tasks` rows are retained indefinitely regardless of the retention window.
+
+**Rationale:** Session and task records are thin metadata rows (a handful of columns, no payload content). They are the skeleton of the audit trail — removing them would leave orphaned `messages` rows and break Cato's ability to correlate message patterns with task and session context during scheduled audits. The governance value of the `sessions` and `tasks` tables is high relative to their storage cost. Pruning `messages` rows (which may contain excerpts or structured content) is the correct tradeoff: payload content ages out; the structural audit record does not.
+
+**Implications:**
+- The Memory Tiers spec Tier 2 Retention section must be updated: "When configured, the retention window applies to the `messages` table only. `sessions` and `tasks` rows are retained indefinitely."
+- The Tester must verify that a pruning operation removes only `messages` rows older than the window and leaves `sessions` and `tasks` rows intact.
+
+---
+
+## Decision 21: WAL Mode Mandatory, Missing `messages.db` Auto-Create (April 2026)
+
+*Resolves TBD-D3 and TBD-D4 from memory-tiers-spec.md. See also ARCHITECT_REVIEW.md TBD-D3 and TBD-D4.*
+
+### TBD-D3: WAL mode mandatory for Tier 2
+
+**Decision:** WAL (Write-Ahead Logging) mode is **mandatory** for all Tier 2 `messages.db` files. The orchestrator enables WAL mode (`PRAGMA journal_mode=WAL`) immediately after opening or creating any `messages.db`. This is not configurable. A `messages.db` that cannot be opened in WAL mode is treated as a startup error for that group.
+
+**Rationale:** Cato requires concurrent read access to `messages.db` during scheduled audits while the orchestrator may be actively writing. WAL mode is the only SQLite mode that supports this without a full write lock. The alternative (exclusive write lock during audits) would block message processing for the audit duration — unacceptable. WAL is the correct and only supported mode.
+
+**Implications:**
+- The Memory Tiers spec T2-7 must drop "WAL mode is assumed; TBD" and replace with "WAL mode is mandatory (see Decision 21)."
+- The orchestrator's database initialization code must issue `PRAGMA journal_mode=WAL` for every `messages.db` opened. This is a normative implementation requirement, not advisory.
+
+### TBD-D4: Missing `messages.db` — auto-create
+
+**Question:** When the orchestrator needs to write to a group's `messages.db` and the file does not exist, should it auto-create or halt?
+
+**Decision:** **Auto-create.** When `groups/{name}/messages.db` does not exist, the orchestrator creates the file, applies the normative Tier 2 schema (three `CREATE TABLE` statements), enables WAL mode, and continues. This happens transparently — no administrator action is required to provision a new group's database.
+
+**Rationale:** Requiring administrator intervention to create a database file for every new group would make the system unusable in practice. The schema is static and code-owned; there is no safety concern in creating it automatically. A missing database is a normal first-use condition for a new group, not an error condition. If the file cannot be created (permissions error, disk full), that is a genuine error and the orchestrator halts task dispatch for that group and logs the failure.
+
+**Implications:**
+- The Memory Tiers spec FM-3 must be updated: "If `messages.db` is missing, the orchestrator auto-creates it with the normative schema and WAL mode enabled. If creation fails (permissions, disk), the orchestrator logs the error and queues pending messages for the group without dispatching containers until the database is accessible."
+- The Tester must verify auto-create behavior: send a message to a new group whose directory exists but whose `messages.db` does not; confirm the database is created and the message is processed normally.
+
+---
+
+## Decision 22: Missing `CLAUDE.md` at Container Spawn — Auto-Create (April 2026)
+
+*Resolves TBD-D5 from memory-tiers-spec.md. See also ARCHITECT_REVIEW.md TBD-D5.*
+
+**Question:** If `groups/{name}/CLAUDE.md` does not exist when a container is being spawned, should the orchestrator auto-create an empty file or halt?
+
+**Decision:** **Auto-create an empty file.** If `groups/{name}/CLAUDE.md` does not exist at container spawn time, the orchestrator creates an empty file (zero bytes) at that path before finalizing the bind mount configuration. The container is then spawned normally with the empty file mounted.
+
+**Rationale:** An empty `CLAUDE.md` is a perfectly valid Tier 1 state — it is the natural starting point for a group with no accumulated memory. Halting the spawn because the file is absent would mean that the first task for any new group always fails, which is a terrible user experience and serves no safety purpose. The bind mount must reference an existing file (container runtime requirement); auto-creating the empty file satisfies the runtime requirement without complexity. Cato's `MEMORY_WRITE` gate still governs any subsequent write to the file; the auto-create of an empty file is not a memory write proposal from an agent and does not require a Cato check.
+
+**Implications:**
+- The Memory Tiers spec FM-5 must be updated: "If `groups/{name}/CLAUDE.md` is absent at spawn time, the orchestrator creates an empty file at that path before configuring the bind mount. No Cato check is required for the empty-file creation. The container is spawned normally."
+- The orchestrator's spawn logic must check for the file's existence and create it if absent before building the mount configuration. This is the same startup sequence as `messages.db` auto-create (Decision 21).
+- The Tester must verify: spawn a container for a group whose directory exists but whose `CLAUDE.md` does not; confirm the container starts and the file exists (empty) after spawn.
