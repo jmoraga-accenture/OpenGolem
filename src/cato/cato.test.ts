@@ -34,7 +34,12 @@ import Database from 'better-sqlite3';
 // ---------------------------------------------------------------------------
 
 /** Spec-mandated socket path (Decision 15). */
-const SPEC_SOCKET_PATH = path.join(process.cwd(), 'data', 'sockets', 'cato.sock');
+const SPEC_SOCKET_PATH = path.join(
+  process.cwd(),
+  'data',
+  'sockets',
+  'cato.sock',
+);
 
 /** Unit / Contract tests use a temp socket so they don't collide with a live server. */
 const TEST_SOCKET_PATH = path.join(
@@ -94,7 +99,9 @@ interface SpecCheckResponse {
 // Helpers
 // ---------------------------------------------------------------------------
 
-function makeRequest(overrides: Partial<SpecCheckRequest> = {}): SpecCheckRequest {
+function makeRequest(
+  overrides: Partial<SpecCheckRequest> = {},
+): SpecCheckRequest {
   return {
     checkId: randomUUID(),
     action: 'AGENT_PROMPT',
@@ -111,6 +118,10 @@ function makeRequest(overrides: Partial<SpecCheckRequest> = {}): SpecCheckReques
  * Send a single newline-delimited JSON request over a Unix socket and
  * collect the full response. Returns the parsed response object.
  * Rejects after `timeoutMs`.
+ *
+ * Protocol: write the request line, then half-close the write side.
+ * Resolves as soon as a complete JSON line is received — does not wait
+ * for the server to close the connection.
  */
 function sendRequest(
   socketPath: string,
@@ -118,37 +129,58 @@ function sendRequest(
   timeoutMs = 3000,
 ): Promise<SpecCheckResponse> {
   return new Promise((resolve, reject) => {
+    let settled = false;
+    const settle = (fn: () => void) => {
+      if (!settled) {
+        settled = true;
+        clearTimeout(timer);
+        fn();
+      }
+    };
+
     const timer = setTimeout(
-      () => reject(new Error(`Cato check timed out after ${timeoutMs}ms`)),
+      () => settle(() => reject(new Error(`Cato check timed out after ${timeoutMs}ms`))),
       timeoutMs,
     );
 
     const client = net.createConnection(socketPath, () => {
-      // newline-delimited JSON — one object per line
-      client.write(JSON.stringify(req) + '\n');
+      // newline-delimited JSON — one object per line; half-close after writing
+      client.write(JSON.stringify(req) + '\n', () => {
+        client.end(); // signal end-of-request to the server
+      });
     });
 
     let buf = '';
     client.on('data', (chunk) => {
       buf += chunk.toString();
+      // Resolve as soon as we have a complete JSON line — don't wait for `end`
+      const line = buf.split('\n').find((l) => l.trim().length > 0);
+      if (line) {
+        try {
+          const parsed = JSON.parse(line) as SpecCheckResponse;
+          settle(() => resolve(parsed));
+          client.destroy();
+        } catch {
+          // incomplete / not-yet-valid JSON — wait for more data
+        }
+      }
     });
     client.on('end', () => {
-      clearTimeout(timer);
-      try {
-        // Take the first complete JSON line
+      settle(() => {
         const line = buf.split('\n').find((l) => l.trim().length > 0);
         if (!line) {
           reject(new Error('Empty response from Cato'));
           return;
         }
-        resolve(JSON.parse(line) as SpecCheckResponse);
-      } catch (e) {
-        reject(new Error(`Cato response parse error: ${e}`));
-      }
+        try {
+          resolve(JSON.parse(line) as SpecCheckResponse);
+        } catch (e) {
+          reject(new Error(`Cato response parse error: ${e}`));
+        }
+      });
     });
     client.on('error', (err) => {
-      clearTimeout(timer);
-      reject(err);
+      settle(() => reject(err));
     });
   });
 }
@@ -163,15 +195,12 @@ function sendRaw(
   timeoutMs = 2000,
 ): Promise<string> {
   return new Promise((resolve, reject) => {
-    const timer = setTimeout(
-      () => {
-        client.destroy();
-        // A non-JSON line should be discarded with no response per spec §4;
-        // timing out is the expected outcome for that case.
-        resolve('');
-      },
-      timeoutMs,
-    );
+    const timer = setTimeout(() => {
+      client.destroy();
+      // A non-JSON line should be discarded with no response per spec §4;
+      // timing out is the expected outcome for that case.
+      resolve('');
+    }, timeoutMs);
 
     const client = net.createConnection(socketPath, () => {
       client.write(rawLine + '\n');
@@ -253,7 +282,12 @@ function stubProcessRequest(raw: SpecCheckRequest): {
         recordedAt: Date.now(),
       };
       return {
-        response: { checkId: entry.checkId, allow: false, code: null, reason: 'malformed request' },
+        response: {
+          checkId: entry.checkId,
+          allow: false,
+          code: null,
+          reason: 'malformed request',
+        },
         auditEntry: entry,
       };
     }
@@ -273,7 +307,12 @@ function stubProcessRequest(raw: SpecCheckRequest): {
       recordedAt: Date.now(),
     };
     return {
-      response: { checkId: raw.checkId, allow: false, code: null, reason: 'malformed request' },
+      response: {
+        checkId: raw.checkId,
+        allow: false,
+        code: null,
+        reason: 'malformed request',
+      },
       auditEntry: entry,
     };
   }
@@ -292,7 +331,12 @@ function stubProcessRequest(raw: SpecCheckRequest): {
       recordedAt: Date.now(),
     };
     return {
-      response: { checkId: raw.checkId, allow: false, code: 'OVERSIZED_PAYLOAD', reason: 'Payload exceeds size limit' },
+      response: {
+        checkId: raw.checkId,
+        allow: false,
+        code: 'OVERSIZED_PAYLOAD',
+        reason: 'Payload exceeds size limit',
+      },
       auditEntry: entry,
     };
   }
@@ -318,7 +362,12 @@ function stubProcessRequest(raw: SpecCheckRequest): {
         recordedAt: Date.now(),
       };
       return {
-        response: { checkId: raw.checkId, allow: false, code: 'PATH_TRAVERSAL', reason: 'Prompt contains filesystem escape sequence' },
+        response: {
+          checkId: raw.checkId,
+          allow: false,
+          code: 'PATH_TRAVERSAL',
+          reason: 'Prompt contains filesystem escape sequence',
+        },
         auditEntry: entry,
       };
     }
@@ -355,7 +404,11 @@ function startStubServer(socketPath: string): {
   const state = { failNextAuditWrite: false };
 
   // Clean up stale socket
-  try { fs.unlinkSync(socketPath); } catch { /* ok */ }
+  try {
+    fs.unlinkSync(socketPath);
+  } catch {
+    /* ok */
+  }
   fs.mkdirSync(path.dirname(socketPath), { recursive: true });
 
   const server = net.createServer((socket) => {
@@ -403,7 +456,28 @@ function startStubServer(socketPath: string): {
       }
     });
 
-    socket.on('error', () => { /* swallow */ });
+    // When the client half-closes, process any remaining buffered data
+    socket.on('end', () => {
+      if (!buf.trim()) return;
+      const trimmed = buf.trim();
+      buf = '';
+      let parsed: SpecCheckRequest;
+      try {
+        parsed = JSON.parse(trimmed) as SpecCheckRequest;
+      } catch {
+        return; // Non-JSON trailing fragment — discard
+      }
+      const { response, auditEntry } = stubProcessRequest(parsed);
+      auditEntry.recordedAt = Date.now();
+      auditLog.push(auditEntry);
+      auditEntry.responseSentAt = Date.now();
+      socket.write(JSON.stringify(response) + '\n');
+      socket.end();
+    });
+
+    socket.on('error', () => {
+      /* swallow */
+    });
   });
 
   server.listen(socketPath);
@@ -413,7 +487,11 @@ function startStubServer(socketPath: string): {
 function stopStubServer(server: net.Server, socketPath: string): Promise<void> {
   return new Promise((resolve) => {
     server.close(() => {
-      try { fs.unlinkSync(socketPath); } catch { /* ok */ }
+      try {
+        fs.unlinkSync(socketPath);
+      } catch {
+        /* ok */
+      }
       resolve();
     });
   });
@@ -485,7 +563,11 @@ describe('Unit — stub detection', () => {
 
 describe('Unit — AC-1: Socket available before orchestrator starts', () => {
   it('AC-1: socket file exists immediately after server start', async () => {
-    try { fs.unlinkSync(TEST_SOCKET_PATH); } catch { /* ok */ }
+    try {
+      fs.unlinkSync(TEST_SOCKET_PATH);
+    } catch {
+      /* ok */
+    }
     const { server } = startStubServer(TEST_SOCKET_PATH);
     // Give the server one tick to bind
     await new Promise((r) => setTimeout(r, 20));
@@ -588,7 +670,10 @@ describe('Unit — AC-4: checkId echoed exactly', () => {
 
   it('AC-4: checkId in response matches request byte-for-byte (block path)', async () => {
     const checkId = randomUUID();
-    const res = await sendRequest(TEST_SOCKET_PATH, makeRequest({ checkId, payloadSize: OVERSIZED_BYTES }));
+    const res = await sendRequest(
+      TEST_SOCKET_PATH,
+      makeRequest({ checkId, payloadSize: OVERSIZED_BYTES }),
+    );
     expect(res.checkId).toBe(checkId);
   });
 
@@ -660,17 +745,26 @@ describe('Unit — AC-6: Unknown action → fail-closed', () => {
   afterEach(() => stopStubServer(server, TEST_SOCKET_PATH));
 
   it('AC-6: action "UNKNOWN_VALUE" → allow:false', async () => {
-    const res = await sendRequest(TEST_SOCKET_PATH, makeRequest({ action: 'UNKNOWN_VALUE' }));
+    const res = await sendRequest(
+      TEST_SOCKET_PATH,
+      makeRequest({ action: 'UNKNOWN_VALUE' }),
+    );
     expect(res.allow).toBe(false);
   });
 
   it('AC-6: empty string action → allow:false', async () => {
-    const res = await sendRequest(TEST_SOCKET_PATH, makeRequest({ action: '' }));
+    const res = await sendRequest(
+      TEST_SOCKET_PATH,
+      makeRequest({ action: '' }),
+    );
     expect(res.allow).toBe(false);
   });
 
   it('AC-6: action "RUN_SHELL" (not in spec) → allow:false', async () => {
-    const res = await sendRequest(TEST_SOCKET_PATH, makeRequest({ action: 'RUN_SHELL' }));
+    const res = await sendRequest(
+      TEST_SOCKET_PATH,
+      makeRequest({ action: 'RUN_SHELL' }),
+    );
     expect(res.allow).toBe(false);
   });
 });
@@ -753,7 +847,9 @@ describe('Unit — AC-8: Audit log write precedes response', () => {
 
   it('AC-8 / §3.6 audit-before-response invariant: allow:false returned when audit write fails', async () => {
     // Signal the stub to fail the next audit write
-    const { server: srv, auditLog: log } = startStubServer(TEST_SOCKET_PATH + '-fail');
+    const { server: srv, auditLog: log } = startStubServer(
+      TEST_SOCKET_PATH + '-fail',
+    );
     await new Promise((r) => setTimeout(r, 20));
 
     // Patch the server to simulate audit write failure by directly manipulating
@@ -762,7 +858,11 @@ describe('Unit — AC-8: Audit log write precedes response', () => {
 
     // Use the failNextAuditWrite flag via a custom server
     const failSocketPath = TEST_SOCKET_PATH + '-fail2';
-    try { fs.unlinkSync(failSocketPath); } catch { /* ok */ }
+    try {
+      fs.unlinkSync(failSocketPath);
+    } catch {
+      /* ok */
+    }
     fs.mkdirSync(path.dirname(failSocketPath), { recursive: true });
 
     const failAuditLog: AuditEntry[] = [];
@@ -786,10 +886,14 @@ describe('Unit — AC-8: Audit log write precedes response', () => {
               reason: 'audit_write_failed',
             };
             socket.write(JSON.stringify(failResponse) + '\n');
-          } catch { /* non-JSON, discard */ }
+          } catch {
+            /* non-JSON, discard */
+          }
         }
       });
-      socket.on('error', () => { /* swallow */ });
+      socket.on('error', () => {
+        /* swallow */
+      });
     });
     failServer.listen(failSocketPath);
     await new Promise((r) => setTimeout(r, 20));
@@ -801,10 +905,16 @@ describe('Unit — AC-8: Audit log write precedes response', () => {
       expect(res.allow).toBe(false);
       expect(res.reason).toBe('audit_write_failed');
     } finally {
-      await new Promise<void>((resolve) => failServer.close(() => {
-        try { fs.unlinkSync(failSocketPath); } catch { /* ok */ }
-        resolve();
-      }));
+      await new Promise<void>((resolve) =>
+        failServer.close(() => {
+          try {
+            fs.unlinkSync(failSocketPath);
+          } catch {
+            /* ok */
+          }
+          resolve();
+        }),
+      );
     }
   });
 });
@@ -819,7 +929,9 @@ describe('Unit — PATH_TRAVERSAL detection (Decision 17)', () => {
   afterEach(() => stopStubServer(server, TEST_SOCKET_PATH));
 
   it('PATH_TRAVERSAL: contentExcerpt with ../ → allow:false, code:PATH_TRAVERSAL', async () => {
-    const excerpt = Buffer.from('Read the file at ../../etc/passwd').toString('base64');
+    const excerpt = Buffer.from('Read the file at ../../etc/passwd').toString(
+      'base64',
+    );
     const req = makeRequest({
       action: 'AGENT_PROMPT',
       contentExcerpt: excerpt,
@@ -831,7 +943,9 @@ describe('Unit — PATH_TRAVERSAL detection (Decision 17)', () => {
   });
 
   it('PATH_TRAVERSAL: contentExcerpt with ..\\ → allow:false, code:PATH_TRAVERSAL', async () => {
-    const excerpt = Buffer.from('Open ..\\..\\windows\\system32').toString('base64');
+    const excerpt = Buffer.from('Open ..\\..\\windows\\system32').toString(
+      'base64',
+    );
     const req = makeRequest({
       action: 'AGENT_PROMPT',
       contentExcerpt: excerpt,
@@ -844,13 +958,21 @@ describe('Unit — PATH_TRAVERSAL detection (Decision 17)', () => {
 
   it('PATH_TRAVERSAL: clean content with ./ (not ../) → allow:true', async () => {
     const excerpt = Buffer.from('./config.js is fine').toString('base64');
-    const req = makeRequest({ action: 'AGENT_PROMPT', contentExcerpt: excerpt, payloadSize: 100 });
+    const req = makeRequest({
+      action: 'AGENT_PROMPT',
+      contentExcerpt: excerpt,
+      payloadSize: 100,
+    });
     const res = await sendRequest(TEST_SOCKET_PATH, req);
     expect(res.allow).toBe(true);
   });
 
   it('PATH_TRAVERSAL: null contentExcerpt with clean size → allow:true', async () => {
-    const req = makeRequest({ action: 'AGENT_PROMPT', contentExcerpt: null, payloadSize: 500 });
+    const req = makeRequest({
+      action: 'AGENT_PROMPT',
+      contentExcerpt: null,
+      payloadSize: 500,
+    });
     const res = await sendRequest(TEST_SOCKET_PATH, req);
     expect(res.allow).toBe(true);
   });
@@ -859,7 +981,10 @@ describe('Unit — PATH_TRAVERSAL detection (Decision 17)', () => {
     // If both size and traversal would fire, spec says checks are applied in order.
     // Size check is listed first in §3.1.
     const excerpt = Buffer.from('../../etc/passwd').toString('base64');
-    const req = makeRequest({ payloadSize: OVERSIZED_BYTES, contentExcerpt: excerpt });
+    const req = makeRequest({
+      payloadSize: OVERSIZED_BYTES,
+      contentExcerpt: excerpt,
+    });
     const res = await sendRequest(TEST_SOCKET_PATH, req);
     expect(res.allow).toBe(false);
     // Either OVERSIZED_PAYLOAD or PATH_TRAVERSAL is acceptable — both are valid blocks.
@@ -907,12 +1032,22 @@ describe('Contract — newline-delimited JSON protocol (AC-2, AC-4)', () => {
     const raw = await new Promise<string>((resolve, reject) => {
       const timer = setTimeout(() => reject(new Error('timeout')), 2000);
       const client = net.createConnection(TEST_SOCKET_PATH, () => {
-        client.write(JSON.stringify(req) + '\n');
+        // Half-close after writing so the server processes the line
+        client.write(JSON.stringify(req) + '\n', () => client.end());
       });
       let buf = '';
-      client.on('data', (c) => { buf += c.toString(); });
+      client.on('data', (c) => {
+        buf += c.toString();
+        // Resolve as soon as we have data — don't wait for server to close
+        const line = buf.split('\n').find((l) => l.trim().length > 0);
+        if (line) {
+          clearTimeout(timer);
+          client.destroy();
+          resolve(buf);
+        }
+      });
       client.on('end', () => { clearTimeout(timer); resolve(buf); });
-      client.on('error', reject);
+      client.on('error', (err) => { clearTimeout(timer); reject(err); });
     });
 
     const lines = raw.split('\n').filter((l) => l.trim().length > 0);
@@ -934,25 +1069,37 @@ describe('Contract — newline-delimited JSON protocol (AC-2, AC-4)', () => {
 
   it('AC-4 (contract): checkId is echoed exactly on allow response', async () => {
     const id = randomUUID();
-    const res = await sendRequest(TEST_SOCKET_PATH, makeRequest({ checkId: id }));
+    const res = await sendRequest(
+      TEST_SOCKET_PATH,
+      makeRequest({ checkId: id }),
+    );
     expect(res.checkId).toBe(id);
   });
 
   it('AC-4 (contract): checkId is echoed exactly on block response', async () => {
     const id = randomUUID();
-    const res = await sendRequest(TEST_SOCKET_PATH, makeRequest({ checkId: id, payloadSize: OVERSIZED_BYTES }));
+    const res = await sendRequest(
+      TEST_SOCKET_PATH,
+      makeRequest({ checkId: id, payloadSize: OVERSIZED_BYTES }),
+    );
     expect(res.checkId).toBe(id);
   });
 
   it('allow response has allow:true, code:null, reason:null', async () => {
-    const res = await sendRequest(TEST_SOCKET_PATH, makeRequest({ payloadSize: 512 }));
+    const res = await sendRequest(
+      TEST_SOCKET_PATH,
+      makeRequest({ payloadSize: 512 }),
+    );
     expect(res.allow).toBe(true);
     expect(res.code).toBeNull();
     expect(res.reason).toBeNull();
   });
 
   it('block response has allow:false, non-null code or non-null reason when code is known', async () => {
-    const res = await sendRequest(TEST_SOCKET_PATH, makeRequest({ payloadSize: OVERSIZED_BYTES }));
+    const res = await sendRequest(
+      TEST_SOCKET_PATH,
+      makeRequest({ payloadSize: OVERSIZED_BYTES }),
+    );
     expect(res.allow).toBe(false);
     // When a known code applies it must be present
     expect(res.code).toBe('OVERSIZED_PAYLOAD');
@@ -993,15 +1140,22 @@ describe('Contract — non-JSON line handling', () => {
       const client = net.createConnection(TEST_SOCKET_PATH, () => {
         // First line: garbage
         client.write('this is not json\n');
-        // Second line: valid request
-        client.write(JSON.stringify(req) + '\n');
+        // Second line: valid request; half-close after both lines are written
+        client.write(JSON.stringify(req) + '\n', () => client.end());
       });
       let buf = '';
-      client.on('data', (c) => { buf += c.toString(); });
+      client.on('data', (c) => {
+        buf += c.toString();
+        // Resolve as soon as we have the response for the valid request
+        const line = buf.split('\n').find((l) => l.trim().length > 0);
+        if (line) {
+          clearTimeout(timer);
+          client.destroy();
+          resolve(buf);
+        }
+      });
       client.on('end', () => { clearTimeout(timer); resolve(buf); });
-      client.on('error', reject);
-      // Close writer side after writing
-      setTimeout(() => client.end(), 200);
+      client.on('error', (err) => { clearTimeout(timer); reject(err); });
     });
 
     const lines = response.split('\n').filter((l) => l.trim().length > 0);
@@ -1022,20 +1176,29 @@ describe('Contract — AC-17: CatoRiskCode values are from the enumeration', () 
   afterEach(() => stopStubServer(server, TEST_SOCKET_PATH));
 
   it('AC-17: OVERSIZED_PAYLOAD code is in the CatoRiskCode enumeration', async () => {
-    const res = await sendRequest(TEST_SOCKET_PATH, makeRequest({ payloadSize: OVERSIZED_BYTES }));
+    const res = await sendRequest(
+      TEST_SOCKET_PATH,
+      makeRequest({ payloadSize: OVERSIZED_BYTES }),
+    );
     expect(res.code).not.toBeNull();
     expect(CATO_RISK_CODES.has(res.code!)).toBe(true);
   });
 
   it('AC-17: PATH_TRAVERSAL code is in the CatoRiskCode enumeration', async () => {
     const excerpt = Buffer.from('../../secrets').toString('base64');
-    const res = await sendRequest(TEST_SOCKET_PATH, makeRequest({ contentExcerpt: excerpt }));
+    const res = await sendRequest(
+      TEST_SOCKET_PATH,
+      makeRequest({ contentExcerpt: excerpt }),
+    );
     expect(res.code).not.toBeNull();
     expect(CATO_RISK_CODES.has(res.code!)).toBe(true);
   });
 
   it('AC-17: null code on allow response is valid (not in enumeration, but null is permitted)', async () => {
-    const res = await sendRequest(TEST_SOCKET_PATH, makeRequest({ payloadSize: 100 }));
+    const res = await sendRequest(
+      TEST_SOCKET_PATH,
+      makeRequest({ payloadSize: 100 }),
+    );
     expect(res.allow).toBe(true);
     expect(res.code).toBeNull();
   });
@@ -1088,18 +1251,24 @@ describe('Integration', () => {
     expect(SPEC_SOCKET_PATH).toMatch(/data\/sockets\/cato\.sock$/);
   });
 
-  itIntegration('AC-1 (integration): socket file exists at spec-mandated path', () => {
-    expect(fs.existsSync(SPEC_SOCKET_PATH)).toBe(true);
-  });
+  itIntegration(
+    'AC-1 (integration): socket file exists at spec-mandated path',
+    () => {
+      expect(fs.existsSync(SPEC_SOCKET_PATH)).toBe(true);
+    },
+  );
 
-  itIntegration('AC-2 (integration): allow response for AGENT_PROMPT', async () => {
-    const req = makeRequest({ action: 'AGENT_PROMPT', payloadSize: 512 });
-    const res = await sendRequest(SPEC_SOCKET_PATH, req);
-    expect(res.allow).toBe(true);
-    expect(res.checkId).toBe(req.checkId);
-    expect(res.code).toBeNull();
-    expect(res.reason).toBeNull();
-  });
+  itIntegration(
+    'AC-2 (integration): allow response for AGENT_PROMPT',
+    async () => {
+      const req = makeRequest({ action: 'AGENT_PROMPT', payloadSize: 512 });
+      const res = await sendRequest(SPEC_SOCKET_PATH, req);
+      expect(res.allow).toBe(true);
+      expect(res.checkId).toBe(req.checkId);
+      expect(res.code).toBeNull();
+      expect(res.reason).toBeNull();
+    },
+  );
 
   itIntegration('AC-3 (integration): OVERSIZED_PAYLOAD block', async () => {
     const req = makeRequest({ payloadSize: 100_001 });
@@ -1110,104 +1279,162 @@ describe('Integration', () => {
 
   itIntegration('AC-4 (integration): checkId echoed exactly', async () => {
     const id = randomUUID();
-    const res = await sendRequest(SPEC_SOCKET_PATH, makeRequest({ checkId: id }));
+    const res = await sendRequest(
+      SPEC_SOCKET_PATH,
+      makeRequest({ checkId: id }),
+    );
     expect(res.checkId).toBe(id);
   });
 
-  itIntegration('AC-5 (integration): missing required field → allow:false', async () => {
-    const req = makeRequest();
-    const badReq = { ...req } as Partial<SpecCheckRequest>;
-    delete badReq.action;
-    const res = await sendRequest(SPEC_SOCKET_PATH, badReq as SpecCheckRequest);
-    expect(res.allow).toBe(false);
-  });
+  itIntegration(
+    'AC-5 (integration): missing required field → allow:false',
+    async () => {
+      const req = makeRequest();
+      const badReq = { ...req } as Partial<SpecCheckRequest>;
+      delete badReq.action;
+      const res = await sendRequest(
+        SPEC_SOCKET_PATH,
+        badReq as SpecCheckRequest,
+      );
+      expect(res.allow).toBe(false);
+    },
+  );
 
-  itIntegration('AC-6 (integration): unknown action → allow:false', async () => {
-    const res = await sendRequest(SPEC_SOCKET_PATH, makeRequest({ action: 'UNKNOWN_VALUE' }));
-    expect(res.allow).toBe(false);
-  });
+  itIntegration(
+    'AC-6 (integration): unknown action → allow:false',
+    async () => {
+      const res = await sendRequest(
+        SPEC_SOCKET_PATH,
+        makeRequest({ action: 'UNKNOWN_VALUE' }),
+      );
+      expect(res.allow).toBe(false);
+    },
+  );
 
-  itIntegration('AC-7 (integration): cato_check row written to audit DB', async () => {
-    const auditDbPath = path.join(process.cwd(), 'data', 'audit.db');
-    if (!fs.existsSync(auditDbPath)) {
-      console.warn('Integration: audit.db not found at', auditDbPath, '— skipping AC-7 db check');
-      return;
-    }
-    const db = new Database(auditDbPath, { readonly: true });
-    const before = (db.prepare('SELECT COUNT(*) as n FROM cato_checks').get() as { n: number }).n;
+  itIntegration(
+    'AC-7 (integration): cato_check row written to audit DB',
+    async () => {
+      const auditDbPath = path.join(process.cwd(), 'data', 'audit.db');
+      if (!fs.existsSync(auditDbPath)) {
+        console.warn(
+          'Integration: audit.db not found at',
+          auditDbPath,
+          '— skipping AC-7 db check',
+        );
+        return;
+      }
+      const db = new Database(auditDbPath, { readonly: true });
+      const before = (
+        db.prepare('SELECT COUNT(*) as n FROM cato_checks').get() as {
+          n: number;
+        }
+      ).n;
 
-    const req = makeRequest({ action: 'AGENT_PROMPT', payloadSize: 256 });
-    await sendRequest(SPEC_SOCKET_PATH, req);
+      const req = makeRequest({ action: 'AGENT_PROMPT', payloadSize: 256 });
+      await sendRequest(SPEC_SOCKET_PATH, req);
 
-    const after = (db.prepare('SELECT COUNT(*) as n FROM cato_checks').get() as { n: number }).n;
-    expect(after).toBeGreaterThan(before);
+      const after = (
+        db.prepare('SELECT COUNT(*) as n FROM cato_checks').get() as {
+          n: number;
+        }
+      ).n;
+      expect(after).toBeGreaterThan(before);
 
-    const row = db
-      .prepare('SELECT * FROM cato_checks WHERE check_id = ?')
-      .get(req.checkId) as Record<string, unknown> | undefined;
-    expect(row).toBeDefined();
-    expect(row?.['check_id']).toBe(req.checkId);
-    db.close();
-  });
+      const row = db
+        .prepare('SELECT * FROM cato_checks WHERE check_id = ?')
+        .get(req.checkId) as Record<string, unknown> | undefined;
+      expect(row).toBeDefined();
+      expect(row?.['check_id']).toBe(req.checkId);
+      db.close();
+    },
+  );
 
-  itIntegration('AC-9 (integration): hansei report written atomically to inbox', async () => {
-    const inboxDir = path.join(process.cwd(), 'data', 'hansei', 'inbox');
-    // Trigger a report by writing one via the helper (simulates what Cato does)
-    const report = makeHanseiReport();
-    const reportPath = writeHanseiReport(inboxDir, report);
+  itIntegration(
+    'AC-9 (integration): hansei report written atomically to inbox',
+    async () => {
+      const inboxDir = path.join(process.cwd(), 'data', 'hansei', 'inbox');
+      // Trigger a report by writing one via the helper (simulates what Cato does)
+      const report = makeHanseiReport();
+      const reportPath = writeHanseiReport(inboxDir, report);
 
-    expect(fs.existsSync(reportPath)).toBe(true);
-    // No .tmp file left behind
-    expect(fs.existsSync(reportPath + '.tmp')).toBe(false);
+      expect(fs.existsSync(reportPath)).toBe(true);
+      // No .tmp file left behind
+      expect(fs.existsSync(reportPath + '.tmp')).toBe(false);
 
-    const content = JSON.parse(fs.readFileSync(reportPath, 'utf8'));
-    expect(content.reportId).toBeDefined();
-    expect(content.generatedAt).toBeDefined();
-    expect(content.daoScore).toBeDefined();
-    expect(content.reportVersion).toBe('1.0');
+      const content = JSON.parse(fs.readFileSync(reportPath, 'utf8'));
+      expect(content.reportId).toBeDefined();
+      expect(content.generatedAt).toBeDefined();
+      expect(content.daoScore).toBeDefined();
+      expect(content.reportVersion).toBe('1.0');
 
-    // Cleanup
-    fs.unlinkSync(reportPath);
-  });
+      // Cleanup
+      fs.unlinkSync(reportPath);
+    },
+  );
 
-  itIntegration('AC-12 (integration): scheduled audit does not delay inline checks', async () => {
-    // Issue an inline check and verify it returns within the latency bound
-    // regardless of any background audit activity.
-    const req = makeRequest({ action: 'CREDENTIAL_REQUEST', payloadSize: 50 });
-    const start = Date.now();
-    const res = await sendRequest(SPEC_SOCKET_PATH, req, 2000);
-    const elapsed = Date.now() - start;
-    expect(typeof res.allow).toBe('boolean');
-    expect(elapsed).toBeLessThan(2000);
-  });
+  itIntegration(
+    'AC-12 (integration): scheduled audit does not delay inline checks',
+    async () => {
+      // Issue an inline check and verify it returns within the latency bound
+      // regardless of any background audit activity.
+      const req = makeRequest({
+        action: 'CREDENTIAL_REQUEST',
+        payloadSize: 50,
+      });
+      const start = Date.now();
+      const res = await sendRequest(SPEC_SOCKET_PATH, req, 2000);
+      const elapsed = Date.now() - start;
+      expect(typeof res.allow).toBe('boolean');
+      expect(elapsed).toBeLessThan(2000);
+    },
+  );
 
-  itIntegration('AC-13 (integration): Cato does not initiate outbound connections', () => {
-    // Structural / observational test. In CI this can be enforced with network
-    // namespace isolation. Here we assert the design constraint as documentation.
-    // A proper implementation would use strace or /proc/net inspection.
-    // This test passes by convention unless a violation is observed externally.
-    expect(true).toBe(true); // Placeholder — enforce via network trace in CI
-  });
+  itIntegration(
+    'AC-13 (integration): Cato does not initiate outbound connections',
+    () => {
+      // Structural / observational test. In CI this can be enforced with network
+      // namespace isolation. Here we assert the design constraint as documentation.
+      // A proper implementation would use strace or /proc/net inspection.
+      // This test passes by convention unless a violation is observed externally.
+      expect(true).toBe(true); // Placeholder — enforce via network trace in CI
+    },
+  );
 
-  itIntegration('AC-14 (integration): audit log contains no UPDATE or DELETE', () => {
-    const auditDbPath = path.join(process.cwd(), 'data', 'audit.db');
-    if (!fs.existsSync(auditDbPath)) return;
-    const db = new Database(auditDbPath, { readonly: true });
-    // SQLite WAL / journal inspection: row count should be monotonically increasing.
-    // Read total row count before and after several checks.
-    const countBefore = (db.prepare('SELECT COUNT(*) as n FROM cato_checks').get() as { n: number }).n;
-    // We don't issue mutations here — just assert the table exists and is readable
-    expect(countBefore).toBeGreaterThanOrEqual(0);
-    db.close();
-  });
+  itIntegration(
+    'AC-14 (integration): audit log contains no UPDATE or DELETE',
+    () => {
+      const auditDbPath = path.join(process.cwd(), 'data', 'audit.db');
+      if (!fs.existsSync(auditDbPath)) return;
+      const db = new Database(auditDbPath, { readonly: true });
+      // SQLite WAL / journal inspection: row count should be monotonically increasing.
+      // Read total row count before and after several checks.
+      const countBefore = (
+        db.prepare('SELECT COUNT(*) as n FROM cato_checks').get() as {
+          n: number;
+        }
+      ).n;
+      // We don't issue mutations here — just assert the table exists and is readable
+      expect(countBefore).toBeGreaterThanOrEqual(0);
+      db.close();
+    },
+  );
 
-  itIntegration('PATH_TRAVERSAL (integration): contentExcerpt with ../ → allow:false', async () => {
-    const excerpt = Buffer.from('Attempting ../../etc/shadow').toString('base64');
-    const req = makeRequest({ action: 'AGENT_PROMPT', contentExcerpt: excerpt, payloadSize: 400 });
-    const res = await sendRequest(SPEC_SOCKET_PATH, req);
-    expect(res.allow).toBe(false);
-    expect(res.code).toBe('PATH_TRAVERSAL');
-  });
+  itIntegration(
+    'PATH_TRAVERSAL (integration): contentExcerpt with ../ → allow:false',
+    async () => {
+      const excerpt = Buffer.from('Attempting ../../etc/shadow').toString(
+        'base64',
+      );
+      const req = makeRequest({
+        action: 'AGENT_PROMPT',
+        contentExcerpt: excerpt,
+        payloadSize: 400,
+      });
+      const res = await sendRequest(SPEC_SOCKET_PATH, req);
+      expect(res.allow).toBe(false);
+      expect(res.code).toBe('PATH_TRAVERSAL');
+    },
+  );
 });
 
 // ===========================================================================
@@ -1216,7 +1443,10 @@ describe('Integration', () => {
 // ===========================================================================
 
 describe('Scheduled audit — hansei report schema (AC-9, AC-10, AC-11)', () => {
-  const testInboxDir = path.join(os.tmpdir(), `cato-hansei-test-${process.pid}`);
+  const testInboxDir = path.join(
+    os.tmpdir(),
+    `cato-hansei-test-${process.pid}`,
+  );
 
   beforeEach(() => {
     fs.mkdirSync(testInboxDir, { recursive: true });
@@ -1262,7 +1492,10 @@ describe('Scheduled audit — hansei report schema (AC-9, AC-10, AC-11)', () => 
   it('AC-9: report schema contains all required top-level keys', () => {
     const report = makeHanseiReport();
     const reportPath = writeHanseiReport(testInboxDir, report);
-    const content = JSON.parse(fs.readFileSync(reportPath, 'utf8')) as Record<string, unknown>;
+    const content = JSON.parse(fs.readFileSync(reportPath, 'utf8')) as Record<
+      string,
+      unknown
+    >;
     expect(content['reportId']).toBeDefined();
     expect(content['generatedAt']).toBeDefined();
     expect(content['periodStart']).toBeDefined();
@@ -1296,7 +1529,9 @@ describe('Scheduled audit — hansei report schema (AC-9, AC-10, AC-11)', () => 
     ).run(runId, reportId, 'sha256:' + 'f'.repeat(64), Date.now());
 
     const row = db
-      .prepare(`SELECT * FROM audit_events WHERE event_type = 'hansei_report_ready' AND report_id = ?`)
+      .prepare(
+        `SELECT * FROM audit_events WHERE event_type = 'hansei_report_ready' AND report_id = ?`,
+      )
       .get(reportId) as Record<string, unknown> | undefined;
 
     expect(row).toBeDefined();
@@ -1318,13 +1553,17 @@ describe('Scheduled audit — hansei report schema (AC-9, AC-10, AC-11)', () => 
       )
     `);
 
-    const realPath = '/home/jim/assistants/OpenGolem/data/hansei/inbox/hansei-xxx.json';
+    const realPath =
+      '/home/jim/assistants/OpenGolem/data/hansei/inbox/hansei-xxx.json';
     const pathHash = 'sha256:' + Buffer.from(realPath).toString('hex');
-    db.prepare(`INSERT INTO audit_events VALUES ('hansei_report_ready', ?, ?)`)
-      .run(pathHash, Date.now());
+    db.prepare(
+      `INSERT INTO audit_events VALUES ('hansei_report_ready', ?, ?)`,
+    ).run(pathHash, Date.now());
 
     const row = db
-      .prepare(`SELECT report_path_hash FROM audit_events WHERE event_type = 'hansei_report_ready'`)
+      .prepare(
+        `SELECT report_path_hash FROM audit_events WHERE event_type = 'hansei_report_ready'`,
+      )
       .get() as { report_path_hash: string };
 
     // The stored value must not contain filesystem separators
@@ -1352,7 +1591,9 @@ describe('Scheduled audit — hansei report schema (AC-9, AC-10, AC-11)', () => 
     const content = JSON.parse(fs.readFileSync(reportPath, 'utf8')) as {
       daoScore: Record<string, unknown>;
     };
-    expect(typeof content.daoScore['security_failures_per_call']).toBe('number');
+    expect(typeof content.daoScore['security_failures_per_call']).toBe(
+      'number',
+    );
     expect(typeof content.daoScore['data_leaks_per_call']).toBe('number');
     expect(typeof content.daoScore['behavioral_change_rate']).toBe('number');
   });
@@ -1451,21 +1692,28 @@ describe('AC-14: Audit log is INSERT-only — no UPDATE or DELETE', () => {
         ts INTEGER NOT NULL
       )
     `);
-    db.prepare(`INSERT INTO cato_checks (check_id, action, allow, ts) VALUES (?, ?, ?, ?)`)
-      .run(randomUUID(), 'AGENT_PROMPT', 1, Date.now());
+    db.prepare(
+      `INSERT INTO cato_checks (check_id, action, allow, ts) VALUES (?, ?, ?, ?)`,
+    ).run(randomUUID(), 'AGENT_PROMPT', 1, Date.now());
 
-    const before = (db.prepare('SELECT COUNT(*) as n FROM cato_checks').get() as { n: number }).n;
+    const before = (
+      db.prepare('SELECT COUNT(*) as n FROM cato_checks').get() as { n: number }
+    ).n;
 
     // Simulate what Cato must NOT do — an UPDATE
     db.prepare(`UPDATE cato_checks SET allow = 0`).run();
 
     // We can detect a mutation occurred
-    const mutated = db.prepare('SELECT allow FROM cato_checks').get() as { allow: number };
+    const mutated = db.prepare('SELECT allow FROM cato_checks').get() as {
+      allow: number;
+    };
     expect(mutated.allow).toBe(0); // proves UPDATE worked — which Cato must never do
 
     // The test asserts: if Cato were audited and a row was found with changed allow,
     // that would be a violation. Row count must be monotonically non-decreasing.
-    const after = (db.prepare('SELECT COUNT(*) as n FROM cato_checks').get() as { n: number }).n;
+    const after = (
+      db.prepare('SELECT COUNT(*) as n FROM cato_checks').get() as { n: number }
+    ).n;
     expect(after).toBeGreaterThanOrEqual(before); // row count didn't decrease
     db.close();
   });
@@ -1486,10 +1734,30 @@ describe('AC-14: Audit log is INSERT-only — no UPDATE or DELETE', () => {
     // Simulate 5 successive Cato inline checks via INSERT-only
     const events = [
       { checkId: randomUUID(), action: 'AGENT_PROMPT', allow: 1, code: null },
-      { checkId: randomUUID(), action: 'FILESYSTEM_WRITE', allow: 1, code: null },
-      { checkId: randomUUID(), action: 'CREDENTIAL_REQUEST', allow: 0, code: 'OVERSIZED_PAYLOAD' },
-      { checkId: randomUUID(), action: 'MEMORY_WRITE', allow: 0, code: 'PATH_TRAVERSAL' },
-      { checkId: randomUUID(), action: 'OUTBOUND_API_CALL', allow: 1, code: null },
+      {
+        checkId: randomUUID(),
+        action: 'FILESYSTEM_WRITE',
+        allow: 1,
+        code: null,
+      },
+      {
+        checkId: randomUUID(),
+        action: 'CREDENTIAL_REQUEST',
+        allow: 0,
+        code: 'OVERSIZED_PAYLOAD',
+      },
+      {
+        checkId: randomUUID(),
+        action: 'MEMORY_WRITE',
+        allow: 0,
+        code: 'PATH_TRAVERSAL',
+      },
+      {
+        checkId: randomUUID(),
+        action: 'OUTBOUND_API_CALL',
+        allow: 1,
+        code: null,
+      },
     ];
 
     const stmt = db.prepare(
@@ -1498,7 +1766,11 @@ describe('AC-14: Audit log is INSERT-only — no UPDATE or DELETE', () => {
     let prevCount = 0;
     for (const e of events) {
       stmt.run(e.checkId, e.action, e.allow ? 1 : 0, e.code, Date.now());
-      const count = (db.prepare('SELECT COUNT(*) as n FROM cato_checks').get() as { n: number }).n;
+      const count = (
+        db.prepare('SELECT COUNT(*) as n FROM cato_checks').get() as {
+          n: number;
+        }
+      ).n;
       expect(count).toBeGreaterThan(prevCount);
       prevCount = count;
     }
