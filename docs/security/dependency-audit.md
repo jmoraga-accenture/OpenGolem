@@ -79,7 +79,7 @@ The `^1.39.3` range (not an exact pin) means CI will resolve the latest 1.x rele
 
 **Verdict:** **MEDIUM risk.** Well-maintained library with a clean transitive graph. The primary concerns are: (1) in-process TD-ORCHESTRATOR privilege per F-4; (2) the `^` version range means auto-update on install with no human review gate; (3) `node-fetch` v2 maintenance-mode dependency. Risk is bounded by the fact that Telegram only carries inbound message content (not credentials) and that grammy has a strong maintenance track record.
 
-**Recommended action:** Consider pinning grammy to an exact version (or a lockfile-enforced range) to prevent automatic minor/patch upgrades without a deliberate review step. Monitor `node-fetch` v2 for security advisories and evaluate migration to grammy's native fetch support (grammy v2 and later support Node.js native fetch, eliminating the `node-fetch` dependency).
+**Recommended action:** ~~Consider pinning grammy to an exact version~~ **Done — `package.json` pinned to `1.41.1` (exact).** Monitor `node-fetch` v2 for security advisories and evaluate migration to grammy's native fetch support when upgrading (grammy v2+ supports Node.js native fetch, eliminating the `node-fetch` dependency). Future grammy updates follow Class B/C trigger policy (§2.5).
 
 ---
 
@@ -116,7 +116,7 @@ Development dependencies run in CI pipelines and on developer machines. They do 
 |---------|-----------|-----------------|--------------|
 | `better-sqlite3` | MEDIUM | Native binary download; highest-privilege write surface (audit log) | TD-ORCHESTRATOR |
 | `cron-parser` | LOW | None significant | TD-ORCHESTRATOR |
-| `grammy` | MEDIUM | In-process TD-ORCHESTRATOR privilege; `^` version range; `node-fetch` v2 | TD-ORCHESTRATOR |
+| `grammy` | MEDIUM | In-process TD-ORCHESTRATOR privilege; `node-fetch` v2 (exact pin applied — §2.5) | TD-ORCHESTRATOR |
 | Baileys | N/A | **Absent from host manifest** — correctly relegated to optional skill | — |
 | @anthropic-ai/* | N/A | **Absent from host manifest** — correctly confined to TD-CONTAINER | — |
 
@@ -163,7 +163,24 @@ All CI pipelines for the OpenGolem host-side codebase must enforce the following
 
 **Manual audit on dependency addition or upgrade:** Any PR that adds or upgrades a production dependency must include evidence of a manual review of the new package's transitive graph (a brief comment in the PR description is sufficient for a single-developer project). This is not automated — it is a process obligation documented here.
 
-### 2.5 Escalation Path for Unupgradeable High-Severity CVEs
+### 2.5 Dependency Update Trigger Policy
+
+Not all updates are equal. Updating too eagerly introduces supply-chain risk (a compromised minor release fetched automatically); updating too conservatively accumulates CVE exposure. The policy below distinguishes three update classes and applies different triggers and review requirements to each.
+
+**Class A — Security-triggered (mandatory):** A known CVE at HIGH or CRITICAL severity affecting OpenGolem's usage of a production dependency. Mandatory update within 72 hours of disclosure. The PR must pass `npm audit --audit-level=high` and include a comment assessing exploitability in the OpenGolem deployment context.
+
+**Class B — Patch-version update (on-demand, not scheduled):** A new patch release of a pinned dependency with no CVE trigger. Permitted but not automatic.
+- `cron-parser`: quarterly review cadence is sufficient.
+- `grammy`: on-demand only. Because grammy runs in TD-ORCHESTRATOR and handles all user message content before any Call Inspector filtering, a compromised minor release would be fetched at the next lockfile regeneration. No automatic patch updates.
+- `better-sqlite3`: on-demand only, see binary verification requirement below.
+
+**Class C — Minor or major version bump (named-approver sign-off required):** Any update that moves a major or minor version number. Requires Jim sign-off as named approver. The PR description must document: what changed in the transitive graph, any new `postinstall`/`preinstall` scripts, and for `better-sqlite3`, whether the binary download mechanism changed.
+
+**72-hour minimum release age:** No production dependency is updated to a version published within the previous 72 hours, absent a confirmed CVE in the current version. This quarantine window gives the npm community time to detect and report compromised releases before they are adopted. The September 2025 "Shai-Hulud" npm supply-chain attack (19 packages, 2.6B weekly downloads) would have been prevented by this control combined with lockfile pinning.
+
+**`better-sqlite3` binary verification step:** Any version bump of `better-sqlite3` requires a manual check that the prebuilt binary SHA-256 published on the GitHub releases page matches what `prebuild-install` fetches during `npm ci`. The `better-sqlite3` lockfile entry's integrity hash covers the npm package tarball — it does not cover the prebuilt `.node` binary downloaded by the `postinstall` script. This binary verification is a process obligation logged in the PR. Until an automated hash-verification step is added to CI, this is a human gate on every `better-sqlite3` upgrade.
+
+### 2.6 Escalation Path for Unupgradeable High-Severity CVEs
 
 A high-severity CVE that cannot be immediately patched (because no fixed version of the dependency exists, or because upgrading introduces a breaking change) follows this escalation path:
 
@@ -180,6 +197,8 @@ A high-severity CVE that cannot be immediately patched (because no fixed version
 4. **Upstream escalation:** If the vulnerable package has no maintained alternative and the CVE is high-consequence, the finding is escalated to Jim for a risk-acceptance decision. A risk-accepted CVE must be documented in `DECISIONS.md` as an explicit ADR. This is not a permanent suppression — it is a time-bounded decision with a review trigger (the upstream package releasing a fix, or a Phase 2 replacement being implemented).
 
 5. **Phase 2 dependency elimination:** For any CVE in a package that is on the Phase 2 elimination list (i.e., a package that will be replaced by a Rust equivalent), the risk-acceptance period is bounded by the Phase 2 milestone at which the package is retired.
+
+Note: the 72-hour response window for HIGH/CRITICAL CVEs (Class A updates per §2.5) is the same window used for mandatory container base image refreshes on security findings (supply-chain-policy.md §3.4). Both are calibrated to the same threat cadence.
 
 ---
 
