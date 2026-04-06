@@ -724,3 +724,26 @@ Findings are closed when the corresponding ADR is produced and the relevant spec
 - Deployment documentation must include a "Phase 1 MCP limitation" notice before any MCP skill is published.
 - The dashboard skill (Stream C sub-item) does not declare MCP servers and is not affected.
 - Phase 2 scope must include permission tier enforcement as a named deliverable, not an open item.
+
+---
+
+## Decision 30: Default Channel Scope — TUI and Telegram Only for v1.0 (April 2026)
+
+**Question:** The channel-adapters spec covers four channels (TUI, Telegram, Teams, WhatsApp). Which are the default channels for v1.0, and which are optional add-ons?
+
+**Decision:** The v1.0 default channel set is **TUI and Telegram only**.
+
+- **TUI** — zero credentials, zero registration, works out of the box. Always the base default.
+- **Telegram** — two-step registration (BotFather token, no phone number, no business account). Lowest friction external channel. Shipped and enabled with `OPENGOLEM_CHANNELS=tui,telegram`.
+
+**Teams and WhatsApp are supported by the channel-adapters spec but are not v1.0 defaults:**
+- **Teams** requires Azure Bot Framework registration, an Azure tenant, a Bot Service resource, and ngrok or a public HTTPS endpoint. The registration complexity places it outside the "operational in under 10 minutes" goal for the target user spectrum.
+- **WhatsApp** via Baileys requires either a dedicated phone number or linking to an existing WhatsApp account — a registration process that is materially more complex than Telegram's BotFather flow and carries risk of account suspension under Meta's terms of service.
+
+Teams and WhatsApp remain in the channel-adapters spec as optional skills with `apply_permission: admin`. They are not removed from scope; they are not defaults.
+
+**Implications:**
+- ECOSYSTEM.md comparison table updated: OpenGolem channels → "TUI, Telegram (Teams + WhatsApp as optional skills)".
+- The v0.1 code default (`OPENGOLEM_CHANNELS ?? 'tui'`) is correct and unchanged. `tui,telegram` is the recommended two-channel configuration documented in `.env.example`.
+- Slack, Discord, Gmail stubs in `src/channels/index.ts` are vestigial (NanoClaw lineage) and must be removed when Stream F (Channel Adapters) is implemented.
+- Channel-adapters spec covers all four channels as specified capabilities. No spec change required.

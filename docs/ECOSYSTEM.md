@@ -7,9 +7,38 @@
 
 OpenGolem is part of a 2026 wave of "Agentic AI Assistants" — minimalist, self-hosted software that allows AI models (like Claude) to live inside chat apps (WhatsApp, Telegram, Discord, Teams) with the power to execute code, manage files, and perform tasks.
 
-The ecosystem originates with **OpenClaw**, a large, full-featured reference implementation. **NanoClaw** and **MicroClaw** were created as reactions to OpenClaw's complexity, each focusing on reducing the surface area while increasing security.
+The ecosystem originates with **OpenClaw**, a large, full-featured Node.js reference implementation created by Peter Steinberger in November 2025. It became one of the fastest-growing open-source projects in GitHub history (247k+ stars, 47k+ forks by March 2026). **NanoClaw** and **MicroClaw** were created as reactions to OpenClaw's complexity, each focusing on reducing surface area while increasing security. **PicoClaw** went further still — a Go binary targeting sub-10MB RAM on $10 hardware.
 
-OpenGolem draws architectural DNA from both NanoClaw and MicroClaw, but is not a fork of either. It adds a security layer — the Token Broker and Call Inspector — that neither project has.
+OpenGolem draws architectural DNA from both NanoClaw and MicroClaw, but is not a fork of either. It adds a security layer — the Token Broker and Call Inspector — that none of the other projects have.
+
+---
+
+## OpenClaw
+
+**Repository:** [openclaw/openclaw](https://github.com/openclaw/openclaw)
+**Language:** Node.js
+**Author:** Peter Steinberger (PSPDFKit founder)
+**License:** MIT
+**Stars:** ~247k (March 2026) — one of the fastest-growing open-source projects in GitHub history
+
+### Philosophy
+
+The reference implementation. Full-featured, no surface area compromises. Launched November 2025 as a single developer's experiment; went viral and spawned the entire ecosystem. Runs as a long-running Node.js service that executes real-world tasks — shell commands, browser automation, file management, calendar, email — via an LLM.
+
+### Architecture
+
+- Long-running Node.js service
+- "Skills" plugin system for extensibility
+- Direct LLM calls (no container isolation)
+- No credential mediation model
+
+### Channels
+
+22+ messaging platforms including WhatsApp, Telegram, Slack, Discord, Signal, iMessage, WeChat, Teams, Matrix, and others. Channel breadth is a design goal.
+
+### What OpenClaw Does Not Provide
+
+No container isolation, no credential mediation, no call inspection, no safety/governance layer. These gaps are what NanoClaw, MicroClaw, and OpenGolem each address in different ways.
 
 ---
 
@@ -112,18 +141,46 @@ Built-in React+Vite UI embedded in the binary, served at `127.0.0.1:10961`. Open
 
 ---
 
+## PicoClaw
+
+**Repository:** [sipeed/picoclaw](https://github.com/sipeed/picoclaw)
+**Language:** Go
+**License:** MIT
+**Stars:** ~12k in first week (launched February 9, 2026)
+
+### Philosophy
+
+"Zero overhead, anywhere." A single self-contained Go binary — no runtime, no VM, no package manager. Targets sub-10MB RAM and sub-1-second startup. Designed to run on $10 hardware: RISC-V, ARM64, and x86. Achieved roughly 99% memory reduction versus OpenClaw. Architecture was 95% AI-generated through self-bootstrapping with human-in-the-loop refinement.
+
+### Architecture
+
+- Single Go binary, zero runtime dependencies
+- Provider-agnostic LLM layer
+- Gateway component model for channel integrations
+
+### Channels
+
+Telegram, Discord (via gateway components).
+
+### What OpenGolem Takes from PicoClaw
+
+Nothing directly — PicoClaw post-dates OpenGolem's core design decisions. But it validates the Phase 2 Rust rewrite motivation: a compiled binary with a minimal dependency graph is a structurally different security posture than a Node.js process with a large npm tree.
+
+---
+
 ## Comparison
 
-| Feature | NanoClaw | MicroClaw | OpenGolem |
-|---|---|---|---|
-| Language | TypeScript | Rust | Rust (Phase 2); TypeScript fork (Phase 1) |
-| Agent runtime | Claude Agent SDK in containers | Own agentic loop | Claude Agent SDK in containers (Phase 1) |
-| Credential model | OneCLI external proxy | env vars / config | Token Broker + backends (`.env` / Bitwarden / OneCLI) |
-| Channels | Skills-based (not in core) | Built-in adapters | TUI, Teams, Telegram, WhatsApp |
-| Memory | Per-group CLAUDE.md | AGENTS.md 3-tier + SQLite | CLAUDE.md + semantic graph (SQLite+vec) |
-| Config model | Fork-and-own, no config files | YAML config file | Fork-and-own, no config files |
-| Web UI | None | Built-in at :10961 | None (TUI only) |
-| Safety/Security agents | None | None | First-class infrastructure |
-| Governance | None | SOUL.md (optional) | SOUL.md + PSYCHE.md + dao_score |
-| Call inspection | None (OneCLI rate limits only) | path_guard for file tools | Full Call Inspector (5 checks + audit log) |
-| Security modes | None | `high_risk_tool_user_confirmation` flag | Golem Guard / Supervised / Power |
+| Feature | OpenClaw | NanoClaw | MicroClaw | PicoClaw | OpenGolem |
+|---|---|---|---|---|---|
+| Language | Node.js | TypeScript | Rust | Go | TypeScript → Rust (Phase 2) |
+| Agent runtime | Direct LLM calls | Claude Agent SDK in containers | Own agentic loop | Provider-agnostic | Claude Agent SDK in containers (Phase 1) |
+| Credential model | None | OneCLI external proxy | env vars / config | Config | Token Broker + backends (`.env` / Bitwarden / OneCLI) |
+| Channels | 22+ (WhatsApp, Telegram, Slack, Discord, Signal, iMessage, WeChat, Teams, Matrix…) | WhatsApp, Telegram, Slack, Discord, Gmail (skills-based) | Telegram, Discord, Slack, Feishu/Lark, Matrix, Web UI, WhatsApp, IRC | Telegram, Discord | **TUI, Telegram** (Teams + WhatsApp as optional skills) |
+| Memory | None specified | Per-group CLAUDE.md | AGENTS.md 3-tier + SQLite | Minimal | CLAUDE.md + semantic graph (SQLite+vec) |
+| Config model | Skills plugin | Fork-and-own, no config files | YAML config file | Single binary | Fork-and-own, no config files |
+| Web UI | None | None | Built-in at :10961 | None | None (TUI only) |
+| Container isolation | None | Yes (one per group) | Optional Docker | None | Yes (one per group) |
+| Safety/Security agents | None | None | None | None | First-class infrastructure |
+| Governance | None | None | SOUL.md (optional) | None | SOUL.md + PSYCHE.md + dao_score |
+| Call inspection | None | None (OneCLI rate limits only) | path_guard for file tools | None | Full Call Inspector (5 checks + audit log) |
+| Security modes | None | None | `high_risk_tool_user_confirmation` flag | None | Golem Guard / Supervised / Power |
