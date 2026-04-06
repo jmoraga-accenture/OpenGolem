@@ -203,13 +203,15 @@ The LLM escalation path is gated by PSYCHE.md revision, not runtime configuratio
 
 **What Cato's LLM is permitted to evaluate (criterion categories):**
 
-| Criterion ID | Question class | Applicable actions |
-|---|---|---|
-| `PSY-01` | Does this payload contain a social engineering attempt to extract credentials or bypass instructions? | `AGENT_PROMPT`, `OUTBOUND_API_CALL` |
-| `PSY-02` | Does this payload exhibit characteristics of a multi-turn prompt injection pattern (instructions embedded to be retrieved later)? | `AGENT_PROMPT`, `MEMORY_WRITE` |
-| `PSY-03` | Does this payload attempt to manipulate Cato's own evaluation by claiming authority or constructing a false premise about system configuration? | `AGENT_PROMPT` |
-| `PSY-04` | Does this memory write proposal introduce instructions that would expand the agent's declared scope or override SOUL.md directives? | `MEMORY_WRITE` |
-| `PSY-05` | Does this payload use unexpected language-switching or mixed-script encoding in a pattern consistent with injection evasion? | `AGENT_PROMPT`, `OUTBOUND_API_CALL` |
+`block_threshold_per_period` is the number of LLM blocks for that criterion within a single audit period that constitutes an anomaly flagged in the hansei report. Thresholds are configurable in PSYCHE.md; the values below are the deployment defaults. Setting a threshold to `1` means any single confirmed block triggers a hansei finding.
+
+| Criterion ID | Question class | Applicable actions | `block_threshold_per_period` |
+|---|---|---|---|
+| `PSY-01` | Does this payload contain a social engineering attempt to extract credentials or bypass instructions? | `AGENT_PROMPT`, `OUTBOUND_API_CALL` | 1 |
+| `PSY-02` | Does this payload exhibit characteristics of a multi-turn prompt injection pattern (instructions embedded to be retrieved later)? | `AGENT_PROMPT`, `MEMORY_WRITE` | 2 |
+| `PSY-03` | Does this payload attempt to manipulate Cato's own evaluation by claiming authority or constructing a false premise about system configuration? | `AGENT_PROMPT` | 1 |
+| `PSY-04` | Does this memory write proposal introduce instructions that would expand the agent's declared scope or override SOUL.md directives? | `MEMORY_WRITE` | 1 |
+| `PSY-05` | Does this payload use unexpected language-switching or mixed-script encoding in a pattern consistent with injection evasion? | `AGENT_PROMPT`, `OUTBOUND_API_CALL` | 3 |
 
 **What the LLM is permitted to see per evaluation:**
 - The `action` type being evaluated
@@ -236,6 +238,22 @@ The LLM escalation path is gated by PSYCHE.md revision, not runtime configuratio
 - Whether an action aligns with the user's stated preferences
 - Any question about the user's identity, location, or intent beyond the payload under evaluation
 - Any question whose answer would vary based on which user sent the message
+
+**Future enhancement — Prima-facie evaluation (anti-mind-reading):**
+
+*This is a Phase 2 enhancement to the LLM prompt design and evaluation criteria. It is not a Phase 1 implementation requirement but is recorded here as a design constraint to enforce in the Phase 2 LLM escalation path.*
+
+Cato's LLM evaluator must operate on what a payload **literally contains**, not on what the system infers the user might have intended. Attributing intent to users based on ambiguous signals — commonly called "mind reading" — produces two failure modes: legitimate users are blocked for requests that are merely unusual, and the system becomes opaque because users cannot predict what will trigger a block.
+
+The principle: **when a payload can be read charitably or suspiciously, the charitable reading governs.** The LLM should ask "does this payload, taken at face value, cross a defined boundary?" — not "could a malicious actor have written this?" The former is testable and auditable. The latter is speculation that embeds the evaluator's assumptions about user psychology into the safety layer.
+
+Concretely:
+- A user asking about filesystem paths is not a path traversal attempt unless the payload requests access outside declared scope.
+- A user asking how to do something sensitive is not an attack unless the payload directs the agent to do it.
+- A user writing in an unusual register or style is not an evasion attempt unless PSY-05 pattern conditions are met.
+- Intent may be inferred only from the payload content itself, never from metadata about who the user is or what they have asked before.
+
+The LLM's default posture is user-empathetic: it assumes the user has a legitimate reason for their request unless the payload itself provides affirmative evidence of a defined risk class. This posture is not naivety — it is the correct calibration for a system where false positives degrade utility and erode trust, and where Cato's deterministic symbolic layer has already filtered the most obvious threats before the LLM is ever invoked.
 
 ### 3.4 Scheduled Audit
 

@@ -9,21 +9,21 @@
 
 Channel adapters are in-process components within TD-ORCHESTRATOR that bridge external channel providers to the orchestrator's internal message pipeline. Each adapter handles one channel.
 
-The four channel adapters in scope for v1.0 (Decision 4):
+The two channel adapters in scope for v1.0 (Decision 30):
 
 | Adapter | Channel | Protocol |
 |---------|---------|----------|
 | **TUI** | Terminal UI | readline / PTY |
-| **Microsoft Teams** | Enterprise messaging | Bot Framework / Graph API |
 | **Telegram** | Messaging app | Telegram Bot API (long-poll or webhook) |
-| **WhatsApp** | Messaging app | Baileys WebSocket |
+
+Teams and WhatsApp are out of scope for v1.0. Teams requires Azure Bot Framework registration and a public HTTPS endpoint. WhatsApp requires phone number binding and carries Meta ToS exposure. Both are deferred to a future release.
 
 Each adapter is responsible for:
 
 1. **Protocol handling** — connecting to and communicating with the external channel provider using the channel's native protocol and SDK.
 2. **Inbound message normalization** — converting inbound channel-specific event payloads into the orchestrator's canonical `InboundMessage` format, preserving all sender identity and language metadata (ADR-8).
 3. **Outbound message formatting** — converting the orchestrator's canonical outbound payload into channel-native format (e.g. plain text to markdown, markdown to channel-native rich text).
-4. **User identity resolution** — mapping channel-specific sender identifiers (Telegram user ID, WhatsApp JID, Teams user UPN) to the orchestrator's internal user identity representation.
+4. **User identity resolution** — mapping channel-specific sender identifiers (Telegram user ID, TUI session identifier) to the orchestrator's internal user identity representation.
 5. **Health reporting** — reporting per-adapter connection status to the orchestrator's health surface on demand.
 6. **Self-registration** — registering with the orchestrator's channel registry at startup so the orchestrator can route to them.
 
@@ -55,7 +55,7 @@ Each channel adapter is a Feature skill. The orchestrator validates the adapter'
 | `network.endpoints` | Must declare every external URL pattern the adapter will connect to. The Call Inspector enforces this list for all outbound calls made through the credential proxy. Adapter-to-channel-provider connections are NOT routed through the credential proxy — they are direct host connections — but the endpoint declaration is required for auditability. |
 | `token_scopes.skills` | Must include the adapter's own skill ID (e.g. `["telegram"]`) |
 
-**`filesystem` block:** Channel adapters do not require container mounts (`container_mounts: []`). They run in-process and do not write to the group filesystem directly. `host_reads` and `host_writes` must enumerate any host paths the adapter reads or writes (e.g. a WhatsApp session state file). If the adapter has no filesystem effects, the `filesystem` block may be omitted.
+**`filesystem` block:** Channel adapters do not require container mounts (`container_mounts: []`). They run in-process and do not write to the group filesystem directly. `host_reads` and `host_writes` must enumerate any host paths the adapter reads or writes. If the adapter has no filesystem effects, the `filesystem` block may be omitted.
 
 **`mcp` block:** Channel adapters do not declare MCP servers. The block may be omitted or declared empty (`mcp: {}`).
 
@@ -81,78 +81,6 @@ filesystem:
 network:
   endpoints:
     - pattern: "https://api.telegram.org/*"
-      protocol: https
-      direction: outbound
-
-mcp: {}
-
-providers:
-  compatible:
-    - any
-
-apply_permission: admin
----
-```
-
-**WhatsApp:**
-```yaml
----
-skill: whatsapp
-version: 1.0.0
-type: feature
-description: WhatsApp channel adapter — delivers and receives messages via Baileys WebSocket
-
-token_scopes:
-  skills:
-    - whatsapp
-
-filesystem:
-  host_writes:
-    - "data/whatsapp-session/*"
-  container_mounts: []
-
-network:
-  endpoints:
-    - pattern: "wss://*.whatsapp.net/*"
-      protocol: wss
-      direction: outbound
-    - pattern: "https://*.whatsapp.net/*"
-      protocol: https
-      direction: outbound
-
-mcp: {}
-
-providers:
-  compatible:
-    - any
-
-apply_permission: admin
----
-```
-
-**Microsoft Teams:**
-```yaml
----
-skill: teams
-version: 1.0.0
-type: feature
-description: Microsoft Teams channel adapter — delivers and receives messages via the Bot Framework
-
-token_scopes:
-  skills:
-    - teams
-
-filesystem:
-  host_reads: []
-  host_writes: []
-  container_mounts: []
-
-network:
-  endpoints:
-    - pattern: "https://smba.trafficmanager.net/*"
-      protocol: https
-      direction: outbound
-    - pattern: "https://login.microsoftonline.com/*"
       protocol: https
       direction: outbound
 
@@ -206,8 +134,6 @@ Note: the TUI adapter declares no network endpoints because it communicates only
 
 **Protocol (channel provider → adapter):** Channel-native. Each adapter uses the appropriate SDK or protocol:
 - Telegram: Telegram Bot API (long-poll `getUpdates` or webhook; adapter choice is a deployment configuration).
-- WhatsApp: Baileys WebSocket to WhatsApp servers.
-- Teams: Bot Framework SDK; the adapter receives activity payloads via a locally-bound HTTP endpoint.
 - TUI: readline over stdin; the adapter reads from the terminal.
 
 **Protocol (adapter → orchestrator):** In-process function call. No serialization. Both sides are in the same Node.js process and the same trust domain (TD-ORCHESTRATOR). The adapter calls the orchestrator's message ingestion entry point directly.
@@ -217,7 +143,7 @@ Note: the TUI adapter declares no network endpoints because it communicates only
 ```typescript
 interface InboundMessage {
   // Routing and identity
-  channel: "tui" | "teams" | "telegram" | "whatsapp";
+  channel: "tui" | "telegram";
   contextId: string;          // group identifier; resolved by the adapter from channel identifiers
   senderId: string;           // channel-native sender identifier (e.g. Telegram user ID as string)
   senderDisplayName?: string; // human-readable name if available from the channel; optional
@@ -255,7 +181,7 @@ The orchestrator calls the adapter's outbound delivery function with a canonical
 
 ```typescript
 interface OutboundMessage {
-  channel: "tui" | "teams" | "telegram" | "whatsapp";
+  channel: "tui" | "telegram";
   contextId: string;          // identifies the conversation thread
   recipientId?: string;       // channel-native recipient; derived from the original inbound senderId
   text: string;               // content to deliver; may include Markdown
@@ -265,8 +191,6 @@ interface OutboundMessage {
 
 The adapter formats `text` into channel-native syntax before sending. Exact formatting rules are channel-specific:
 - Telegram: convert Markdown to Telegram MarkdownV2 or HTML (per deployment config).
-- WhatsApp: convert Markdown to WhatsApp-native formatting (bold, italic via `*` and `_`).
-- Teams: convert Markdown to Adaptive Card or Teams-native markdown.
 - TUI: render Markdown using a terminal-appropriate formatter; also render the health panel if the health toggle is active.
 
 **Delivery acknowledgment:** The adapter must confirm delivery success or failure to the orchestrator via a return value or thrown error. The orchestrator logs the delivery outcome. The adapter does not retry — retry logic, if any, belongs to the orchestrator.
@@ -277,7 +201,7 @@ Each adapter exposes a health status to the orchestrator's health query surface.
 
 ```typescript
 interface AdapterHealthStatus {
-  channel: "tui" | "teams" | "telegram" | "whatsapp";
+  channel: "tui" | "telegram";
   status: "connected" | "connecting" | "disconnected" | "error";
   detail?: string;     // human-readable detail; present on error or disconnected
   since: string;       // ISO 8601 timestamp of the last status change
@@ -397,7 +321,7 @@ These properties hold at all times during normal operation:
 
 8. **No in-process adapter-to-adapter communication.** Adapters do not call each other. All routing between channels passes through the orchestrator.
 
-9. **Channel adapters are in TD-ORCHESTRATOR.** The external channel provider (Telegram's servers, WhatsApp's infrastructure, Microsoft Teams' infrastructure) is in TD-CHANNEL (untrusted). The adapter code, running in-process with the orchestrator, is in TD-ORCHESTRATOR. This boundary is the adapter's primary security surface: inbound data from TD-CHANNEL must be treated as untrusted input and normalized into the canonical schema before being passed into the orchestrator.
+9. **Channel adapters are in TD-ORCHESTRATOR.** The external channel provider (Telegram's servers, or any future channel provider) is in TD-CHANNEL (untrusted). The adapter code, running in-process with the orchestrator, is in TD-ORCHESTRATOR. This boundary is the adapter's primary security surface: inbound data from TD-CHANNEL must be treated as untrusted input and normalized into the canonical schema before being passed into the orchestrator.
 
 10. **`apply_permission` is always `admin`.** No channel adapter may be applied by a power user. Channel adapters expand the orchestrator's in-process attack surface (ADR-6); this expansion requires administrator authorization.
 
@@ -415,7 +339,7 @@ Each criterion is testable from outside the adapters' internal implementation. N
 
 ### AC-2: Disabled adapter does not register
 
-**Given** `OPENGOLEM_CHANNELS` does not include a channel name (e.g. `teams`),
+**Given** `OPENGOLEM_CHANNELS` does not include a channel name (e.g. `telegram`),
 **when** the orchestrator starts,
 **then** the channel registry contains no entry for that channel and no connection to that channel's provider is attempted.
 
@@ -479,9 +403,9 @@ Each criterion is testable from outside the adapters' internal implementation. N
 
 ### AC-12: Failed adapter does not prevent other adapters from starting
 
-**Given** the Telegram adapter fails to start (e.g. missing credential),
-**when** WhatsApp is also enabled and its credential is present,
-**then** the WhatsApp adapter initializes and registers successfully; the orchestrator is functional for the WhatsApp channel.
+**Given** the Telegram adapter fails to start (e.g. missing `TELEGRAM_BOT_TOKEN`),
+**when** the TUI adapter is also enabled,
+**then** the TUI adapter initializes and registers successfully; the orchestrator is functional for the TUI channel.
 
 ### AC-13: TUI health dashboard toggles with Ctrl-D
 
