@@ -340,9 +340,9 @@ Given: the container TTL timer fires before the sentinel is emitted.
 
 Given: the Token Broker sends a `catoEscalate` JSON-RPC call to `data/sockets/escalation.sock`.
 
-1. Extract `checkId`, `action`, `contextId`, `tokenId`, `payloadHash`, `payloadSize` from the params. Drop `escalationReason` and `inspectorCheck`.
-2. Derive `contentExcerpt`: if `action` is `OUTBOUND_API_CALL`, the orchestrator must have the payload excerpt available from the task context (TBD — architect to resolve: the exact mechanism by which the Orchestrator holds the content excerpt for in-flight broker calls is not specified here; the Developer must resolve this from task context state).
-3. Send the standard six-field (plus `contentExcerpt`) Cato inline request to `data/sockets/cato.sock`.
+1. Extract `checkId`, `action`, `contextId`, `tokenId`, `payloadHash`, `payloadSize`, and `contentExcerpt` from the params. Drop `escalationReason` and `inspectorCheck`.
+2. Pass `contentExcerpt` through to Cato unchanged. The broker is the holder of the payload excerpt — the Orchestrator does not need to derive or store it. (Decision 23)
+3. Send the standard Cato inline request (with `contentExcerpt`) to `data/sockets/cato.sock`.
 4. Write `cato_check_relayed` to the audit log with `checkId`, outcome, and code.
 5. Return Cato's response to the broker via the escalation socket: `{"allow":...,"code":...,"reason":...}`.
 
@@ -353,11 +353,10 @@ The escalation relay is synchronous. The broker's `catoEscalate` call blocks unt
 Given: the group's `securityMode` is `supervised` and the Token Broker returns a soft-block signal on a proxied call (the Call Inspector held the call pending user confirmation).
 
 1. Route a user-confirmation prompt to the channel adapter: describe the action being held and request confirm or cancel.
-2. Wait for the user's response (timeout: TBD — architect to resolve).
-3. If confirmed: relay the confirmation to the Token Broker so the held call proceeds.
-4. If cancelled or timed out: relay the cancellation; the held call is abandoned; write a `cato_block` (with `code: null`, `reason: "user_cancelled"`) to the audit log.
-
-Note: the exact wire protocol for the Orchestrator to communicate confirm/cancel back to the Token Broker for a held call is TBD — architect to resolve. The behavior described here is normative; the wire schema is the Architect's gap to close before the Developer starts.
+2. Wait for the user's response. Timeout: 60 seconds from when the prompt is sent. (Decision 24)
+3. If confirmed: send `resolveSupervised` JSON-RPC call to `data/sockets/broker.sock` with `{ "checkId": "<uuid>", "decision": "confirm" }`. The broker forwards the held call.
+4. If cancelled: send `resolveSupervised` with `{ "checkId": "<uuid>", "decision": "cancel" }`. Write a `cato_block` entry with `code: null, reason: "user_cancelled"` to the audit log.
+5. If timed out: send `resolveSupervised` with `decision: "cancel"`. Write a `cato_block` entry with `code: null, reason: "supervised_timeout"` to the audit log. (Decision 24)
 
 ### 3.8 Skill Application
 
@@ -387,9 +386,15 @@ Skill removal follows the inverse: call `deregisterSkillScope`, update the regis
 
 Group configuration is loaded from the host filesystem at startup and on an explicit administrator reload signal. The Orchestrator treats the loaded configuration as authoritative for each group until the next reload.
 
-Per-group configuration fields include (at minimum): `securityMode`, provider config, `assertiveness_level`, `flag_display_tag`, `blocked_display_tag`, skill set override (if any).
+**File:** `groups/{name}/config.json` (JSON format). Created by the administrator; absent file is valid and results in deployment defaults being used. (Decision 25)
 
-The exact file format and path (`groups/{name}/config.yaml` or equivalent) is TBD — architect to resolve. The behavioral contract above depends on the configuration being present; the file format is a Developer-level decision confirmed by the Architect before Stream E begins.
+**Required fields:** `securityMode` (one of `golem_guard | supervised | power`), `assertiveness_level` (integer 1–5).
+
+**Optional fields:** `flag_display_tag` (string, default `[FLAG]`), `blocked_display_tag` (string, default `[BLOCKED]`), `provider_override` (object, overrides deployment default for this group), `skill_set_override` (array of skill IDs; if absent, uses the global installed skill set).
+
+**Absent file:** Orchestrator uses deployment defaults for all fields. No error is logged.
+
+**Malformed file:** Orchestrator logs a `config_parse_error` audit event with the group ID and error summary (not the file content), falls back to deployment defaults, and does not halt. (Decision 25)
 
 ### 3.10 Tier 1 Memory Write Gate (ADR-10)
 
@@ -414,7 +419,7 @@ The Orchestrator must never write to `groups/{name}/CLAUDE.md` without a precedi
 | `CLAUDE.md` creation fails at spawn time | Log the error. Abort the container spawn for this task. Route an error notification to the user. |
 | Escalation socket receives `catoEscalate` when Cato is unreachable | Return `allow: false` to the broker (fail-closed). Write `cato_check_relayed` with outcome `blocked`, code `null`. |
 | remote-control bridge unreachable or errors on invocation | Return error to caller. Do not create a task record. Do not queue the task. Fail-closed. |
-| Hansei report file is unreadable or unparseable | Log the parse error to the audit log. Skip the file. Do not mark the inbox as healthy until the file is processed or explicitly quarantined (TBD — architect to resolve: quarantine mechanism). |
+| Hansei report file is unreadable or unparseable | Move the file to `data/hansei/quarantine/` (created at startup). Write a `hansei_parse_error` audit entry with the SHA-256 hash of the file path and the error summary (never file content). Do not retry. Health endpoint exposes `quarantinedHanseiReports` count; non-zero drives `status: "degraded"`. Administrator clears quarantine manually. (Decision 26) |
 
 ---
 

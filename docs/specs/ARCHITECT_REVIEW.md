@@ -222,3 +222,83 @@ All four specs use the same three values: `golem_guard`, `supervised`, `power`. 
 | TBD-D3 | Memory Tiers | Decision 21 | WAL mode is mandatory for all Tier 2 `messages.db` files |
 | TBD-D4 | Memory Tiers | Decision 21 | Missing `messages.db`: auto-create |
 | TBD-D5 | Memory Tiers | Decision 22 | Missing `CLAUDE.md` at spawn: auto-create empty file |
+| TBD-O1 | Orchestrator | Decision 23 | Content excerpt for escalation relay: broker holds and forwards it |
+| TBD-O2 | Orchestrator | Decision 24 | Supervised confirm/cancel: `resolveSupervised` on broker socket; 60 s timeout |
+| TBD-O3 | Orchestrator | Decision 25 | Per-group config: `groups/{name}/config.json`, JSON, required + optional fields |
+| TBD-O4 | Orchestrator | Decision 26 | Hansei quarantine: move to `data/hansei/quarantine/`, audit log hash, health count |
+
+---
+
+## Spec E: Orchestrator
+
+*Added: 2026-04-06 | Reviewing: orchestrator-spec.md*
+
+**Verdict: Consistent with notes — four TBDs resolved**
+
+### TBD resolutions (this spec)
+
+**TBD-O1 resolved** — see Decision 23 (content excerpt ownership for broker-originated escalations).
+
+The spec's §3.6 step 2 ("Derive `contentExcerpt`") incorrectly places excerpt derivation responsibility on the Orchestrator. The correct behavior: the broker holds the excerpt (it inspected the payload) and sends it in `catoEscalate` params. The Orchestrator passes it through unchanged. The `catoEscalate` params schema in §2.3 must be updated to include `contentExcerpt` as an optional field.
+
+**Required Spec Writer actions:**
+- §2.3 `catoEscalate` params: add `contentExcerpt` field (optional, base64 string or null).
+- §3.6 step 2: replace "orchestrator must have the payload excerpt available from the task context (TBD...)" with "extract `contentExcerpt` from broker params (the broker holds the excerpt and includes it in the escalation call per Decision 23)."
+
+**TBD-O2 resolved** — see Decision 24 (supervised mode confirm/cancel wire protocol and timeout).
+
+The wire protocol is `resolveSupervised` on the existing token lifecycle socket (`data/sockets/broker.sock`), params `{ checkId, decision: "confirm" | "cancel" }`, response `{ accepted: true }`. The timeout is 60 seconds from when the user-confirmation prompt is sent. On timeout the Orchestrator auto-sends `resolveSupervised` with `decision: "cancel"` and writes a `cato_block` entry with `reason: "supervised_timeout"`.
+
+**Required Spec Writer actions:**
+- §2.2 (broker socket methods): add `resolveSupervised` to the method list with full schema.
+- §3.7 step 2: replace "timeout: TBD" with "60 seconds from when the confirmation prompt was routed to the channel adapter."
+- §3.7 step 3: replace "relay the confirmation to the Token Broker" with "send `resolveSupervised` with `decision: 'confirm'` to `data/sockets/broker.sock`."
+- §3.7 step 4: replace "relay the cancellation" with "send `resolveSupervised` with `decision: 'cancel'`"; note that timeout auto-cancel uses `reason: "supervised_timeout"` in the `cato_block` audit entry.
+- §3.7 closing note: remove the "exact wire protocol … is TBD — architect to resolve" sentence.
+- §2.6 audit log event table: distinguish `reason: "user_cancelled"` from `reason: "supervised_timeout"` in the `cato_block` event documentation.
+
+**TBD-O3 resolved** — see Decision 25 (per-group config file format and path).
+
+Path is `groups/{name}/config.json` (JSON). Required fields: `securityMode` (string enum), `assertiveness_level` (integer 1–5). Optional fields: `flag_display_tag` (string, default `[FLAG]`), `blocked_display_tag` (string, default `[BLOCKED]`), `provider_override` (object), `skill_set_override` (array of skill ID strings). Absent file: use deployment defaults silently. Malformed file: log `config_parse_error` audit event, fall back to defaults, do not halt.
+
+**Required Spec Writer actions:**
+- §3.9: replace "exact file format and path … is TBD" with path, format, required fields, optional fields, and absence/malformation behavior per Decision 25.
+- §2.6 audit log event table: add `config_parse_error` event type with fields `groupId` and `errorSummary`.
+- §2.5 container spawn env vars: confirm `ALEF_FLAG_DISPLAY_TAG` and `ALEF_BLOCKED_DISPLAY_TAG` are populated from the loaded group config (these are already in the spec; just confirm they are sourced from `config.json`).
+
+**TBD-O4 resolved** — see Decision 26 (hansei inbox quarantine mechanism).
+
+On parse or validation failure: move file to `data/hansei/quarantine/` (created at startup), write `hansei_parse_error` audit entry with file path hash and error summary (not content), no automatic retry. Health endpoint gains `quarantinedHanseiReports: integer` field; non-zero count sets `status: "degraded"`.
+
+**Required Spec Writer actions:**
+- Failure Modes table: replace "TBD — architect to resolve: quarantine mechanism" with the quarantine behavior per Decision 26.
+- §2.8 (Hansei Inbox Poll): add handling for parse/validation failure (move to quarantine, write audit entry).
+- §2.9 (Health Status Endpoint): add `quarantinedHanseiReports: integer` to the response schema.
+- §3.1 startup sequence: add creation of `data/hansei/quarantine/` directory (step 2 or alongside `data/sockets/` creation).
+- §2.6 audit log event table: add `hansei_parse_error` event type with fields `filePathHash` and `errorSummary`.
+- Acceptance Criteria: add ACs verifying (a) quarantine on malformed file, (b) no retry, (c) health endpoint count.
+
+### Additional consistency findings (Spec E)
+
+**E-1 (note, non-blocking): §2.9 health schema has no `quarantinedHanseiReports` field**
+This is the gap closed by TBD-O4 above. The health schema in the current spec is complete for all other fields.
+
+**E-2 (note, non-blocking): INV-12 `contentExcerpt` invariant is stated but step 2 of §3.6 contradicts it**
+INV-12 correctly requires `contentExcerpt` to be non-null for `OUTBOUND_API_CALL`. §3.6 step 2 in the current spec does not provide a mechanism for the orchestrator to satisfy this invariant. TBD-O1 resolution (Decision 23) closes this gap: the excerpt arrives from the broker, so INV-12 is satisfiable once the spec is corrected.
+
+**E-3 (note, non-blocking): Audit log table in §2.6 does not include `config_parse_error` or `hansei_parse_error` event types**
+Both are added by Decisions 25 and 26 respectively. The Spec Writer must add both rows to the audit log event table.
+
+**E-4 (note, non-blocking): `data/hansei/quarantine/` not mentioned in startup sequence**
+Decision 26 requires the directory to be created at startup. The current §3.1 startup sequence (8 steps) does not include this. The Spec Writer must add it (natural placement alongside the `data/sockets/` creation in step 2).
+
+### Summary
+
+| TBD | Status | Decision |
+|-----|--------|----------|
+| TBD-O1: `contentExcerpt` at escalation relay | Resolved | Decision 23 |
+| TBD-O2: Supervised confirm/cancel protocol + timeout | Resolved | Decision 24 |
+| TBD-O3: Per-group config format and path | Resolved | Decision 25 |
+| TBD-O4: Hansei quarantine mechanism | Resolved | Decision 26 |
+
+All four TBDs are resolved. The Orchestrator spec has no blocking inconsistencies with ARCHITECTURE.md. All required Spec Writer actions above must be applied before the Tester begins Stream E.

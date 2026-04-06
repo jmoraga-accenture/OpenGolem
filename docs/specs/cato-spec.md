@@ -239,7 +239,7 @@ The LLM escalation path is gated by PSYCHE.md revision, not runtime configuratio
 
 ### 3.4 Scheduled Audit
 
-Cato runs a scheduled audit at a configured interval (default interval: TBD — architect to resolve; must be configurable without a code change, expressed in deployment configuration). The audit covers the period since the previous audit's `periodEnd`, or a configured lookback window for the first run.
+Cato runs a scheduled audit at a configured interval. The default interval is 6 hours. It is configurable via the `CATO_AUDIT_INTERVAL` environment variable, expressed as a duration string (e.g. `6h`, `30m`). The minimum configurable interval is `15m`. (Decision 18) The audit covers the period since the previous audit's `periodEnd`, or a configured lookback window for the first run.
 
 **Audit procedure:**
 

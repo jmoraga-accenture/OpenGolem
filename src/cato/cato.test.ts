@@ -139,7 +139,10 @@ function sendRequest(
     };
 
     const timer = setTimeout(
-      () => settle(() => reject(new Error(`Cato check timed out after ${timeoutMs}ms`))),
+      () =>
+        settle(() =>
+          reject(new Error(`Cato check timed out after ${timeoutMs}ms`)),
+        ),
       timeoutMs,
     );
 
@@ -1046,8 +1049,14 @@ describe('Contract — newline-delimited JSON protocol (AC-2, AC-4)', () => {
           resolve(buf);
         }
       });
-      client.on('end', () => { clearTimeout(timer); resolve(buf); });
-      client.on('error', (err) => { clearTimeout(timer); reject(err); });
+      client.on('end', () => {
+        clearTimeout(timer);
+        resolve(buf);
+      });
+      client.on('error', (err) => {
+        clearTimeout(timer);
+        reject(err);
+      });
     });
 
     const lines = raw.split('\n').filter((l) => l.trim().length > 0);
@@ -1154,8 +1163,14 @@ describe('Contract — non-JSON line handling', () => {
           resolve(buf);
         }
       });
-      client.on('end', () => { clearTimeout(timer); resolve(buf); });
-      client.on('error', (err) => { clearTimeout(timer); reject(err); });
+      client.on('end', () => {
+        clearTimeout(timer);
+        resolve(buf);
+      });
+      client.on('error', (err) => {
+        clearTimeout(timer);
+        reject(err);
+      });
     });
 
     const lines = response.split('\n').filter((l) => l.trim().length > 0);

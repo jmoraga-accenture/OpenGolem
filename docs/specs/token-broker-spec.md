@@ -36,7 +36,7 @@ The Token Broker is one of three long-lived host processes. It is the sole keepe
 
 **Protocol:** Unix socket (broker listens). Newline-delimited JSON-RPC 2.0.  
 **Direction:** Orchestrator initiates; broker responds.  
-**Socket path:** TBD — architect to resolve (must not conflict with the escalation socket path).
+**Socket path:** `data/sockets/broker.sock` (overridable via `BROKER_SOCKET_PATH` env var — Decision 15).
 
 #### `issueToken`
 
@@ -144,7 +144,7 @@ A `degraded` broker does not issue new tokens. Existing valid tokens continue to
 
 **Protocol:** Unix socket (orchestrator listens; broker connects per escalation or holds a pooled connection). Newline-delimited JSON-RPC 2.0.  
 **Direction:** Broker initiates; orchestrator responds after forwarding to Cato.  
-**Socket path:** TBD — architect to resolve (distinct from the token lifecycle socket).
+**Socket path:** `data/sockets/escalation.sock` (overridable via `ESCALATION_SOCKET_PATH` env var — Decision 15).
 
 #### `catoEscalate`
 
@@ -159,6 +159,7 @@ A `degraded` broker does not issue new tokens. Existing valid tokens continue to
     "tokenId": "<uuid>",
     "payloadHash": "<sha256-hex>",
     "payloadSize": 42000,
+    "contentExcerpt": "<base64-encoded-bytes | null>",
     "escalationReason": "INSPECTOR_INCONCLUSIVE",
     "inspectorCheck": "PROMPT_INJECTION"
   },
@@ -169,6 +170,8 @@ A `degraded` broker does not issue new tokens. Existing valid tokens continue to
 `inspectorCheck` names which of the five Call Inspector checks produced the inconclusive result. Valid values: `SKILL_WHITELIST`, `MEMORY_SCOPE`, `PROMPT_INJECTION`, `CALL_RATE`, `ENDPOINT_SCOPE`.
 
 `escalationReason` is always `INSPECTOR_INCONCLUSIVE` in v1.0. Additional escalation reasons may be defined in future revisions.
+
+`contentExcerpt` is the first 4 KB of the inspected payload, base64-encoded (or the full payload if shorter). The broker holds the payload at inspection time and is responsible for including this field. The Orchestrator passes it through to Cato unchanged. See Decision 23.
 
 **Response** (mirrors Cato inline response semantics):
 ```json
@@ -245,6 +248,9 @@ The proxy logs endpoint base URL (not path), response status code, and call late
 
 **Given:** `securityMode` is not one of `golem_guard`, `supervised`, `power`.  
 **Must:** Reject with a JSON-RPC error. No token is issued.
+
+**Given:** `issueToken` is called when the token store is at capacity (`TOKEN_STORE_MAX_CAPACITY` tokens exist and none have expired).
+**Must:** Reject with JSON-RPC error `{ code: -32603, message: 'token_store_full' }`. No token is issued. Write an alert-level audit log entry if this is the first store-full rejection in the current 60-second window. (Decision 16)
 
 **Given:** Credential backend is unreachable at token issuance time.  
 **Must:** Reject the request with a JSON-RPC error. Health status transitions to `degraded`. Existing valid tokens continue to be validated.
@@ -347,7 +353,7 @@ The broker forwards the provider's response code to the container unchanged. If 
 The Token Broker does not forward a proxied call if its audit log write fails. The call is abandoned; the container receives HTTP 500. This preserves ADR-9: the audit log is the source of truth and a call that cannot be recorded cannot proceed.
 
 **Token store exhausted (memory):**  
-TBD — architect to resolve. The maximum in-flight token count and the broker's behavior when the store is full are not specified in ARCHITECTURE.md.
+When the in-memory token store reaches the configured maximum (`TOKEN_STORE_MAX_CAPACITY`, default 10,000), `issueToken` requests are rejected with `{ code: -32603, message: 'token_store_full' }`. No token is issued. Health status remains `ok` — store-full is not a credential backend failure. An alert-level audit log entry is written on the first store-full rejection in each 60-second window. Expired tokens are removed lazily at validation time; no background sweeper is required. (Decision 16)
 
 ---
 

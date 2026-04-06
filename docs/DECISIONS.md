@@ -472,3 +472,255 @@ The Rust rewrite (Phase 2) proceeds crate-by-crate, replacing TypeScript compone
 - The Memory Tiers spec FM-5 must be updated: "If `groups/{name}/CLAUDE.md` is absent at spawn time, the orchestrator creates an empty file at that path before configuring the bind mount. No Cato check is required for the empty-file creation. The container is spawned normally."
 - The orchestrator's spawn logic must check for the file's existence and create it if absent before building the mount configuration. This is the same startup sequence as `messages.db` auto-create (Decision 21).
 - The Tester must verify: spawn a container for a group whose directory exists but whose `CLAUDE.md` does not; confirm the container starts and the file exists (empty) after spawn.
+
+---
+
+## Decision 23: Content Excerpt Ownership for Broker-Originated Escalations (April 2026)
+
+*Resolves TBD-O1 from orchestrator-spec.md §3.6. See also ARCHITECT_REVIEW.md TBD-O1.*
+
+**Question:** The Orchestrator receives a `catoEscalate` call from the Token Broker for an in-flight proxied call (§3.6). It must forward a Cato check that includes `contentExcerpt` (first 4 KB base64, per Decision 17). The Orchestrator is not the originator of the proxied call — the container is. The question: how does the Orchestrator have the content excerpt available at escalation relay time?
+
+**Decision:** The Orchestrator does not hold the content excerpt for broker-originated escalations. The **broker holds it** — the broker was the component that intercepted and inspected the proxied payload in the first place. When the broker sends `catoEscalate`, it must include `contentExcerpt` as an additional field in the escalation params. The Orchestrator passes it through to Cato unchanged.
+
+**`catoEscalate` params schema update:** The broker→orchestrator escalation call gains an optional field:
+
+```json
+{
+  "checkId": "<uuid>",
+  "action": "OUTBOUND_API_CALL",
+  "contextId": "...",
+  "tokenId": "...",
+  "payloadHash": "<sha256-hex>",
+  "payloadSize": 42000,
+  "escalationReason": "INSPECTOR_INCONCLUSIVE",
+  "inspectorCheck": "PROMPT_INJECTION",
+  "contentExcerpt": "<base64-encoded-bytes | null>"
+}
+```
+
+`contentExcerpt` is present (non-null) when the action type is one that requires byte-level inspection per Decision 17 (`OUTBOUND_API_CALL` for broker-originated escalations). It is `null` or absent when the action type does not require it.
+
+**Orchestrator relay behavior (§3.6 updated):** The Orchestrator extracts `contentExcerpt` from the broker params alongside `checkId`, `action`, `contextId`, `tokenId`, `payloadHash`, and `payloadSize`. It drops `escalationReason` and `inspectorCheck` (broker-internal metadata not delivered to Cato). The `contentExcerpt` value is forwarded to Cato in the standard seven-field check request, consistent with Decision 17.
+
+**Rationale:**
+- The broker is the natural content holder at escalation time. It intercepted the proxied call, ran the Call Inspector, and determined escalation was warranted. Moving excerpt responsibility to the Orchestrator would require a separate out-of-band excerpt delivery mechanism, adding complexity with no benefit.
+- This approach is consistent with the existing design principle that the Orchestrator is a relay, not a content processor, during escalation (ADR-11).
+- The excerpt is transient: the broker holds it only for the duration of the escalation round-trip; neither the broker nor the Orchestrator logs or persists the excerpt content.
+
+**Implications:**
+- The Token Broker spec (§4.2.2, `catoEscalate` params schema) must add `contentExcerpt` as an optional field.
+- The Orchestrator spec §3.6 step 2 ("Derive `contentExcerpt`") must be corrected: the orchestrator does not derive the excerpt; it receives it from the broker params and passes it through.
+- The Orchestrator spec §2.3 (inbound escalation socket schema) must reflect the updated `catoEscalate` params including `contentExcerpt`.
+- INV-12 in the Orchestrator spec must be satisfied: for `OUTBOUND_API_CALL` escalations, `contentExcerpt` will be non-null in the broker params and must be forwarded non-null to Cato.
+
+---
+
+## Decision 24: Supervised Mode Confirm/Cancel Wire Protocol and Timeout (April 2026)
+
+*Resolves TBD-O2 from orchestrator-spec.md §3.7. See also ARCHITECT_REVIEW.md TBD-O2.*
+
+**Question:** After the broker issues a soft-block signal, the broker holds the proxied call waiting for a confirm or cancel decision from the user. The Orchestrator needs a wire mechanism to relay that decision back to the broker. The spec flags both the wire protocol and the timeout as TBD.
+
+**Decision:**
+
+### Part 1: `resolveSupervised` wire method
+
+A new JSON-RPC method is defined on the **token lifecycle socket** (`data/sockets/broker.sock`) — the existing orchestrator→broker socket (Decision 15). No new socket is needed.
+
+```json
+// Orchestrator → Broker (after user confirms or cancels)
+{
+  "jsonrpc": "2.0",
+  "method": "resolveSupervised",
+  "params": {
+    "checkId": "<uuid>",
+    "decision": "confirm | cancel"
+  },
+  "id": 20
+}
+
+// Broker response
+{
+  "jsonrpc": "2.0",
+  "result": { "accepted": true },
+  "id": 20
+}
+```
+
+`checkId` is the identifier from the original soft-block signal — the broker uses it to locate and resolve the held call. A `decision: "confirm"` causes the broker to forward the held proxied call. A `decision: "cancel"` causes the broker to abandon the held call and return an error response to the container.
+
+### Part 2: User-confirmation timeout
+
+**60 seconds** from the moment the soft-block signal is routed to the channel adapter (i.e. from when the user-confirmation prompt is sent). If no user response is received within 60 seconds, the Orchestrator automatically sends `resolveSupervised` with `decision: "cancel"`.
+
+The 60-second timeout is not configurable in Phase 1. It is chosen as a reasonable interactive window — long enough for a user to read and respond, short enough that the container does not hang indefinitely while awaiting confirmation. In Phase 2, a per-group or per-deployment configuration option (`SUPERVISED_CONFIRM_TIMEOUT_SECS`) may be introduced if operational experience warrants it.
+
+**Audit on auto-cancel:** When the timeout fires and the Orchestrator auto-cancels, it writes a `cato_block` entry to the audit log with `code: null` and `reason: "supervised_timeout"` (distinct from `reason: "user_cancelled"` which is used when the user explicitly cancels). This distinction lets Cato's scheduled audit differentiate between active user rejections and passive non-responses.
+
+**Rationale:**
+- Reusing the existing token lifecycle socket avoids a new socket and keeps all orchestrator→broker communication on one channel. The resolve call is orchestrator-initiated, which is consistent with the existing socket's direction.
+- A UUID `checkId` matches the held call unambiguously. The broker may have multiple soft-blocked calls in flight concurrently (across groups); the `checkId` ensures the correct one is resolved.
+- 60 seconds matches the interactive expectation for a mobile channel (Telegram/WhatsApp) where the user may receive a push notification and respond within a minute.
+
+**Implications:**
+- The Token Broker spec must add `resolveSupervised` to its External Interface section (§4.2.1) with the params schema above and behavioral contract: "On `decision: 'confirm'`: forward the held call. On `decision: 'cancel'`: abandon the held call and return an error to the container. Respond `{ accepted: true }` in both cases."
+- The Orchestrator spec §3.7 must replace both TBD notes (timeout and wire protocol) with this decision.
+- The Orchestrator spec §2.2 (methods the Orchestrator calls on the broker socket) must add `resolveSupervised`.
+- The audit log event table (§2.6) must distinguish `reason: "supervised_timeout"` from `reason: "user_cancelled"` in the `cato_block` entry.
+- `SUPERVISED_CONFIRM_TIMEOUT_SECS` is reserved as a future non-secret config var for Decision 9's whitelist if introduced in Phase 2.
+
+---
+
+## Decision 25: Per-Group Configuration File Format and Path (April 2026)
+
+*Resolves TBD-O3 from orchestrator-spec.md §3.9. See also ARCHITECT_REVIEW.md TBD-O3.*
+
+**Question:** The Orchestrator spec §3.9 references per-group configuration (security mode, assertiveness level, display tags, provider config, skill set override) but leaves the file format and path as TBD.
+
+**Decision:**
+
+**Path:** `groups/{name}/config.json` — JSON, not YAML. Consistent with the rest of the codebase's use of JSON for structured config (audit log schema, skill registry, IPC protocol bodies). One format, one parser.
+
+**Required fields:**
+
+| Field | Type | Values | Description |
+|-------|------|--------|-------------|
+| `securityMode` | string | `golem_guard \| supervised \| power` | Governs Call Inspector enforcement posture for this group |
+| `assertiveness_level` | integer | 1–5 | Alef's assertiveness dial; 1 = most compliant, 5 = most assertive (Decision 10) |
+
+**Optional fields:**
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `flag_display_tag` | string | `[FLAG]` | Display string Alef uses when asserting against an instruction |
+| `blocked_display_tag` | string | `[BLOCKED]` | Display string used when a Cato block is communicated to the user |
+| `provider_override` | object | (deployment default) | Overrides the deployment-level provider config for this group (same shape as the deployment provider config object) |
+| `skill_set_override` | array of strings | (global installed set) | Array of skill IDs; if present, restricts this group's container to only these skills. If absent, the global installed skill set applies. |
+
+**Example:**
+
+```json
+{
+  "securityMode": "supervised",
+  "assertiveness_level": 3,
+  "flag_display_tag": "[FLAG]",
+  "blocked_display_tag": "[BLOCKED]",
+  "skill_set_override": ["browser", "status"]
+}
+```
+
+**Absence and malformation:**
+- If `config.json` is **absent**, the Orchestrator uses deployment defaults for all fields. This is the normal state for a new group and is not an error condition.
+- If `config.json` is **present but malformed** (invalid JSON, required field missing, field value out of range), the Orchestrator logs a `config_parse_error` event to the audit log with the group ID and error summary (not the file content), and falls back to deployment defaults for that group. The Orchestrator does not halt and does not block task dispatch. An operator can diagnose and correct the file; the next reload will pick up the corrected config.
+
+**Rationale:**
+- JSON is already the wire and persistence format throughout OpenGolem (IPC protocol, audit schema, skill registry). Adding YAML parsing as a dependency for config files would introduce a second format with no benefit.
+- Failure-to-parse falling back to defaults (rather than halting) is consistent with the general principle that a misconfigured group should not take down the entire service. The audit log entry ensures the operator is informed.
+- Optional fields with explicit defaults mean a minimal `config.json` with only `securityMode` and `assertiveness_level` is valid and complete.
+
+**Implications:**
+- The Orchestrator spec §3.9 must be updated: replace "file format and path TBD" with "path: `groups/{name}/config.json`; format: JSON; required fields: `securityMode`, `assertiveness_level`; optional fields as above."
+- The audit log event table (§2.6) must add a `config_parse_error` event type with fields `groupId` and `errorSummary`.
+- The Developer must add `config.json` parsing to the group configuration load step (§3.1 step 6 and §3.9).
+- `groups/*/config.json` must be added to `.gitignore` (contains per-group operator choices, not source code).
+- The Tester must verify: (a) absent `config.json` results in deployment defaults; (b) malformed `config.json` results in deployment defaults plus a `config_parse_error` audit entry; (c) valid `config.json` overrides the corresponding fields.
+
+---
+
+## Decision 26: Hansei Inbox Quarantine Mechanism (April 2026)
+
+*Resolves TBD-O4 from orchestrator-spec.md Failure Modes table. See also ARCHITECT_REVIEW.md TBD-O4.*
+
+**Question:** When a hansei report file in `data/hansei/inbox/` is unreadable or fails JSON schema validation, the Orchestrator must not re-attempt it on every poll interval. The spec flags the quarantine mechanism as TBD.
+
+**Decision:**
+
+**On parse or validation failure:**
+1. Move the file to `data/hansei/quarantine/` (the Orchestrator creates this directory at startup if absent, alongside `data/hansei/inbox/`).
+2. Write a `hansei_parse_error` event to the audit log with: the SHA-256 hash of the file path (not the filename itself, to avoid leaking internal path structure in the audit log) and a brief parse error summary (the error message from the JSON parser or schema validator). The file content is never written to the audit log.
+3. The file is not re-attempted. Only a manual administrator action (deleting the file from `data/hansei/quarantine/`) removes it from quarantine.
+
+**Health endpoint surfacing:** The `/health` response gains a `quarantinedHanseiReports` integer field (count of files currently in `data/hansei/quarantine/`). A non-zero count is reflected in `status: "degraded"` — the Orchestrator is operational but the administrator's attention is needed. A count of zero does not contribute to degraded status.
+
+**No automatic retry:** Automatic retry of quarantined files is explicitly not implemented. The assumption is that a file that cannot be parsed is either corrupted (retry will always fail) or represents a Cato implementation bug (which requires a code fix, not a retry). Retrying corrupt files wastes cycles and can mask persistent bugs. An administrator can re-introduce a corrected file into `data/hansei/inbox/` manually if needed.
+
+**Administrator remediation path:**
+1. Inspect `data/hansei/quarantine/` for the offending files.
+2. Correct the file or discard it.
+3. If the file is correctable (e.g. truncated but recoverable), move it back to `data/hansei/inbox/` for the next poll cycle to pick up. The Orchestrator treats any file in the inbox that has not been seen in the current session as new.
+4. If the file is not correctable, delete it from quarantine.
+
+**Rationale:**
+- Moving to a dedicated quarantine directory (rather than simply skipping the file and logging a warning) prevents the failed file from being re-polled on every interval, which would flood the audit log with repeated parse errors.
+- Using the file path hash (not the raw path) in the audit log preserves the no-content-in-audit-log invariant while still giving the administrator a stable correlator between the audit entry and the file on disk.
+- Surfacing the quarantine count in the health endpoint closes the operational gap: without this, a quarantined file would be silent after the initial `hansei_parse_error` entry, and an administrator might not notice it until reviewing the audit log manually.
+- No automatic retry is the conservative choice for a security-sensitive component. Cato is producing these reports; a file that Cato produced but the Orchestrator cannot parse is a signal worth preserving for human review, not silently retrying.
+
+**Implications:**
+- The Orchestrator spec Failure Modes table must replace "TBD — architect to resolve: quarantine mechanism" with the behavior above.
+- The audit log event table (§2.6) must add a `hansei_parse_error` event type with fields `filePathHash` and `errorSummary`.
+- The health endpoint schema (§2.9) must add `quarantinedHanseiReports: integer`.
+- The startup sequence (§3.1) must create `data/hansei/quarantine/` alongside `data/hansei/inbox/` if absent.
+- The Tester must verify: (a) a malformed file in `data/hansei/inbox/` is moved to `data/hansei/quarantine/` and a `hansei_parse_error` entry appears in the audit log; (b) the file is not re-attempted on subsequent polls; (c) the health endpoint reports a non-zero `quarantinedHanseiReports` count and `status: "degraded"`.
+- `data/hansei/quarantine/` must be added to `.gitignore`.
+
+---
+
+## Decision 27: Role Execution Model — Frontier Models for All Roles with HitL Authority (April 2026)
+
+**Question:** TEAM.md v1 stated that certain roles (PM, Voice of Customer, final merge authority) "cannot be delegated" because no AI can stand in for real users. Is this still accurate in April 2026?
+
+**Decision:** The framing is revised. In April 2026, frontier models are capable of executing any specialist role to a production standard. Every role — PM, Voice of Customer, Architect, Cybersecurity Specialist, UX Designer, and all others — can be executed by a frontier model in a session scoped to that role's remit.
+
+Jim's authority remains non-delegable. His *execution* is not. The distinction is: Jim holds three authorities that cannot be transferred — roadmap and scope decisions, risk acceptance sign-offs, and final merge approval. He does not need to personally execute every task those authorities oversee. Every role produces an artifact; every artifact requires Jim's review and approval before it is acted upon. The frontier model executes; Jim governs.
+
+**Implications:**
+- TEAM.md is updated to v2, replacing the "cannot be delegated" framing with the authority/execution distinction.
+- New specialist roles added to TEAM.md v2: Cybersecurity Specialist, DevOps/Systems Administrator, UX/Interaction Designer, and Supply-Chain Auditor — each executable by a frontier model in a scoped session.
+- PM_BRIEF.md is updated to v2, incorporating session trigger prompts for all new specialist roles and sequencing the security and UX streams alongside the original development streams.
+
+---
+
+## Decision 28: Security Strengthening Document as Canonical Project Document (April 2026)
+
+**Question:** The Security Strengthening Document produced in the 2026-04-05 architectural review session identifies ten findings against the current architecture and specifications. Should it be treated as a standing project document in the canonical doc set, or as a review artefact?
+
+**Decision:** The Security Strengthening Document (`docs/SECURITY_STRENGTHENING.md`) is a canonical project document. It is added to the active document set in PM_BRIEF.md v2 and is the primary input to security streams G, H, and L.
+
+**Findings summary:**
+
+| # | Finding | Severity |
+|---|---------|---------|
+| F-1 | Inbound transport security unspecified | High |
+| F-2 | Credential proxy HTTP binding unspecified | High |
+| F-3 | Audit log has no cryptographic integrity protection | High |
+| F-4 | In-process adapter supply-chain risk — no mitigating controls | High |
+| F-5 | Token store crash leaves orphaned containers | Medium |
+| F-6 | No inbound message rate limiting | Medium |
+| F-7 | Self-hosted model safety posture underdocumented | Medium |
+| F-8 | No credential rotation procedure | Medium |
+| F-9 | MCP permission tier enforcement deferred — no interim controls | Medium |
+| F-10 | External dependency surface is an unaddressed systemic risk | High |
+
+Findings are closed when the corresponding ADR is produced and the relevant spec is updated. Findings must not be closed by implementation alone.
+
+**Implications:**
+- Streams G (Cybersecurity Specialist), H (DevOps), and L (Supply-Chain Audit) are commissioned to close or escalate findings before v1.0 ships.
+- F-9 requires a PM risk-acceptance decision (Decision 29 below) before any MCP-declaring skill ships.
+- F-10 has a Phase 1 component (npm audit policy, container image pinning) and a Phase 2 component (Rust crate dependency minimisation as acceptance criterion).
+
+---
+
+## Decision 29: F-9 Risk Acceptance — MCP Permission Tier Enforcement Deferred to Phase 2 (April 2026)
+
+**Question:** The `.intent.md` schema includes a `min_permission_tier` field for MCP server declarations, but enforcement is deferred to Phase 2. During Phase 1, a lower-tier team member can trigger MCP calls to enterprise systems for which they would not otherwise have authorisation. Is this risk accepted for Phase 1?
+
+**Decision:** Accepted for Phase 1, with the following documented interim control: MCP-declaring skills are restricted to administrator-only groups until Phase 2 permission tier enforcement is implemented. This must be stated as explicit deployment guidance in the documentation, not left implicit.
+
+**Conditions:** The risk acceptance is contingent on the interim control being documented before any MCP-declaring skill ships. A skill that declares MCP servers may not be published without this guidance in place. The risk is automatically closed when Phase 2 permission tier enforcement is implemented and verified by the Security Reviewer.
+
+**Implications:**
+- Deployment documentation must include a "Phase 1 MCP limitation" notice before any MCP skill is published.
+- The dashboard skill (Stream C sub-item) does not declare MCP servers and is not affected.
+- Phase 2 scope must include permission tier enforcement as a named deliverable, not an open item.

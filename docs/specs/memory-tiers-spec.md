@@ -70,7 +70,7 @@ CREATE TABLE tasks (
 );
 ```
 
-TBD — architect to resolve: whether `router_state` (outbound routing metadata) belongs in Tier 2 or is maintained in-process by the orchestrator only.
+`router_state` (outbound routing metadata) is maintained in-process by the orchestrator only. It is not persisted to Tier 2. (Decision 20)
 
 **Read access:**
 - Orchestrator: read-write. The orchestrator reads message history to construct context windows before container spawn, and writes every inbound message, outbound response, and task lifecycle event.
@@ -79,7 +79,7 @@ TBD — architect to resolve: whether `router_state` (outbound routing metadata)
 **Write access:**
 - Orchestrator only. Agent containers have no path to any `messages.db` file — it is never included in a container's bind mount set.
 
-**Retention:** Persistent by default. A configurable rolling retention window, set by the administrator, may prune records older than the window. When no pruning configuration is set, no records are deleted. Pruning, when configured, applies only to the `messages` table; `sessions` and `tasks` records are TBD — architect to resolve: whether session/task history is subject to the same retention window or is retained indefinitely.
+**Retention:** Persistent by default. A configurable rolling retention window, set by the administrator, may prune records older than the window. When no pruning configuration is set, no records are deleted. Pruning, when configured, applies only to the `messages` table; `sessions` and `tasks` records are retained indefinitely and are not subject to the rolling retention window. (Decision 20)
 
 **Isolation:** Per-group isolation is enforced by separate database files. There is no single cross-group messages database. The v0.1 central `store/messages.db` is not the target state and must not be used for new writes after migration.
 

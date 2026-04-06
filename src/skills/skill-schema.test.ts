@@ -519,7 +519,9 @@ apply_permission: admin
 
     // The skill must not be in the registry
     const list = await listInstalledSkills();
-    expect(list.find((s) => s.skillId === 'partial-fail-skill')).toBeUndefined();
+    expect(
+      list.find((s) => s.skillId === 'partial-fail-skill'),
+    ).toBeUndefined();
 
     // The token scopes from this skill must not appear in any installed skill
     const scopes = list.flatMap((s) => s.tokenScopes ?? []);
@@ -679,10 +681,16 @@ apply_permission: admin
     const req = stub.received.find((r) => r.method === 'registerSkillScope');
     expect(req).toBeDefined();
     const params = req?.params as {
-      networkEndpoints: { pattern: string; protocol: string; direction: string }[];
+      networkEndpoints: {
+        pattern: string;
+        protocol: string;
+        direction: string;
+      }[];
     };
     expect(Array.isArray(params.networkEndpoints)).toBe(true);
-    expect(params.networkEndpoints[0].pattern).toBe('https://api.example.com/*');
+    expect(params.networkEndpoints[0].pattern).toBe(
+      'https://api.example.com/*',
+    );
     expect(params.networkEndpoints[0].protocol).toBe('https');
     expect(params.networkEndpoints[0].direction).toBe('outbound');
 
@@ -746,7 +754,9 @@ apply_permission: admin
     await applySkill(dir, { brokerSocketPath: socketPath });
     await tick();
 
-    const regCall = stub.received.find((r) => r.method === 'registerSkillScope');
+    const regCall = stub.received.find(
+      (r) => r.method === 'registerSkillScope',
+    );
     // If an implementation incorrectly calls the broker for a failed validation,
     // this expect will catch it.
     expect(regCall).toBeUndefined();
@@ -765,10 +775,7 @@ describe('Integration', () => {
   let stub: ReturnType<typeof startBrokerStub>;
 
   beforeEach(async () => {
-    socketPath = path.join(
-      os.tmpdir(),
-      `og-broker-int-${Date.now()}.sock`,
-    );
+    socketPath = path.join(os.tmpdir(), `og-broker-int-${Date.now()}.sock`);
     stub = startBrokerStub(socketPath);
     await tick(40);
   });
@@ -849,7 +856,9 @@ describe('Integration', () => {
 
     // When applySkill resolves, the broker must already have acknowledged
     expect(result.ok).toBe(true);
-    expect(delayedAck.find((r) => r.method === 'registerSkillScope')).toBeDefined();
+    expect(
+      delayedAck.find((r) => r.method === 'registerSkillScope'),
+    ).toBeDefined();
 
     delayServer.close();
     try {
@@ -898,7 +907,9 @@ apply_permission: admin
     await removeSkill('test-skill', { brokerSocketPath: socketPath });
     await tick();
 
-    expect(stub.received.find((r) => r.method === 'deregisterSkillScope')).toBeDefined();
+    expect(
+      stub.received.find((r) => r.method === 'deregisterSkillScope'),
+    ).toBeDefined();
 
     const list = await listInstalledSkills();
     expect(list.find((s) => s.skillId === 'test-skill')).toBeUndefined();
@@ -957,17 +968,16 @@ apply_permission: admin
 
   it('Integration AC-10: broker unreachable (no socket) → application fails cleanly', async () => {
     // Point at a socket that has no server behind it
-    const noServer = path.join(
-      os.tmpdir(),
-      `og-no-broker-${Date.now()}.sock`,
-    );
+    const noServer = path.join(os.tmpdir(), `og-no-broker-${Date.now()}.sock`);
 
     const dir = makeSkillDir(MINIMAL_VALID_YAML);
     const result = await applySkill(dir, { brokerSocketPath: noServer });
 
     expect(result.ok).toBe(false);
     if (result.ok) return;
-    expect(result.reason).toMatch(/broker|unreachable|unavailable|ENOENT|ECONNREFUSED/i);
+    expect(result.reason).toMatch(
+      /broker|unreachable|unavailable|ENOENT|ECONNREFUSED/i,
+    );
 
     const list = await listInstalledSkills();
     expect(list.find((s) => s.skillId === 'test-skill')).toBeUndefined();

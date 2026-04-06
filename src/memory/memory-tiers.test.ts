@@ -115,9 +115,7 @@ describe('Tier 1', () => {
       // Simulate a broken implementation by checking that our assertion logic works
       const betaClaudePath = path.join(groupsDir, 'beta', 'CLAUDE.md');
       const fakeMounts = [{ hostPath: betaClaudePath }];
-      expect(
-        fakeMounts.some((m) => m.hostPath === betaClaudePath),
-      ).toBe(true); // if this were the real check it would fail — proves detection works
+      expect(fakeMounts.some((m) => m.hostPath === betaClaudePath)).toBe(true); // if this were the real check it would fail — proves detection works
     });
   });
 
@@ -188,9 +186,9 @@ describe('Tier 1', () => {
         catoCheck: makeCatoStub({ allow: true }),
       });
 
-      expect(
-        fs.readFileSync(path.join(groupDir, 'CLAUDE.md'), 'utf-8'),
-      ).toBe(proposedContent);
+      expect(fs.readFileSync(path.join(groupDir, 'CLAUDE.md'), 'utf-8')).toBe(
+        proposedContent,
+      );
     });
   });
 
@@ -221,9 +219,8 @@ describe('Tier 1', () => {
     });
 
     it('logs a rejection event when Cato returns allow: false', async () => {
-      const { applyMemoryWriteProposal, getLastWriteResult } = await import(
-        './tier1.js'
-      );
+      const { applyMemoryWriteProposal, getLastWriteResult } =
+        await import('./tier1.js');
 
       const groupDir = path.join(groupsDir, 'alpha');
       fs.mkdirSync(groupDir, { recursive: true });
@@ -288,9 +285,8 @@ describe('Tier 1', () => {
     });
 
     it('records a failed check attempt with socket-unreachable reason', async () => {
-      const { applyMemoryWriteProposal, getLastWriteResult } = await import(
-        './tier1.js'
-      );
+      const { applyMemoryWriteProposal, getLastWriteResult } =
+        await import('./tier1.js');
 
       const groupDir = path.join(groupsDir, 'alpha');
       fs.mkdirSync(groupDir, { recursive: true });
@@ -317,9 +313,8 @@ describe('Tier 1', () => {
   // -------------------------------------------------------------------------
   describe('AC-T1-5 — CLAUDE.md persists after session ends', () => {
     it('CLAUDE.md file still exists after onSessionEnd is called', async () => {
-      const { applyMemoryWriteProposal, onSessionEnd } = await import(
-        './tier1.js'
-      );
+      const { applyMemoryWriteProposal, onSessionEnd } =
+        await import('./tier1.js');
 
       const groupDir = path.join(groupsDir, 'alpha');
       fs.mkdirSync(groupDir, { recursive: true });
@@ -334,15 +329,12 @@ describe('Tier 1', () => {
 
       onSessionEnd({ groupName: 'alpha', groupsDir });
 
-      expect(
-        fs.existsSync(path.join(groupDir, 'CLAUDE.md')),
-      ).toBe(true);
+      expect(fs.existsSync(path.join(groupDir, 'CLAUDE.md'))).toBe(true);
     });
 
     it('CLAUDE.md content is unchanged after onSessionEnd', async () => {
-      const { applyMemoryWriteProposal, onSessionEnd } = await import(
-        './tier1.js'
-      );
+      const { applyMemoryWriteProposal, onSessionEnd } =
+        await import('./tier1.js');
 
       const groupDir = path.join(groupsDir, 'beta');
       fs.mkdirSync(groupDir, { recursive: true });
@@ -358,9 +350,9 @@ describe('Tier 1', () => {
 
       onSessionEnd({ groupName: 'beta', groupsDir });
 
-      expect(
-        fs.readFileSync(path.join(groupDir, 'CLAUDE.md'), 'utf-8'),
-      ).toBe(content);
+      expect(fs.readFileSync(path.join(groupDir, 'CLAUDE.md'), 'utf-8')).toBe(
+        content,
+      );
     });
   });
 
@@ -377,9 +369,7 @@ describe('Tier 1', () => {
 
       ensureClaudeMd({ groupName: 'new-group', groupsDir });
 
-      expect(
-        fs.existsSync(path.join(groupDir, 'CLAUDE.md')),
-      ).toBe(true);
+      expect(fs.existsSync(path.join(groupDir, 'CLAUDE.md'))).toBe(true);
     });
 
     it('does not require a Cato check for auto-creation of an empty file', async () => {
@@ -408,9 +398,9 @@ describe('Tier 1', () => {
 
       ensureClaudeMd({ groupName: 'existing', groupsDir });
 
-      expect(
-        fs.readFileSync(path.join(groupDir, 'CLAUDE.md'), 'utf-8'),
-      ).toBe(existingContent);
+      expect(fs.readFileSync(path.join(groupDir, 'CLAUDE.md'), 'utf-8')).toBe(
+        existingContent,
+      );
     });
   });
 
@@ -437,21 +427,20 @@ describe('Tier 1', () => {
         proposedContent: content,
         catoCheck: makeCatoStub({ allow: true }),
       });
-      expect(
-        fs.readFileSync(path.join(groupDir, 'CLAUDE.md'), 'utf-8'),
-      ).toBe(content);
+      expect(fs.readFileSync(path.join(groupDir, 'CLAUDE.md'), 'utf-8')).toBe(
+        content,
+      );
 
       // 3. Persist after session end
       onSessionEnd({ groupName: 'lifecycle', groupsDir });
-      expect(
-        fs.readFileSync(path.join(groupDir, 'CLAUDE.md'), 'utf-8'),
-      ).toBe(content);
+      expect(fs.readFileSync(path.join(groupDir, 'CLAUDE.md'), 'utf-8')).toBe(
+        content,
+      );
     });
 
     it('full lifecycle: ensure → write-rejected → original content preserved', async () => {
-      const { ensureClaudeMd, applyMemoryWriteProposal } = await import(
-        './tier1.js'
-      );
+      const { ensureClaudeMd, applyMemoryWriteProposal } =
+        await import('./tier1.js');
 
       const groupDir = path.join(groupsDir, 'reject-lifecycle');
       fs.mkdirSync(groupDir, { recursive: true });
@@ -469,9 +458,9 @@ describe('Tier 1', () => {
         catoCheck: makeCatoStub({ allow: false, reason: 'policy_block' }),
       });
 
-      expect(
-        fs.readFileSync(path.join(groupDir, 'CLAUDE.md'), 'utf-8'),
-      ).toBe(initialContent);
+      expect(fs.readFileSync(path.join(groupDir, 'CLAUDE.md'), 'utf-8')).toBe(
+        initialContent,
+      );
     });
   });
 });
@@ -548,7 +537,9 @@ describe('Tier 2', () => {
       // No await between write and read — must be immediately visible
       const count = (
         db
-          .prepare("SELECT COUNT(*) as n FROM messages WHERE content = 'sync test'")
+          .prepare(
+            "SELECT COUNT(*) as n FROM messages WHERE content = 'sync test'",
+          )
           .get() as { n: number }
       ).n;
       expect(count).toBe(1);
@@ -717,7 +708,11 @@ describe('Tier 2', () => {
 
       const row = db
         .prepare('SELECT * FROM tasks WHERE id = ?')
-        .get(taskId) as { status: string; started_at: number; ended_at: unknown };
+        .get(taskId) as {
+        status: string;
+        started_at: number;
+        ended_at: unknown;
+      };
 
       expect(row).toBeDefined();
       expect(row.status).toBe('running');
@@ -728,9 +723,8 @@ describe('Tier 2', () => {
     });
 
     it('updates task row with terminal status and ended_at on completion', async () => {
-      const { openGroupDb, createTaskRecord, completeTaskRecord } = await import(
-        './tier2.js'
-      );
+      const { openGroupDb, createTaskRecord, completeTaskRecord } =
+        await import('./tier2.js');
 
       const alphaDir = path.join(groupsDir, 'alpha');
       fs.mkdirSync(alphaDir, { recursive: true });
@@ -766,9 +760,8 @@ describe('Tier 2', () => {
   // -------------------------------------------------------------------------
   describe('AC-T2-5 — TTL expiry produces timed_out status', () => {
     it('completeTaskRecord with timed_out sets status=timed_out', async () => {
-      const { openGroupDb, createTaskRecord, completeTaskRecord } = await import(
-        './tier2.js'
-      );
+      const { openGroupDb, createTaskRecord, completeTaskRecord } =
+        await import('./tier2.js');
 
       const alphaDir = path.join(groupsDir, 'alpha');
       fs.mkdirSync(alphaDir, { recursive: true });
@@ -800,9 +793,8 @@ describe('Tier 2', () => {
   // -------------------------------------------------------------------------
   describe('AC-T2-6 — Cato block produces blocked status', () => {
     it('completeTaskRecord with blocked sets status=blocked', async () => {
-      const { openGroupDb, createTaskRecord, completeTaskRecord } = await import(
-        './tier2.js'
-      );
+      const { openGroupDb, createTaskRecord, completeTaskRecord } =
+        await import('./tier2.js');
 
       const alphaDir = path.join(groupsDir, 'alpha');
       fs.mkdirSync(alphaDir, { recursive: true });
@@ -946,9 +938,9 @@ describe('Tier 2', () => {
       fs.mkdirSync(groupDir, { recursive: true });
       const db = openGroupDb(path.join(groupDir, 'messages.db'));
 
-      const row = db
-        .prepare('PRAGMA journal_mode')
-        .get() as { journal_mode: string };
+      const row = db.prepare('PRAGMA journal_mode').get() as {
+        journal_mode: string;
+      };
       expect(row.journal_mode).toBe('wal');
 
       db.close();
@@ -969,7 +961,13 @@ describe('Tier 2', () => {
     function getColumns(
       db: Database.Database,
       table: string,
-    ): Array<{ name: string; type: string; notnull: number; pk: number; dflt_value: unknown }> {
+    ): Array<{
+      name: string;
+      type: string;
+      notnull: number;
+      pk: number;
+      dflt_value: unknown;
+    }> {
       return db.prepare(`PRAGMA table_info(${table})`).all() as Array<{
         name: string;
         type: string;
@@ -1133,9 +1131,9 @@ describe('Tier 2', () => {
         const groupDir = path.join(groupsDir, name);
         fs.mkdirSync(groupDir, { recursive: true });
         const db = openGroupDb(path.join(groupDir, 'messages.db'));
-        const row = db
-          .prepare('PRAGMA journal_mode')
-          .get() as { journal_mode: string };
+        const row = db.prepare('PRAGMA journal_mode').get() as {
+          journal_mode: string;
+        };
         expect(row.journal_mode).toBe('wal');
         db.close();
       }
@@ -1236,9 +1234,8 @@ describe('Tier 3', () => {
   // -------------------------------------------------------------------------
   describe('AC-T3-1 — write only with valid source_check_id', () => {
     it('inserts a memory_entries row when Inspector approves and checkId is provided', async () => {
-      const { openMemoryDb: openFn, writeMemoryEntry } = await import(
-        './tier3.js'
-      );
+      const { openMemoryDb: openFn, writeMemoryEntry } =
+        await import('./tier3.js');
 
       const dbPath = path.join(dataDir, 'memory.db');
       const db = openFn(dbPath);
@@ -1269,9 +1266,8 @@ describe('Tier 3', () => {
     });
 
     it('source_check_id in the inserted row matches the approved checkId exactly', async () => {
-      const { openMemoryDb: openFn, writeMemoryEntry } = await import(
-        './tier3.js'
-      );
+      const { openMemoryDb: openFn, writeMemoryEntry } =
+        await import('./tier3.js');
 
       const db = openFn(path.join(dataDir, 'memory.db'));
       const inspector = makeInspectorStub({
@@ -1302,9 +1298,8 @@ describe('Tier 3', () => {
   // -------------------------------------------------------------------------
   describe('AC-T3-2 — Inspector rejection logged to memory_audit', () => {
     it('no row inserted into memory_entries when Inspector rejects', async () => {
-      const { openMemoryDb: openFn, writeMemoryEntry } = await import(
-        './tier3.js'
-      );
+      const { openMemoryDb: openFn, writeMemoryEntry } =
+        await import('./tier3.js');
 
       const db = openFn(path.join(dataDir, 'memory.db'));
       const inspector = makeInspectorStub({
@@ -1331,9 +1326,8 @@ describe('Tier 3', () => {
     });
 
     it('rejected_write event appears in memory_audit with the rejection checkId', async () => {
-      const { openMemoryDb: openFn, writeMemoryEntry } = await import(
-        './tier3.js'
-      );
+      const { openMemoryDb: openFn, writeMemoryEntry } =
+        await import('./tier3.js');
 
       const db = openFn(path.join(dataDir, 'memory.db'));
       const inspector = makeInspectorStub({
@@ -1431,12 +1425,14 @@ describe('Tier 3', () => {
   // -------------------------------------------------------------------------
   describe('AC-T3-4 — every memory_entries row has non-null source_check_id', () => {
     it('query for rows with null source_check_id returns empty result set', async () => {
-      const { openMemoryDb: openFn, writeMemoryEntry } = await import(
-        './tier3.js'
-      );
+      const { openMemoryDb: openFn, writeMemoryEntry } =
+        await import('./tier3.js');
 
       const db = openFn(path.join(dataDir, 'memory.db'));
-      const inspector = makeInspectorStub({ approved: true, checkId: 'ci-inv5' });
+      const inspector = makeInspectorStub({
+        approved: true,
+        checkId: 'ci-inv5',
+      });
 
       await writeMemoryEntry(db, {
         id: 'entry-inv5',
@@ -1448,9 +1444,7 @@ describe('Tier 3', () => {
       });
 
       const nullRows = db
-        .prepare(
-          'SELECT id FROM memory_entries WHERE source_check_id IS NULL',
-        )
+        .prepare('SELECT id FROM memory_entries WHERE source_check_id IS NULL')
         .all();
       expect(nullRows).toHaveLength(0);
 
@@ -1484,9 +1478,8 @@ describe('Tier 3', () => {
   // -------------------------------------------------------------------------
   describe('AC-T3-5 — memory_audit is append-only', () => {
     it('DELETE on memory_audit throws or is prevented', async () => {
-      const { openMemoryDb: openFn, writeMemoryEntry } = await import(
-        './tier3.js'
-      );
+      const { openMemoryDb: openFn, writeMemoryEntry } =
+        await import('./tier3.js');
 
       const db = openFn(path.join(dataDir, 'memory.db'));
       const inspector = makeInspectorStub({
@@ -1511,16 +1504,17 @@ describe('Tier 3', () => {
 
       // Attempt DELETE — must throw (trigger or view-based prevention)
       expect(() =>
-        db.prepare('DELETE FROM memory_audit WHERE id = ?').run(auditRows[0].id),
+        db
+          .prepare('DELETE FROM memory_audit WHERE id = ?')
+          .run(auditRows[0].id),
       ).toThrow();
 
       db.close();
     });
 
     it('UPDATE on memory_audit is prevented', async () => {
-      const { openMemoryDb: openFn, writeMemoryEntry } = await import(
-        './tier3.js'
-      );
+      const { openMemoryDb: openFn, writeMemoryEntry } =
+        await import('./tier3.js');
 
       const db = openFn(path.join(dataDir, 'memory.db'));
       const inspector = makeInspectorStub({
@@ -1545,9 +1539,7 @@ describe('Tier 3', () => {
       // Attempt UPDATE — must throw (trigger-based prevention)
       expect(() =>
         db
-          .prepare(
-            `UPDATE memory_audit SET event_type = 'write' WHERE id = ?`,
-          )
+          .prepare(`UPDATE memory_audit SET event_type = 'write' WHERE id = ?`)
           .run(auditRows[0].id),
       ).toThrow();
 
@@ -1602,9 +1594,7 @@ describe('Tier 3', () => {
       ).not.toThrow();
 
       const count = (
-        db
-          .prepare('SELECT COUNT(*) as n FROM messages')
-          .get() as { n: number }
+        db.prepare('SELECT COUNT(*) as n FROM messages').get() as { n: number }
       ).n;
       expect(count).toBe(1);
 
@@ -1631,9 +1621,9 @@ describe('Tier 3', () => {
         }),
       ).resolves.not.toThrow();
 
-      expect(
-        fs.readFileSync(path.join(groupDir, 'CLAUDE.md'), 'utf-8'),
-      ).toBe('# tier3 absent — tier1 works');
+      expect(fs.readFileSync(path.join(groupDir, 'CLAUDE.md'), 'utf-8')).toBe(
+        '# tier3 absent — tier1 works',
+      );
     });
 
     it('openMemoryDb returns a degraded/null result when file is absent and logs unavailability', async () => {
@@ -1651,12 +1641,14 @@ describe('Tier 3', () => {
   // -------------------------------------------------------------------------
   describe('AC-T3-7 — agent receives text excerpts, not a database connection', () => {
     it('getContextForAgent returns a string, not a Database object', async () => {
-      const { openMemoryDb: openFn, getContextForAgent } = await import(
-        './tier3.js'
-      );
+      const { openMemoryDb: openFn, getContextForAgent } =
+        await import('./tier3.js');
 
       const db = openFn(path.join(dataDir, 'memory.db'));
-      const inspector = makeInspectorStub({ approved: true, checkId: 'ci-ctx' });
+      const inspector = makeInspectorStub({
+        approved: true,
+        checkId: 'ci-ctx',
+      });
 
       await writeMemoryEntry_helper(db, inspector);
 
@@ -1672,9 +1664,8 @@ describe('Tier 3', () => {
     });
 
     it('getContextForAgent does not expose the database file path to the caller', async () => {
-      const { openMemoryDb: openFn, getContextForAgent } = await import(
-        './tier3.js'
-      );
+      const { openMemoryDb: openFn, getContextForAgent } =
+        await import('./tier3.js');
 
       const dbPath = path.join(dataDir, 'memory.db');
       const db = openFn(dbPath);
@@ -1741,7 +1732,12 @@ describe('Tier 3', () => {
 
       const cols = db
         .prepare('PRAGMA table_info(memory_entries)')
-        .all() as Array<{ name: string; type: string; notnull: number; pk: number }>;
+        .all() as Array<{
+        name: string;
+        type: string;
+        notnull: number;
+        pk: number;
+      }>;
       const colMap = Object.fromEntries(cols.map((c) => [c.name, c]));
 
       expect(colMap['id']).toBeDefined();
@@ -1787,7 +1783,11 @@ describe('Tier 3', () => {
                  (id, entry_type, content_hash, content_text, created_at, source_check_id)
                VALUES (?, ?, 'h', 'text', ?, 'ci-valid')`,
             )
-            .run(`valid-${entryType}`, entryType, Math.floor(Date.now() / 1000)),
+            .run(
+              `valid-${entryType}`,
+              entryType,
+              Math.floor(Date.now() / 1000),
+            ),
         ).not.toThrow();
       }
 
@@ -1919,8 +1919,11 @@ describe('Tier 3', () => {
   // -------------------------------------------------------------------------
   describe('Integration', () => {
     it('full lifecycle: open → approved write → audit row → read context', async () => {
-      const { openMemoryDb: openFn, writeMemoryEntry, getContextForAgent } =
-        await import('./tier3.js');
+      const {
+        openMemoryDb: openFn,
+        writeMemoryEntry,
+        getContextForAgent,
+      } = await import('./tier3.js');
 
       const db = openFn(path.join(dataDir, 'memory.db'));
       const inspector = makeInspectorStub({
@@ -1963,9 +1966,8 @@ describe('Tier 3', () => {
     });
 
     it('full lifecycle: rejected write → no entry row → rejected_write audit row', async () => {
-      const { openMemoryDb: openFn, writeMemoryEntry } = await import(
-        './tier3.js'
-      );
+      const { openMemoryDb: openFn, writeMemoryEntry } =
+        await import('./tier3.js');
 
       const db = openFn(path.join(dataDir, 'memory.db'));
       const inspector = makeInspectorStub({
@@ -2022,4 +2024,3 @@ async function writeMemoryEntry_helper(
     inspector,
   });
 }
-
