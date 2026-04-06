@@ -95,8 +95,9 @@ CREATE TABLE events (
   details      TEXT    NOT NULL DEFAULT '{}',         -- JSON object; writer populates fields defined in §3.4–§3.6
 
   -- Audit trail integrity
-  sequence_id  INTEGER NOT NULL                       -- monotonically increasing per writer per process run;
+  sequence_id  INTEGER NOT NULL,                      -- monotonically increasing per writer per process run;
                                                       -- see §3.7 for the per-writer sequence contract
+  hmac TEXT                                           -- NULL in Phase 1; populated by HMAC chain in Phase 2 (ADR-33)
 );
 
 CREATE INDEX events_context_id_occurred_at ON events (context_id, occurred_at)
@@ -153,6 +154,20 @@ The `event_type` column uses string identifiers. The following are the normative
 | `cato_audit_complete` | A scheduled audit run has completed |
 | `hansei_report_ready` | A hansei report file has been written to the inbox |
 | `cato_audit_error` | A scheduled audit run was skipped or a report could not be written |
+
+**Cross-component events (ADRs 35, 36, 37):**
+
+| `event_type` | Writer | When written | Key `details` fields |
+|---|---|---|---|
+| `message_rate_limited` | Orchestrator | Inbound message dropped after rate-hold period | `senderIdHash`, `groupId`, `droppedCount` |
+| `queue_depth_exceeded` | Orchestrator | Inbound message dropped because group queue is at capacity | `groupId`, `queueDepth`, `droppedMessageHash` |
+| `skill_safety_acknowledged` | Orchestrator | Administrator confirmed self-hosted provider safety disclosure | `skillId`, `providerType`, `acknowledgedAt` |
+| `credential_reloaded` | Token Broker | Credential backend polled and a changed credential was reloaded | `backendType`, `timestamp` |
+| `credential_emergency_rotation` | Token Broker | Emergency rotateCredential invoked | `revokedCount`, `timestamp` |
+| `broker_loss_teardown` | Orchestrator | Container torn down due to mid-task broker loss | `taskId`, `contextId`, `reason` |
+| `broker_reconnected` | Orchestrator | Token Broker socket reconnected after loss | `timestamp` |
+| `mcp_skill_interim_warning` | Orchestrator | MCP-declaring skill applied with Phase 1 interim control warning | `skillId`, `mcpServerIds` |
+| `message_signature_invalid` | Channel Adapter | Inbound webhook payload failed signature verification | `channel`, `timestamp` |
 
 This set is open for extension. New event types are added when new writers or events are introduced; existing event types are never removed or redefined.
 
@@ -235,6 +250,8 @@ The token value itself is never stored. `token_id` is the opaque identifier asso
 `sequence_id` is a monotonically increasing integer per writer per process run. It is not globally unique across writers — it is scoped per writer. Its purpose is to allow per-writer sequence gap detection (a gap indicates a dropped write).
 
 Writers maintain an in-process sequence counter that increments atomically before each INSERT. The counter starts at 1 on process startup and is never persisted — it resets on restart. A gap in `sequence_id` for a given `writer` over a contiguous period of `occurred_at` values is a detectable signal that one or more rows were dropped.
+
+**Integrity caveat (ADR-33):** The `sequence_id` gap detection mechanism is a software-layer integrity signal. It detects dropped rows within a single process run but does not protect against OS-level file replacement, field-level modification, or cross-run manipulation. Cryptographic chain integrity (ADR-33 Phase 2 commitment) is the authoritative tamper-evidence mechanism.
 
 ---
 

@@ -747,3 +747,172 @@ Teams and WhatsApp remain in the channel-adapters spec as optional skills with `
 - The v0.1 code default (`OPENGOLEM_CHANNELS ?? 'tui'`) is correct and unchanged. `tui,telegram` is the recommended two-channel configuration documented in `.env.example`.
 - Slack, Discord, Gmail stubs in `src/channels/index.ts` are vestigial (NanoClaw lineage) and must be removed when Stream F (Channel Adapters) is implemented.
 - Channel-adapters spec covers all four channels as specified capabilities. No spec change required.
+
+---
+
+## Decision 31: Inbound Channel Endpoint Authentication and Deployment Mode Policy (April 2026)
+
+*Closes F-1. Approved by Jim Moraga.*
+
+**Question:** What transport security and authentication requirements apply to channel adapter inbound endpoints? What is the required default deployment mode for Telegram?
+
+**Decision:**
+
+1. **Default mode is long-poll.** The Telegram adapter default deployment mode is long-poll (`getUpdates`). Long-poll creates no inbound TCP listener and presents no inbound network attack surface. This is the required default for v1.0.
+
+2. **Webhook mode is an operator opt-in.** Webhook mode is a supported variant but requires explicit operator configuration. It is not enabled by default. Operators who enable webhook mode accept responsibility for correct reverse-proxy configuration.
+
+3. **Signature verification is mandatory for webhook mode.** Any channel adapter configured in webhook mode must verify the channel provider's payload signature on every inbound request before delivering the event to the orchestrator. For Telegram webhook mode, this is `X-Telegram-Bot-Api-Secret-Token` header verification against a configured secret. Events that fail verification are discarded; a `message_signature_invalid` event is written to the audit log. The adapter returns HTTP 401 to the caller on verification failure. No partial event is delivered.
+
+4. **This policy extends to future channel adapters.** When Teams and WhatsApp are added as optional skills, the same policy applies: any adapter that receives inbound push from a channel provider must implement the provider's signature verification scheme before v1.0-quality shipment.
+
+**Implications:**
+- channel-adapters-spec.md must add INV-10 codifying the webhook signature verification requirement and INV-11 codifying long-poll as the Telegram default.
+- The deployment documentation must specify the reverse-proxy configuration for webhook mode (nginx or Caddy with TLS termination and `X-Telegram-Bot-Api-Secret-Token` configuration) before webhook mode is documented as a supported option.
+- The Teams and WhatsApp optional skill specs must document the relevant signature verification requirements at the time those skills are developed.
+
+---
+
+## Decision 32: Credential Proxy HTTP Binding Restriction (April 2026)
+
+*Closes F-2. Approved by Jim Moraga.*
+
+**Question:** What interface does the Token Broker's credential proxy HTTP server bind to, and what are the constraints on its network exposure?
+
+**Decision:** The credential proxy HTTP server binds to the Docker bridge network interface address only. It does not bind to `0.0.0.0` or any host-external interface under any configuration.
+
+The bind address is resolved at broker startup by inspecting the active Docker bridge interface. The default Docker bridge address is `172.17.0.1`; non-standard Docker network configurations (named networks, Podman, Apple Container) may differ. If the bridge address cannot be determined at startup (Docker not running, bridge not configured), the broker fails closed — it does not fall back to `0.0.0.0`.
+
+`CREDENTIAL_PROXY_BIND_ADDRESS` overrides the resolved bridge address for deployments using non-standard container network configurations. This is a non-secret config var and belongs in `bootstrap.ts`'s `CONFIG_KEYS` whitelist per Decision 9.
+
+**Implications:**
+- token-broker-spec.md must add a behavioral contract clause: "The credential proxy HTTP server binds to `CREDENTIAL_PROXY_BIND_ADDRESS` if set, otherwise to the resolved Docker bridge network interface address. It never binds to `0.0.0.0`. If the bind address cannot be determined, the broker writes a fatal log entry and does not start."
+- The deployment documentation must specify the correct `CREDENTIAL_PROXY_BIND_ADDRESS` value for each supported container runtime (Docker, Apple Container).
+- The Tester must verify: the proxy is not reachable from a network address other than the configured bind address.
+
+---
+
+## Decision 33: Audit Log Cryptographic Integrity — HMAC Chain (Phase 2 Commitment with Phase 1 Schema Reservation) (April 2026)
+
+*Closes F-3 (Phase 2 commitment; Phase 1 schema reserved). Approved by Jim Moraga.*
+
+**Decision:** Phase 2 will implement a per-writer HMAC entry chain. Each audit log INSERT will include an `hmac` field: SHA-256 HMAC of the serialised row content concatenated with the previous entry's HMAC for that writer, using a writer-specific key held in the Token Broker's credential backend (same backend as LLM credentials, per Decision 8). The HMAC key per writer is distinct and is not stored in the audit log or group filesystem. Cato's scheduled audit will verify the HMAC chain for the audit period; a broken chain entry is reported as a `AUDIT_CHAIN_BREAK` anomaly in the hansei report.
+
+Phase 1 schema reservation: the `events` table schema must add a nullable column `hmac TEXT` before Phase 1 ships. All Phase 1 writes set `hmac = NULL`. The schema is forward-compatible with Phase 2 population.
+
+**Why not Phase 1:** The HMAC key provisioning mechanism requires the Token Broker credential backend to hold per-writer keys. In Phase 1, the `.env` backend is the primary backend, and adding cryptographic material to it before the multi-backend interface is stabilised would create a maintenance burden. Phase 2 introduces the full credential backend interface (Decision 8), at which point HMAC key provisioning is a natural addition.
+
+**Implications:**
+- audit-log-spec.md §3.1 must add `hmac TEXT` (nullable) to the `events` table schema. *(Applied.)*
+- audit-log-spec.md §3.7 (sequence_id documentation) must note that `sequence_id` gap detection is a software-layer signal only; cryptographic chain integrity (ADR-33, Phase 2) is the authoritative tamper-evidence mechanism. *(Applied.)*
+- Phase 2 scope must include HMAC key provisioning mechanism as a named deliverable.
+
+---
+
+## Decision 34: In-Process Adapter Supply-Chain Policy (April 2026)
+
+*Closes F-4 (Phase 1 mitigating controls). Approved by Jim Moraga.*
+
+**Decision:** Three mandatory controls for Phase 1. One Phase 2 design objective.
+
+**Phase 1 controls:**
+
+1. **Exact version pinning for adapter dependencies.** All packages that implement or support channel adapter functionality must be pinned to exact versions in `package.json`. Semver caret or tilde ranges are not permitted for adapter-supporting packages in production. *(Grammy `1.41.1` exact pin applied.)*
+
+2. **Sourcing requirement.** Channel adapter skills applied to a production deployment must be sourced from the canonical OpenGolem repository or from an administrator-audited source. An administrator who applies a third-party adapter skill accepts sole responsibility for its supply-chain risk.
+
+3. **Node.js `--permission` flags in production.** Production deployments must launch the orchestrator process with Node.js `--permission` flags restricting filesystem access to declared paths and network access to declared adapter endpoints. The exact flag set is a Stream H (DevOps) deliverable.
+
+**Phase 2 design objective.** High-privilege channel adapters are candidates for out-of-process isolation with serialised IPC. The Architect should evaluate this at Phase 2 design time when Teams and/or WhatsApp are added.
+
+**Implications:**
+- Grammy `^1.39.3` changed to `1.41.1` exact pin. *(Applied.)*
+- `package-lock.json` committed to the repository. *(Applied.)*
+- Stream H must produce the `--permission` flag set for production launch scripts and service unit files.
+
+---
+
+## Decision 35: Inbound Message Rate Limiting and Queue Depth Control (April 2026)
+
+*Closes F-6. Approved by Jim Moraga.*
+
+**Decision:** The orchestrator enforces two configurable limits at the message queue boundary.
+
+**Per-sender rate limit:** Maximum N messages per sender (by `senderId`) per group per rolling 60-second window. Default: 10. Configurable via `INBOUND_RATE_LIMIT_PER_SENDER`. Messages exceeding the rate limit are held in a per-sender cooldown queue (not dropped) for up to a configurable hold period (default: 5 minutes). If still held after the hold period, they are dropped and a `message_rate_limited` audit event is written. The sender is notified via the channel.
+
+**Per-group queue depth maximum:** Maximum M pending messages in any single group's queue at any time. Default: 100. Configurable via `INBOUND_QUEUE_MAX_DEPTH`. When a new message arrives and the group queue is at capacity, the new message is dropped immediately. A `queue_depth_exceeded` audit event is written. The sender is notified via the channel.
+
+**No silently dropped messages:** The system must either queue, rate-hold, or explicitly drop (with audit log entry and sender notification) every inbound message.
+
+**Implications:**
+- orchestrator-spec.md §3.2 must add the rate limit and queue depth behavioral contract. *(Applied.)*
+- audit-log-spec.md event type table must add `message_rate_limited` and `queue_depth_exceeded`. *(Applied.)*
+- `INBOUND_RATE_LIMIT_PER_SENDER` and `INBOUND_QUEUE_MAX_DEPTH` must be added to `bootstrap.ts`'s `CONFIG_KEYS` whitelist.
+
+---
+
+## Decision 36: Self-Hosted Provider Safety Posture Disclosure (April 2026)
+
+*Closes F-7. Approved by Jim Moraga.*
+
+**Decision:** When a skill with `providers.compatible` containing `ollama` or `custom` is applied by an administrator, the orchestrator emits an acknowledgement prompt before completing the application:
+
+> "This skill is configured for a self-hosted provider (`ollama` or `custom`). No upstream content moderation or safety filtering applies to calls made through this provider. Cato's inline checks are the complete safety envelope for these calls. In Phase 1, Cato's inline checks are deterministic stubs (path traversal and oversized payload detection). Review your PSYCHE.md thresholds before deploying this skill in production. Confirm [yes/no]."
+
+The skill is not applied until the administrator explicitly confirms. This acknowledgement is a one-time event per `skillId` and is logged as a `skill_safety_acknowledged` audit event.
+
+PSYCHE.md must include a required section `Self-Hosted Provider Posture` specifying: (a) recommended audit interval reduction for high-call-volume self-hosted deployments (1–2 hours vs default 6 hours); and (b) Cato block threshold verification before production use.
+
+**Implications:**
+- skill-schema-spec.md behavioral contract must add the provider acknowledgement flow. *(Applied.)*
+- soul-psyche-spec.md PSYCHE.md schema must add `Self-Hosted Provider Posture` as a required section.
+- audit-log-spec.md event type table must add `skill_safety_acknowledged`. *(Applied.)*
+
+---
+
+## Decision 37: Credential Rotation Procedure (April 2026)
+
+*Closes F-8. Approved by Jim Moraga.*
+
+**Decision:**
+
+**Planned rotation:** The Token Broker polls the configured credential backend on a configurable interval (default: 5 minutes; `CREDENTIAL_RELOAD_INTERVAL`) and reloads the long-lived credential if it has changed. The broker logs a `credential_reloaded` audit event on each successful reload that detects a credential change.
+
+**Emergency rotation:** A `rotateCredential` JSON-RPC method is defined on the existing token lifecycle socket (`data/sockets/broker.sock`, per Decision 15):
+
+```json
+{"jsonrpc":"2.0","method":"rotateCredential","params":{"revokeInFlight":true},"id":30}
+{"jsonrpc":"2.0","result":{"reloaded":true,"revokedCount":N},"id":30}
+```
+
+`revokeInFlight: true` triggers: (a) immediate backend re-read; (b) revocation of all currently active derivative tokens (in-flight containers receive HTTP 403 on their next proxied call and are torn down per the mid-task broker loss procedure); (c) a `credential_emergency_rotation` audit event. No service restart is required.
+
+**Implications:**
+- token-broker-spec.md must add `rotateCredential` to its External Interface section with the params schema and behavioral contract above.
+- token-broker-spec.md must add a behavioral contract for polling-based planned rotation.
+- audit-log-spec.md must add `credential_reloaded` and `credential_emergency_rotation` event types. *(Applied.)*
+- `CREDENTIAL_RELOAD_INTERVAL` must be added to `bootstrap.ts`'s `CONFIG_KEYS` whitelist.
+- The Tester must verify: (a) after updating the credential and invoking `rotateCredential`, new proxied calls use the new credential; (b) `revokeInFlight: true` causes active containers to receive HTTP 403 on their next proxied call.
+
+---
+
+## Decision 38: External Dependency Supply-Chain Policy (April 2026)
+
+*Closes F-10 (Phase 1 component). Approved by Jim Moraga.*
+
+**Decision:**
+
+**Phase 1 — npm dependency policy:**
+
+1. `package-lock.json` committed; all CI installs use `npm ci`. *(Applied.)*
+2. All production dependencies in `package.json` pinned to exact versions (no `^`, no `~`). *(Grammy: applied. Remaining deps: better-sqlite3, cron-parser already exact.)*
+3. `npm audit --audit-level=high` must pass with zero findings as a required CI gate.
+4. New channel adapter packages must undergo a dedicated Stream L review before merge to `main`.
+
+**Phase 2 — Rust crate minimisation:** Explicit acceptance criterion: each rewritten component's crate dependency graph must be reviewed and justified; total transitive crate count tracked as a named metric in the Phase 2 milestone review.
+
+**Container image pinning:** Agent container base image pinned by SHA256 digest in `container/Dockerfile`. A mutable tag silently adopts upstream OS updates; digest pinning guarantees reproducible builds. *(Applied — `node:22-slim@sha256:80fdb3f…`.)*
+
+**Implications:**
+- CI configuration must add `npm audit --audit-level=high` as a required step.
+- Phase 2 scope must include crate dependency acceptance criterion as a named deliverable.

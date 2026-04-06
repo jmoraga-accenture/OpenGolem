@@ -294,6 +294,14 @@ Given: a channel adapter delivers a normalized inbound message.
 3. If no task is currently active for the group, dispatch the next queued message (§3.3).
 4. If a task is active, the message waits in the queue. No message is dropped.
 
+**Inbound rate limiting (ADR-35):** The orchestrator enforces two configurable limits at the message queue boundary.
+
+*Per-sender rate limit:* Maximum `INBOUND_RATE_LIMIT_PER_SENDER` messages per sender per group per rolling 60-second window (default: 10). Messages exceeding the limit are held in a per-sender cooldown queue for up to `INBOUND_RATE_HOLD_PERIOD` (default: 5 minutes). After the hold period, held messages are dropped and a `message_rate_limited` audit event is written with fields `senderIdHash`, `groupId`, and `droppedCount`. The sender is notified via the channel that their messages are being rate-limited.
+
+*Per-group queue depth cap:* Maximum `INBOUND_QUEUE_MAX_DEPTH` pending messages per group queue (default: 100). When a new message arrives at a full queue, the message is dropped immediately and a `queue_depth_exceeded` audit event is written with fields `groupId`, `queueDepth`, and `droppedMessageHash`. The sender is notified via the channel.
+
+*No silently dropped messages:* Every inbound message is either queued, rate-held, or explicitly dropped with an audit log entry and sender notification.
+
 ### 3.3 Task Dispatch
 
 Given: the group queue has a pending message and no active task.
@@ -420,6 +428,16 @@ The Orchestrator must never write to `groups/{name}/CLAUDE.md` without a precedi
 | Escalation socket receives `catoEscalate` when Cato is unreachable | Return `allow: false` to the broker (fail-closed). Write `cato_check_relayed` with outcome `blocked`, code `null`. |
 | remote-control bridge unreachable or errors on invocation | Return error to caller. Do not create a task record. Do not queue the task. Fail-closed. |
 | Hansei report file is unreadable or unparseable | Move the file to `data/hansei/quarantine/` (created at startup). Write a `hansei_parse_error` audit entry with the SHA-256 hash of the file path and the error summary (never file content). Do not retry. Health endpoint exposes `quarantinedHanseiReports` count; non-zero drives `status: "degraded"`. Administrator clears quarantine manually. (Decision 26) |
+
+### Mid-task broker loss
+
+**When** the Token Broker socket becomes unavailable during an active container task (after `issueToken` has succeeded and the container is running):
+
+- The orchestrator detects broker unavailability via a polling check on `data/sockets/broker.sock` at a 5-second interval during active tasks.
+- On confirmed unavailability (socket unresponsive for two consecutive checks), the orchestrator immediately tears down all active containers associated with in-flight tasks. It does not wait for the container TTL.
+- A `broker_loss_teardown` event is written to the audit log for each torn-down container, with fields: `taskId`, `contextId`, `reason: "broker_unavailable"`. Token revocation is noted as non-enforceable in this scenario (the broker is unavailable); the audit record documents this gap.
+- The orchestrator enters a broker-reconnect wait loop, retrying the socket connection at a 10-second interval. Inbound messages are queued but no new tasks are dispatched until the broker reconnects.
+- When the broker reconnects, normal task dispatch resumes. A `broker_reconnected` event is written to the audit log.
 
 ---
 

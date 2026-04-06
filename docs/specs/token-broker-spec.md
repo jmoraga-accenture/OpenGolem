@@ -109,6 +109,36 @@ Valid `securityMode` values: `golem_guard`, `supervised`, `power`. Any other val
 
 Revoking an already-revoked or expired token returns `{ "revoked": true }` without error.
 
+#### `rotateCredential`
+
+*Added by ADR-37 (Decision 37).*
+
+```json
+{
+  "jsonrpc": "2.0",
+  "method": "rotateCredential",
+  "params": { "revokeInFlight": true },
+  "id": 30
+}
+```
+
+`revokeInFlight: true` triggers: (a) immediate backend re-read; (b) revocation of all currently active derivative tokens — in-flight containers receive HTTP 403 on their next proxied call and are torn down by the orchestrator per the mid-task broker loss procedure; (c) a `credential_emergency_rotation` audit log event with `revokedCount` and `timestamp`.
+
+`revokeInFlight: false` (or omitted) triggers only steps (a) and (c) — the broker reloads the credential but does not revoke in-flight tokens. This is the same behaviour as the background polling reload.
+
+**Response:**
+```json
+{
+  "jsonrpc": "2.0",
+  "result": { "reloaded": true, "revokedCount": 3 },
+  "id": 30
+}
+```
+
+`revokedCount` is the number of active tokens revoked. Zero when `revokeInFlight` is false or no tokens were active.
+
+**Planned rotation (polling):** The broker polls the configured credential backend on a configurable interval (`CREDENTIAL_RELOAD_INTERVAL`, default: 5 minutes). On each poll that detects a credential change, the broker reloads the credential and logs a `credential_reloaded` audit event with fields `backendType` and `timestamp`. In-flight derivative tokens continue to use the old credential for calls already in the proxy pipeline; new tokens issued after the reload use the new credential. No `rotateCredential` call is required for planned rotation.
+
 #### `health`
 
 ```json
@@ -193,6 +223,8 @@ A `degraded` broker does not issue new tokens. Existing valid tokens continue to
 **Protocol:** HTTP to the URL injected as `ANTHROPIC_BASE_URL` at container spawn.  
 **Direction:** Outbound (container initiates).  
 **Authentication:** The container sends its derivative token as the HTTP `Authorization: Bearer <token>` header.
+
+**Binding restriction (ADR-32 / Decision 32):** The credential proxy HTTP server binds to `CREDENTIAL_PROXY_BIND_ADDRESS` if set, otherwise to the resolved Docker bridge network interface address (default: `172.17.0.1`). It **never** binds to `0.0.0.0` or any host-external interface. If the bind address cannot be determined at startup (Docker not running, bridge not configured), the broker writes a fatal log entry and does not start — it does not fall back to `0.0.0.0`. Operators using non-standard container runtimes (named Docker networks, Apple Container) must set `CREDENTIAL_PROXY_BIND_ADDRESS` explicitly.
 
 On every inbound HTTP request from a container, the proxy:
 1. Validates the derivative token (signature, expiry, revocation status, call budget).

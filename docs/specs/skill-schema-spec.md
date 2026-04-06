@@ -185,6 +185,12 @@ On successful skill registration, the Call Inspector's active endpoint set is up
 - The Token Broker is notified of the new skill scope. The broker must confirm receipt before the orchestrator reports success to the administrator.
 - The Call Inspector endpoint list is updated with the skill's declared network endpoints.
 - The MCP endpoint list is updated with the skill's declared MCP servers.
+- **Phase 1 MCP interim control (Decision 29):** If the skill's `.intent.md` declares one or more `mcp.servers` entries, the orchestrator emits a deployment warning before reporting success: *"This skill declares MCP servers. Phase 2 permission tier enforcement is not yet implemented. Until it is, this skill must only be applied to administrator-only groups. Applying it to groups accessible to lower-tier users grants those users MCP access for which they are not authorised."* The warning is also written to the audit log as a `mcp_skill_interim_warning` event with fields `skillId` and `mcpServerIds`. This warning does not block application — the administrator confirms deployment. The obligation to restrict MCP-declaring skills to administrator-only groups is the deploying administrator's responsibility until Phase 2 enforcement is in place.
+- **Self-hosted provider disclosure (ADR-36):** If the skill's `providers.compatible` list contains `ollama` or `custom` (and does not contain only `anthropic` or `openrouter`), the orchestrator emits an acknowledgement prompt before completing the application:
+
+  > "This skill is configured for a self-hosted provider (ollama or custom). No upstream content moderation or safety filtering applies to calls made through this provider. Cato's inline checks are the complete safety envelope for these calls. In Phase 1, Cato's inline checks are deterministic stubs (path traversal and oversized payload detection only). Review your PSYCHE.md thresholds before deploying this skill in production. Confirm [yes/no]."
+
+  The skill is not applied until the administrator explicitly confirms. This acknowledgement is a one-time event per `skillId` and is written to the audit log as a `skill_safety_acknowledged` event.
 - The orchestrator reports success to the administrator with the skill ID and version.
 - The next agent task spawned by the orchestrator uses the updated scope — tasks that were already in flight at application time continue with the scope active at their `issueToken` call.
 

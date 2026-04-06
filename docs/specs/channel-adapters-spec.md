@@ -325,6 +325,10 @@ These properties hold at all times during normal operation:
 
 10. **`apply_permission` is always `admin`.** No channel adapter may be applied by a power user. Channel adapters expand the orchestrator's in-process attack surface (ADR-6); this expansion requires administrator authorization.
 
+11. **Long-poll is the required default deployment mode for Telegram.** The Telegram adapter must default to long-poll (`getUpdates`) unless explicitly configured for webhook mode. Long-poll creates no inbound TCP listener and presents no inbound network attack surface. Webhook mode is an operator opt-in.
+
+12. **Webhook mode requires payload signature verification.** Any adapter operating in webhook mode must verify the channel provider's payload signature on every inbound request before delivering the event to the orchestrator. For Telegram webhook mode: `X-Telegram-Bot-Api-Secret-Token` header verification against a configured secret. Events that fail verification are discarded; a `message_signature_invalid` event is written to the audit log; HTTP 401 is returned to the caller. No partial event is delivered to the orchestrator. (ADR-31)
+
 ---
 
 ## Acceptance Criteria
