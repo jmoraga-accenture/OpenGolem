@@ -1,16 +1,22 @@
-# Stream G — Cybersecurity Specialist Report
-*Status: Awaiting PM approval | Produced: 2026-04-06*
+# Stream G — Cybersecurity Specialist Report (v2)
+*Status: Awaiting PM approval | Produced: 2026-04-06 | Supersedes: v1 (four-channel scope)*
 *Inputs: ARCHITECTURE.md v1.0, SECURITY_STRENGTHENING.md, DECISIONS.md (Decisions 1–30), docs/specs/token-broker-spec.md, docs/specs/orchestrator-spec.md, docs/specs/channel-adapters-spec.md, docs/specs/audit-log-spec.md, docs/specs/cato-spec.md, docs/specs/skill-schema-spec.md, docs/specs/soul-psyche-spec.md, package.json*
+
+---
+
+## Scope Note
+
+The v1 report (2026-04-06, same date) was written against a four-channel scope: TUI, Telegram, Teams, and WhatsApp. Decision 30 (recorded in DECISIONS.md) subsequently confirmed that v1.0 ships with TUI and Telegram only; Teams and WhatsApp are deferred to optional add-on skills. This materially changes the inbound attack surface: the Teams Bot Framework inbound HTTP endpoint (the primary subject of F-1 in the v1 report) does not exist in v1.0, and the WhatsApp Baileys WebSocket and its substantial transitive dependency graph (the largest npm surface noted in F-10) are also absent from the v1.0 host process. This report re-assesses all ten findings against the current v1.0 scope. Where scope reduction closes or downgrades a finding, this is stated explicitly. The v1 report is superseded in full; all findings should be tracked against this document going forward.
 
 ---
 
 ## Executive Summary
 
-OpenGolem's trust domain model and Unix socket IPC architecture provide a strong structural security foundation: raw credentials are isolated in the Token Broker, containers hold only derivative tokens, Cato is architecturally unreachable from user sessions and containers, and the audit log has append-only write semantics. The system is notably safer by design than a flat single-process assistant.
+OpenGolem's trust domain model, Unix socket IPC, derivative token architecture, and Cato oversight layer provide a structurally sound security foundation that is meaningfully stronger than a conventional single-process assistant. The scope reduction to TUI and Telegram only is also a meaningful security improvement: it removes the Teams inbound HTTP endpoint (the single largest inbound network attack surface in v1) and eliminates the Baileys transitive dependency graph (the largest supply-chain surface in v1).
 
-However, five findings from the Security Strengthening Document remain fully open in the current specifications, and two are only partially addressed. The most critical unresolved gaps are: the Teams Bot Framework inbound HTTP endpoint has no specified authentication or network binding posture (F-1), the credential proxy HTTP surface has no specified binding restriction (F-2), the audit log has no cryptographic tamper-evidence beyond application-layer INSERT-only semantics (F-3), and the npm dependency surface for Phase 1 has no specified audit or lockfile policy (F-10). These four represent the highest-consequence unaddressed risks before v1.0 ships. F-3 and F-10 are independent escalations: the original document rates F-3 as High and F-10 as High; this review confirms both ratings and finds that F-10 is additionally the most likely attack vector to succeed in practice during Phase 1 because it operates below all of OpenGolem's trust domain controls.
+Five findings remain fully open in the current specifications; three are partially addressed; two are effectively closed or materially reduced by scope change. The highest-consequence unresolved gaps before v1.0 ships are: the credential proxy HTTP binding is unspecified (F-2), there is no inbound message rate limiting (F-6), the F-9 interim control from Decision 29 is not written into any behavioral spec, and the npm dependency surface has no specified audit or lockfile policy (F-10). The audit log has no cryptographic integrity protection (F-3), which is the most consequential long-term governance gap; it is correctly sequenced for Phase 2 but an ADR and schema reservation are needed now.
 
-The F-9 MCP permission tier gap is confirmed as accepted by Decision 29 but the interim control — admin-only groups for MCP-declaring skills — is not yet written into any behavioral spec. That documentation obligation must be discharged before any MCP-declaring skill is published.
+The removal of Teams reduces F-1 from High to Low for the default long-poll deployment mode, and removes the Baileys supply-chain risk from F-10 as an immediate concern. These are genuine security improvements, not just scope reductions.
 
 ---
 
@@ -21,22 +27,25 @@ The F-9 MCP permission tier gap is confirmed as accepted by Decision 29 but the 
 ### F-1 — Inbound Transport Security Is Unspecified
 
 **Original severity:** High
-**Confirmed severity:** High
+**Confirmed severity:** Low (long-poll mode) / Medium (webhook mode)
+**Scope change impact:** Significant. The v1 finding was primarily about the Teams Bot Framework inbound HTTP endpoint, which is a mandatory TCP listener that must be exposed to the internet for Teams to function. That endpoint does not exist in v1.0. The remaining inbound surface is Telegram only, and Telegram's official SDK (Grammy) defaults to long-poll (`getUpdates`), which involves no inbound TCP listener at all. Webhook mode is an operator-opted deployment variant. This reduces F-1 from a mandatory High-severity gap to a conditional Medium that only materialises when the operator enables webhook mode.
 
 **Threat narrative:**
-The Teams adapter receives Bot Framework activity payloads on a locally-bound HTTP endpoint. If this endpoint is exposed beyond localhost — either by misconfiguration, by a reverse proxy that is misconfigured, or by a tunnelling service (ngrok, Cloudflare Tunnel) that exposes it to the internet without credential validation — an adversary can POST arbitrary payloads to it. Because the channel adapter delivers every parseable inbound event to the orchestrator without sender gating (sender allowlist enforcement is the orchestrator's responsibility, downstream of delivery), a crafted payload passes directly into the orchestrator's task queue. From there it receives a Cato check, but Cato's Phase 1 deterministic checks cover path traversal, oversized payload, injection signatures, PII, and credential exposure — they do not check whether the inbound message originated from a legitimately authenticated Teams user. The adversary needs network access to the endpoint and knowledge of the expected JSON schema. The call inspector and Cato checks apply to agent-originated outbound calls, not to inbound message delivery.
 
-The same vector exists for Telegram and WhatsApp in webhook mode (as opposed to long-poll): a webhook endpoint without signature validation accepts arbitrary crafted messages from any source. Long-poll mitigates this for Telegram because the bot SDK polls Telegram's servers rather than accepting connections. However the architecture does not specify which mode is the required posture.
+*Long-poll mode (Grammy default):* The Telegram adapter polls `api.telegram.org` for updates. There is no inbound TCP listener on the host. No adversary can inject messages into the system by sending packets to the host — there is no port to target. The only inbound surface is the TUI adapter, which reads from stdin on the local terminal. This surface is not reachable by network adversaries. In long-poll mode, F-1 is effectively closed by the absence of an inbound endpoint.
 
-The concrete gain for an adversary: injection of arbitrary task content into the task queue of a running Golem instance, bypassing the intent of the sender allowlist. This is prompt injection delivered at the channel boundary rather than the LLM boundary.
+*Webhook mode (operator-enabled variant):* If the operator configures Grammy in webhook mode, the adapter binds an inbound HTTPS endpoint (typically via a reverse proxy) to receive Telegram `Update` objects pushed by Telegram's servers. Without `X-Telegram-Bot-Api-Secret-Token` header verification, any party with knowledge of the webhook URL can POST crafted `Update` objects to the host. The Telegram adapter's current behavioral spec (channel-adapters-spec.md) does not require signature verification before delivering the event to the orchestrator. A crafted payload would pass directly into the inbound message queue. The sender allowlist provides a downstream gate, but it does not prevent the inbound event from consuming queue capacity and triggering orchestrator processing before the allowlist check fires.
 
-**Spec coverage:** Fully open.
+**Spec coverage:** Partially addressed for long-poll; fully open for webhook.
 
-The channel-adapters-spec.md acknowledges that the Teams adapter receives activity payloads via "a locally-bound HTTP endpoint" and declares `network.endpoints` for outbound calls to `smba.trafficmanager.net` and `login.microsoftonline.com`. It says nothing about: how the inbound endpoint is bound, what authentication it requires, whether Bot Framework payload signature verification is mandatory, or what network exposure is permitted. The invariants section does not include an authentication invariant for inbound channel traffic.
+The channel-adapters-spec.md correctly documents Telegram as using "long-poll `getUpdates` or webhook; adapter choice is a deployment configuration." It provides the Telegram `.intent.md` template declaring only `https://api.telegram.org/*` as an outbound endpoint — consistent with long-poll. No spec text requires or recommends long-poll as the default posture. No spec text requires `X-Telegram-Bot-Api-Secret-Token` verification for webhook mode. ARCHITECTURE.md §4.1 notes the inbound path is "channel-native" with no transport security requirements stated.
 
-ARCHITECTURE.md §4.1 describes the inbound path as "channel-native" and does not specify transport security. No ADR addresses inbound transport.
+**ADR recommendation:** This finding can be substantially closed with a spec addition rather than a full new ADR. The channel-adapters-spec.md must add:
 
-**ADR recommendation:** New ADR required. See Draft ADR Text section below (ADR-31). The channel-adapters-spec must also gain an invariant: "INV-N: For every adapter that binds an inbound HTTP or TCP endpoint (Teams Bot Framework, Telegram webhook mode), the endpoint must implement channel-provider-issued payload signature verification before delivering the event to the orchestrator. Events that fail signature verification are discarded and logged as `message_signature_invalid`; they are never delivered to the orchestrator."
+1. A behavioral contract clause: "The Telegram adapter default deployment mode is long-poll (`getUpdates`). Webhook mode is an operator-enabled variant that requires additional configuration."
+2. An invariant: "INV-10: When a channel adapter is configured in webhook mode (receives inbound push from the channel provider), it must verify the channel provider's payload signature on every inbound request before delivering the event to the orchestrator. For Telegram webhook mode, this is `X-Telegram-Bot-Api-Secret-Token` header verification. Events that fail signature verification are discarded; a `message_signature_invalid` event is written to the audit log. The adapter returns HTTP 401 to the caller on verification failure."
+
+A new ADR (Draft ADR-31, below) is still recommended to record the architectural decision that long-poll is the secure default posture and that webhook mode requires explicit operator opt-in with signature verification enabled. This closes the finding for the v1.0 scope and provides the correct foundation when Teams and WhatsApp are added as optional skills.
 
 ---
 
@@ -44,61 +53,62 @@ ARCHITECTURE.md §4.1 describes the inbound path as "channel-native" and does no
 
 **Original severity:** High
 **Confirmed severity:** High
+**Scope change impact:** None. The credential proxy binding issue is independent of channel scope. All containers make outbound LLM calls through the proxy regardless of which channels are enabled.
 
 **Threat narrative:**
-The Token Broker binds an HTTP endpoint that agent containers call as their `ANTHROPIC_BASE_URL`. Containers present a derivative token; the broker validates it, runs Call Inspector checks, and proxies the call to the real provider. If the proxy binds to `0.0.0.0` (or any interface reachable by processes outside the Docker bridge network), then any process on the host — including a compromised npm dependency running in the orchestrator process, a lateral-movement attacker who has gained a shell on the host as a different user, or any other container on the Docker host — can present a stolen derivative token and make proxied LLM calls.
+The Token Broker binds an HTTP endpoint that agent containers call as their `ANTHROPIC_BASE_URL`. If this proxy binds to `0.0.0.0` — or any host-external interface — then any process on the host with network access to that port can present a derivative token and make proxied LLM calls. This includes: a compromised npm package running in the orchestrator process, another container on the same Docker host sharing the bridge network, or a lateral-movement attacker who has obtained a shell on the host as a different user.
 
-The derivative token model is the primary defence, but it does not help if the adversary has a valid token. Token lifetimes are short (default TTL of 300 seconds per the spec), but during that window any process that can reach the HTTP endpoint can impersonate the container. The binding restriction would confine the attack surface to processes running on the Docker bridge network only, which is a smaller set than all processes on the host.
+The derivative token model is the primary defence, but token theft is not required if the proxy is reachable from processes that already hold tokens by design (e.g. a compromised orchestrator process that can read in-process token references). Binding to the Docker bridge interface only confines the surface to the containers the orchestrator has spawned, which is the intended threat model: only OpenGolem containers should be able to reach the proxy.
 
-Additionally: the spec describes the Ollama path as forwarding calls over HTTP to a local endpoint with no Authorization header injection. If the proxy itself binds broadly, Ollama calls can be forwarded by any caller without any token (since Ollama requires no auth), making the Call Inspector bypassable for self-hosted model deployments.
+An additional concern applies to the Ollama path: the token-broker-spec correctly notes that Ollama calls receive no injected credential (the call is forwarded with no Authorization header substitution). If the proxy binds broadly, a caller with no valid token at all can potentially route Ollama calls through the proxy, bypassing the Call Inspector on the Ollama path — because Ollama itself requires no auth, the only gate is the proxy's token validation. Restricting the binding closes this gap at the network layer.
 
 **Spec coverage:** Fully open.
 
-The token-broker-spec.md §4.5 describes the container-to-proxy protocol (HTTP, derivative token as bearer) and the Call Inspector chain, but does not specify what interface the HTTP server binds to. The architecture (ARCHITECTURE.md §4.5) states the container "calls TD-BROKER via HTTP (credential proxy)" and "points their `ANTHROPIC_BASE_URL` environment variable at this proxy" — no binding posture is stated. No ADR addresses this.
+The token-broker-spec.md §4.5 describes the container-to-proxy protocol (HTTP, derivative token as bearer) and the five Call Inspector checks, but does not specify what interface the HTTP server binds to. ARCHITECTURE.md §4.5 states containers "call TD-BROKER via HTTP (credential proxy)" with no binding posture stated. No ADR addresses this.
 
-**ADR recommendation:** New ADR required. See Draft ADR Text section below (ADR-32). The token-broker-spec must gain a behavioral contract clause: "The credential proxy HTTP server must bind to the Docker bridge network interface only (not `0.0.0.0`). The default bind address is `172.17.0.1` (Docker default bridge). The actual interface address is resolved at startup by reading the Docker bridge interface configuration. If the bridge address cannot be determined, the broker fails closed and does not start."
+**ADR recommendation:** New ADR required (Draft ADR-32, below). The token-broker-spec must gain a behavioral contract clause specifying the proxy binds to the Docker bridge interface only and fails closed if the bridge address cannot be determined.
 
 ---
 
 ### F-3 — Audit Log Has No Cryptographic Integrity Protection
 
 **Original severity:** High
-**Confirmed severity:** High (with a note on Phase sequencing)
+**Confirmed severity:** High (Phase 2 commitment required now; schema reservation required before Phase 1 ships)
+**Scope change impact:** None. The audit log integrity concern is independent of channel scope.
 
 **Threat narrative:**
-The audit log is the ground truth for Cato's dao_score KPIs and hansei reports. If a sufficiently privileged adversary — whether a compromised service account, a rogue administrator, or an attacker who has escalated to the service user on the host — modifies the SQLite file directly (bypassing the application write interface), Cato silently reads falsified data. The attack does not need to bypass any OpenGolem component; it operates at the OS filesystem layer.
+The audit log is Cato's sole data source for dao_score KPIs and hansei reports. An adversary with access to the SQLite file on the host filesystem — whether via a compromised service account, a rogue administrator, or a process that has escalated to the service user — can modify records directly, bypassing the application-layer INSERT-only semantics entirely. The most consequential manipulation is selective deletion of `call_blocked` and `cato_check` block events, which suppresses `security_failures_per_call` and causes Cato's scheduled audit to report a healthier posture than reality. This is not a theoretical concern: the governance story for OpenGolem depends entirely on the integrity of what Cato reads.
 
-The most consequential manipulation is selective deletion: removing `call_blocked` and `call_soft_blocked` events from the audit log would depress `security_failures_per_call`, causing Cato's scheduled audit to report a healthier posture than reality. An adversary who wishes to operate an agent that would otherwise trigger Golem Guard locking can suppress the evidence. Because Cato has no independent data source against which to cross-check (the audit log is the only record), the governance output cannot self-detect falsification.
-
-The `sequence_id` contract (audit-log-spec.md §3.7) provides some gap detection: a deleted row would produce a sequence gap detectable on the next audit. However, sequence IDs reset on process restart (they are not persisted), so a complete log replacement after a restart — or manipulation between scheduled audit runs — would be undetectable.
+The `sequence_id` monotonicity contract in the audit-log-spec (§3.7, I-8) provides per-writer gap detection: a deleted row would produce a sequence gap detectable at the next audit. However, sequence IDs reset on process restart (the spec explicitly notes "the counter starts at 1 on process startup and is never persisted"). A complete database file replacement after a restart, or selective row manipulation between scheduled audit runs, is therefore undetectable. Field-level modification (changing `outcome` from `blocked` to `allowed` on existing rows while preserving row count and sequence values) is also undetectable with sequence IDs alone.
 
 **Spec coverage:** Partially addressed.
 
-The audit-log-spec.md correctly specifies INSERT-only write paths, a build-time check against UPDATE/DELETE, WAL mode, and per-writer `sequence_id` monotonicity (§3.7) that allows gap detection per-writer per-process-run. These are meaningful software-layer controls. However, the spec explicitly contains no cryptographic integrity mechanism. ARCHITECTURE.md §3.7 notes "append-only semantics: enforced by schema design, supplemented by OS-level file permissions where possible" — the "where possible" hedge is correct but leaves the threat unaddressed at the storage layer. The SECURITY_STRENGTHENING.md recommendation (HMAC chain, signed export, or `chattr +a`) is not reflected in any spec.
+The audit-log-spec.md correctly specifies INSERT-only write paths, a build-time check against UPDATE/DELETE (I-2), WAL mode (I-3), and `sequence_id` monotonicity (I-8). These are meaningful software-layer controls. The spec explicitly notes "no cryptographic integrity mechanism" — the gap is acknowledged, not overlooked. The SECURITY_STRENGTHENING.md HMAC chain recommendation is not reflected in any spec. The `sequence_id` contract section (§3.7) does not contain a caveat noting the limits of sequence gap detection.
 
-The `sequence_id` gap detection is valuable but insufficient: it cannot detect record manipulation that preserves row count (field-level modification), replacement of the database file, or deletion between audits when sequence counters reset.
-
-**ADR recommendation:** The original finding correctly identifies HMAC chaining as the lowest-friction starting point. This should be a Phase 2 commitment (consistent with the SECURITY_STRENGTHENING.md recommendation), but the ADR must be produced now so that the audit log spec and the Cato spec can reserve the fields. See Draft ADR Text section below (ADR-33). The audit-log-spec must also add a note to the `sequence_id` contract section (§3.7): "Sequence ID gap detection is a software-layer integrity signal only. It does not protect against OS-level file replacement or field-level modification. Cryptographic chain integrity (ADR-33) is required before the audit log can be treated as a tamper-evident record."
+**ADR recommendation:** New ADR required (Draft ADR-33, below). The ADR must be produced now so that the audit-log-spec can reserve the `hmac` column in Phase 1 (nullable, all writes set NULL) and the Cato spec can plan Phase 2 chain verification. The audit-log-spec §3.7 sequence_id documentation must also gain a caveat noting that sequence gap detection is a software-layer signal only and does not protect against OS-level file replacement or field-level modification.
 
 ---
 
 ### F-4 — In-Process Adapter Supply-Chain Risk Is Accepted Without Mitigation Controls
 
 **Original severity:** High
-**Confirmed severity:** High (partially mitigated by existing controls; mitigation gap remains)
+**Confirmed severity:** Medium (downgraded from v1 report; scope change materially reduces the risk surface)
+**Scope change impact:** Significant for the immediate risk assessment. The v1 report correctly noted that Grammy, Baileys, and their transitive dependencies all execute in-process with the orchestrator. Baileys is the larger supply-chain concern: it has hundreds of transitive dependencies and processes a binary protocol. Removing WhatsApp from v1.0 scope means Baileys is not present in the production dependency graph. Grammy remains, but it is a substantially smaller transitive surface. The finding is not closed — the structural risk of in-process adapters is unchanged — but the immediate blast radius is reduced by the absence of Baileys.
 
 **Threat narrative:**
-Channel adapters run in-process with the orchestrator (ADR-6). A compromised adapter — whether delivered via a malicious npm package in Grammy or Baileys, or via a malicious Feature skill applied by the administrator — executes within TD-ORCHESTRATOR with access to all in-process state: the token store reference, the Unix socket file descriptors, the group filesystem, and the in-process audit log write path. The OpenClaw/ClawHub exfiltration incident (referenced in SECURITY_STRENGTHENING.md) demonstrates this vector is active in the agentic assistant ecosystem.
+The Telegram adapter (Grammy) runs in-process with the orchestrator. Any zero-day or supply-chain compromise in Grammy or its transitive dependencies (`@grammyjs/types`, Grammy's HTTP client) executes within TD-ORCHESTRATOR. A compromised in-process adapter has access to all in-process state: the token store reference, Unix socket file descriptors, group filesystem paths, and the in-process audit log write path.
 
-The `.intent.md` schema requires declaration of network endpoints, and the Call Inspector enforces those for calls routed through the credential proxy. However, a malicious in-process adapter can bypass the credential proxy entirely: it has direct access to `process.env` (in Node.js, environment variables are readable by all in-process code unless stripped), can open direct TCP connections that do not go through any inspector, and can read files from the group filesystem directly. The `--permission` flag for Node.js (available from Node 20, which is the minimum runtime per `package.json`) provides OS-level capability restriction at the process level, but it is not currently specified.
+Grammy currently uses a semver caret (`^1.39.3`) in package.json, meaning it automatically adopts minor and patch updates on `npm install`. A compromised Grammy patch release would be automatically adopted without a lockfile audit. The documented OpenClaw/ClawHub exfiltration incident demonstrates this vector is actively exploited in the agentic assistant ecosystem.
+
+The TUI adapter has no external protocol dependency and presents a negligible supply-chain risk. The risk is concentrated in Grammy.
 
 **Spec coverage:** Partially addressed.
 
-The channel-adapters-spec.md acknowledges the risk: "the risk of in-process compromise is accepted because a malicious adapter is a supply-chain attack on the administrator's machine, which is outside OpenGolem's security boundary." The `.intent.md` endpoint declaration requirement provides audit accountability for declared outbound connections. `apply_permission: admin` constrains who can apply adapters.
+The channel-adapters-spec.md acknowledges the structural risk (ADR-6 acceptance) and requires `apply_permission: admin`. Invariant 9 correctly places the adapter in TD-ORCHESTRATOR with inbound data from TD-CHANNEL treated as untrusted. The `.intent.md` endpoint declaration requirement provides audit accountability for declared outbound connections.
 
-The gap: no spec requires that adapter-to-channel-provider connections not declared in `.intent.md` produce an audit event; no spec mandates use of Node.js `--permission` to restrict filesystem or network access; no spec restricts adapter sourcing to the canonical repository.
+The gaps: no spec restricts adapter sourcing to the canonical repository; no spec mandates Node.js `--permission` flags in production; no spec requires that Grammy's semver float be locked before shipping v1.0.
 
-**ADR recommendation:** This finding should be addressed in two layers. The first layer is a deployment policy ADR (ADR-34, see Draft ADR Text) specifying: (a) adapter sourcing must be from the canonical repository or administrator-audited sources; (b) Node.js `--permission` flags to restrict network and filesystem access are mandatory for production deployments; and (c) undeclared outbound network connections from the orchestrator process are a violation of the `.intent.md` invariant and should be detectable via audit. The second layer — moving high-privilege adapters out-of-process — should be recorded as a Phase 2 design objective in a future ADR, not required for v1.0.
+**ADR recommendation:** This finding should be addressed at two layers. First, the lockfile gap (Grammy `^1.39.3` floating) is addressable immediately and should be addressed as part of the F-10 supply-chain ADR (ADR-38). Second, a deployment policy ADR (Draft ADR-34, below) specifies: (a) adapter sourcing requirements, (b) Node.js `--permission` flags as mandatory for production, and (c) undeclared outbound connections from the orchestrator process as a loggable anomaly. Moving adapters out-of-process is a Phase 2 design objective, not a v1.0 requirement.
 
 ---
 
@@ -106,41 +116,41 @@ The gap: no spec requires that adapter-to-channel-provider connections not decla
 
 **Original severity:** Medium
 **Confirmed severity:** Medium
+**Scope change impact:** None. Token store behaviour is independent of channel scope.
 
 **Threat narrative:**
-The Token Broker's in-memory token store does not persist across restarts. A container running when the broker crashes holds a token that is no longer valid. Its next proxied call returns HTTP 403. The container cannot complete its work. It remains alive, consuming CPU and memory, holding filesystem write locks on the group directory, and potentially holding a partially-written `CLAUDE.md` or `messages.db` state, until its TTL fires. Depending on the task TTL (default not specified in the orchestrator spec), this window could be several minutes.
+The Token Broker's in-memory token store does not persist across restarts (intentional, per Decision 16). A container running when the broker crashes holds a token the broker no longer recognises. Its next proxied call returns HTTP 403. The container cannot complete its work but remains alive, consuming resources and holding filesystem write locks on the group directory, until its TTL expires.
 
-The security concern beyond resource exhaustion: a container that has partially completed a memory write (Tier 1 `CLAUDE.md` mutation that passed a Cato `MEMORY_WRITE` check) but has not written the result yet represents an inconsistent state. If the orchestrator tears down the container before the write completes due to broker loss, the memory state is not corrupted — but if the container has already written to the bind-mounted group directory and the orchestrator does not know this, the audit trail for that write may be incomplete.
+The orchestrator's current failure-handling spec (Decision 6, ARCHITECTURE.md §1.3) covers broker-unreachable at task-start: pending messages are queued and no new containers are spawned. It does not address mid-task broker loss: what happens to containers already running when the broker socket goes down. The gap: stranded containers are not torn down promptly; their in-progress filesystem writes may produce inconsistent partial state in the group directory; and the audit trail for a container that was running during broker loss may be incomplete.
 
-A more direct attack: if the broker is crash-looped by an adversary who can cause repeated restarts (e.g. via resource exhaustion of the broker process), active containers are repeatedly stranded. The orchestrator queues new messages but cannot spawn containers — the system is degraded while containers accumulate TTL wait time.
+A more targeted attack: an adversary who can crash-loop the broker (via resource exhaustion of the broker process) can repeatedly strand running containers, creating a progressive resource accumulation attack that degrades the host without the orchestrator ever knowingly failing to start a task.
 
 **Spec coverage:** Partially addressed.
 
-The orchestrator-spec.md failure modes table (line 411) covers "Token Broker unreachable during task dispatch" (queue pending messages, notify user, do not spawn). It does not cover mid-task broker loss — what happens to a container that is already running when the broker socket becomes unavailable. No polling mechanism for mid-task broker health is specified. No fast-teardown path for stranded containers is specified.
+The orchestrator-spec.md failure modes table covers token broker unreachable at dispatch time. It does not contain a "mid-task broker loss" entry. No polling mechanism for mid-task broker health is specified. Decision 6 does not address mid-task loss.
 
-Decision 6 (Failure Handling) covers broker-unreachable at task start. It does not address mid-task loss.
-
-**ADR recommendation:** This can be closed with a spec addition rather than a new ADR. The orchestrator-spec.md failure modes table must add: "Token Broker socket unavailable for a running task (mid-task broker loss): Orchestrator detects loss on a polling interval of 5 seconds during active tasks. On detected loss: (a) force-teardown all active containers; (b) revoke their tokens (non-enforceable — broker is down, log the revocation obligation as unmet); (c) write `container_teardown` to the audit log with `reason: broker_loss`; (d) queue the interrupted task for retry when the broker recovers." A supervisor restart policy for the broker (systemd `RestartSec=2`) is a DevOps/Stream H concern, not an ADR, but this spec addition is the architectural prerequisite for Stream H to document correctly.
+**ADR recommendation:** This can be closed with an orchestrator-spec addition rather than a new ADR. The orchestrator-spec.md failure modes table must add: "Token Broker socket unavailable for a running task (mid-task broker loss): The orchestrator detects loss on a 5-second polling interval during active tasks. On detected loss: (a) force-teardown all active containers immediately; (b) attempt to revoke their tokens via the socket — if the socket is unavailable, log the revocation obligation as unmet with a `container_teardown` event recording `reason: broker_loss` and `revocation_status: unenforceable`; (c) queue the interrupted task's originating message for retry when the broker recovers. Containers are never left running past a detected broker loss." A supervisor restart policy (systemd `RestartSec=2` for the broker process) is a DevOps/Stream H concern, but this spec addition is the architectural prerequisite for Stream H to document the correct restart procedure.
 
 ---
 
 ### F-6 — No Inbound Message Rate Limiting
 
 **Original severity:** Medium
-**Confirmed severity:** Medium (escalated in the LLM-workload context)
+**Confirmed severity:** Medium (escalated context note: direct financial impact via API cost amplification)
+**Scope change impact:** Marginal. Long-poll mode slightly reduces the attack surface for synthetic event injection (an attacker must compromise the Telegram adapter's connection or an allowlisted account rather than posting to an open HTTP endpoint), but the fundamental risk — a compromised allowlisted account or a compromised adapter that synthesises events — is unchanged. Queue flooding is still exploitable.
 
 **Threat narrative:**
-The orchestrator's per-group message queue accepts messages without bound. A user — or a compromised channel adapter relaying injected inbound events — can fill the queue without limit. In a traditional application, queue overflow is a denial-of-service risk. In an LLM application, it is a resource exhaustion and cost amplification risk: each queued message will eventually trigger a container spawn with associated compute, memory, and API credit consumption. A sender who can inject 1,000 messages into the queue has also triggered 1,000 API calls at the operator's expense.
+The orchestrator's per-group message queue accepts messages without bound (orchestrator-spec.md §3.2 specifies one-active-task-per-context concurrency control, not a queue depth cap). Each queued message will eventually trigger a container spawn with associated CPU, memory, and API credit consumption. A sender who can inject N messages into the queue has triggered N LLM API calls at the operator's expense.
 
-The sender allowlist (Telegram valid users, group allowlists) mitigates this for identifiable bad actors whose identity is known in advance. It does not mitigate a compromised account on the allowlist, a sender who has not yet been identified as malicious, or a compromised adapter that synthesises inbound events with arbitrary sender identities (since the adapter delivers all parseable events without sender gating).
+The sender allowlist (TELEGRAM_VALID_USERS, group allowlists) mitigates this for identifiable bad actors known in advance. It does not mitigate: a compromised allowlisted account, a user who has not yet been identified as malicious and abuses their access, or a compromised Grammy adapter that synthesises `InboundMessage` objects with arbitrary sender IDs before allowlist checking occurs. The channel-adapters-spec explicitly states that adapters do not gate on sender identity — the orchestrator applies that check after delivery.
 
-The per-sender rate limit and queue depth maximum are not currently specified anywhere in the orchestrator spec or the architecture.
+For an LLM-backed assistant, this is also a financial risk: there is no upper bound on how much an attacker who controls an allowlisted sender identity can spend at the operator's expense.
 
 **Spec coverage:** Fully open.
 
-The orchestrator-spec.md §3.2 (queue management) specifies one-task-per-group concurrency control. No rate limiting, queue depth cap, or back-pressure mechanism is specified. The dao_score KPI set (Decision 5, ARCHITECTURE.md §3.4) does not include an inbound anomaly metric. The SECURITY_STRENGTHENING.md recommendation (per-sender rate limit, queue depth max, audit log event on breach) has no corresponding spec text.
+The orchestrator-spec.md §3.2 specifies only one-active-task-per-context concurrency control. No per-sender rate limit, queue depth maximum, or back-pressure mechanism is specified. The dao_score KPI set (Decision 5) does not include an inbound anomaly metric. The SECURITY_STRENGTHENING.md recommendation is not reflected in any spec.
 
-**ADR recommendation:** New ADR required. See Draft ADR Text section below (ADR-35). The orchestrator-spec must gain a behavioral contract section for queue management: configurable per-sender rate limit (default: 10 messages per minute per sender per group), configurable per-group queue depth maximum (default: 100 pending messages), and an audit log event type `queue_depth_exceeded` when the threshold is breached.
+**ADR recommendation:** New ADR required (Draft ADR-35, below). The orchestrator-spec must gain a behavioral contract section for queue management covering per-sender rate limits and per-group queue depth caps. Both must produce audit log events detectable by Cato's scheduled audit.
 
 ---
 
@@ -148,24 +158,18 @@ The orchestrator-spec.md §3.2 (queue management) specifies one-task-per-group c
 
 **Original severity:** Medium
 **Confirmed severity:** Medium
+**Scope change impact:** None. The self-hosted model safety gap is independent of channel scope.
 
 **Threat narrative:**
-An operator who configures Ollama or a `custom` provider receives no in-product signal that their safety posture has changed. In Phase 1, Cato's inline checks are deterministic stubs: path traversal and oversized payload detection. Anthropic's cloud API applies independent content moderation and safety filtering on every call; a self-hosted Ollama instance applies none. The operator's Phase 1 safety envelope with a self-hosted model is therefore: Cato's two deterministic checks, the Call Inspector's five checks (skill whitelist, memory scope, injection signatures, call rate, endpoint scope), and Alef's character-based assertiveness. There is no upstream backstop.
+An operator who configures Ollama or a `custom` provider receives no in-product signal that their safety posture has changed materially. Anthropic's cloud API applies independent content moderation and safety filtering; a self-hosted Ollama instance applies none. In Phase 1, where Cato's inline checks are deterministic stubs (path traversal and oversized payload), the Phase 1 safety envelope for a self-hosted deployment is: Cato's two deterministic checks, the Call Inspector's five checks, and Alef's character-based assertiveness. There is no upstream backstop.
 
-This is not an attack scenario in the traditional sense — it is a responsible AI disclosure gap. The operator who configures Ollama without understanding this is not being attacked; they are making an uninformed configuration decision that reduces their safety coverage. In a system designed for non-expert operators, this gap has real consequences.
-
-The relevant attack path in an adversarial frame: a user who knows the operator is running a local model also knows that the operator's safety envelope is weaker, and may probe for behaviors that Anthropic's model refusal training would block but an unaligned local model might permit.
+The cato-spec.md correctly documents the "prima-facie / anti-mind-reading" principle in its Phase 2 LLM escalation section — Cato's evaluator should read payload content charitably and not speculate about intent. This is the right posture for a Phase 2 LLM evaluator, but it does not help in Phase 1 where the LLM path is not yet wired. A self-hosted operator who reads the cato-spec would see a Phase 2 promise of thoughtful LLM oversight; they would not see a clear statement that in Phase 1 they are running on deterministic stubs only with no upstream content moderation.
 
 **Spec coverage:** Partially addressed.
 
-The token-broker-spec.md correctly specifies that Ollama calls receive no injected credential (AC-11) and the ARCHITECTURE.md §3.0 security mode model correctly documents that Cato's inline `allow: false` is unconditional regardless of provider. However, neither the skill-schema-spec, the soul-psyche-spec (PSYCHE.md), nor the deployment documentation contains the explicit warning that SECURITY_STRENGTHENING.md recommends: a surface visible to the operator when enabling a local model, specifying that Cato now constitutes the entire safety envelope with no upstream backstop.
+The token-broker-spec correctly specifies that Ollama calls receive no injected credential (AC-11) and ARCHITECTURE.md §3.0 correctly documents that Cato's inline `allow: false` is unconditional regardless of provider. Neither the skill-schema-spec, the soul-psyche-spec, nor deployment documentation contains the explicit warning that SECURITY_STRENGTHENING.md recommends.
 
-**ADR recommendation:** This finding can be partially closed by spec additions rather than a full new ADR. Three additions are required:
-1. The skill-schema-spec behavioral contract must add: "When a skill with `providers.compatible` containing `ollama` or `custom` (not `any`) is applied, the orchestrator emits an administrator-visible warning: 'This skill is configured for a self-hosted provider. Cato's inline checks are the complete safety envelope for this provider — no upstream content moderation applies. Review PSYCHE.md thresholds before enabling this skill in production.'"
-2. The soul-psyche-spec (PSYCHE.md schema) must add a required section: `Self-Hosted Provider Posture`, specifying that when a self-hosted provider is active, the PSYCHE.md thresholds warrant review and the scheduled audit interval should be reduced.
-3. The deployment documentation must include a "Safety posture by provider" table before any external deployment is made.
-
-A new ADR (ADR-36) should record the architectural decision that the operator-visible warning is the governing mechanism for this disclosure, and that Cato's inline checks are the documented floor for all providers in Phase 1.
+**ADR recommendation:** This finding can be partially closed by spec additions rather than a full new ADR. Three additions are required: (1) skill-schema-spec behavioral contract must add an administrator acknowledgement prompt for self-hosted provider skills; (2) soul-psyche-spec (PSYCHE.md schema) must add a required section on self-hosted provider posture; (3) a "Safety posture by provider" table in deployment documentation. A new ADR (Draft ADR-36, below) records the architectural decision that the operator-visible acknowledgement is the governing mechanism, and that Cato's inline checks are the documented floor for all providers in Phase 1.
 
 ---
 
@@ -173,86 +177,81 @@ A new ADR (ADR-36) should record the architectural decision that the operator-vi
 
 **Original severity:** Medium
 **Confirmed severity:** Medium
+**Scope change impact:** None. Credential rotation is independent of channel scope.
 
 **Threat narrative:**
-A long-lived Anthropic API key or OAuth token is a static secret that, if leaked, remains valid until rotated. The Token Broker holds this credential in-process after loading it from the configured backend. If the credential is compromised — via a `.env` file committed to version control, a Bitwarden vault breach, a shoulder-surfing incident, or a memory disclosure from the broker process — the operator needs to rotate it. The current specs provide no guidance on: whether the broker reloads the backend without a restart, what happens to in-flight derivative tokens when the underlying credential changes, or what the emergency procedure is for suspected compromise.
+The Token Broker holds the long-lived Anthropic API key or OAuth token in-process after loading from the configured backend. If this credential is compromised — via a `.env` file accidentally committed to version control (a common incident), a Bitwarden vault breach, or a memory disclosure from the broker process — the operator must rotate it. The current specs provide no guidance on: whether the broker reloads the backend without a restart, what happens to in-flight derivative tokens when the underlying credential changes, or what the emergency procedure is.
 
-In the worst-case scenario: an operator suspects their Anthropic API key has leaked. They update Bitwarden. The broker continues using the old key from memory. The leaked key remains valid. The operator has no in-product path to trigger an immediate rotation that flushes in-flight tokens and forces a backend re-read without a full service restart. A full restart invalidates all in-flight tokens and interrupts active tasks — which may be acceptable for an emergency, but the operator does not know this is the procedure and may not perform it promptly.
+Worst case: an operator discovers a potential key leak, updates their Bitwarden vault, and believes they are now safe. The broker continues using the old key from memory until it is restarted. In-flight containers continue using derivative tokens derived from the old key. The leaked key remains valid and exploitable. The operator has no in-product path to force an immediate broker re-read without a full service restart, and a full restart tears down all active containers — which the operator may not know is the correct emergency procedure.
 
 **Spec coverage:** Fully open.
 
-The token-broker-spec.md specifies credential backend resolution at startup (loading the long-lived credential from the configured backend) and derivative token issuance/revocation. It does not specify: credential re-read without restart, emergency rotation method, or `rotateCredential` RPC. DECISIONS.md Decision 8 defines the three backends but does not address rotation. No ADR covers rotation behavior.
+The token-broker-spec specifies credential backend resolution at startup and derivative token issuance/revocation. It does not specify credential re-read, emergency rotation, or a `rotateCredential` method. Decision 8 defines the three backends but does not address rotation. No ADR covers rotation behavior.
 
-**ADR recommendation:** New ADR required. See Draft ADR Text section below (ADR-37). The token-broker-spec must gain: (a) a `rotateCredential` JSON-RPC method on the token lifecycle socket, callable by the orchestrator on administrator request, that triggers immediate backend re-read and optional revocation of all in-flight tokens; (b) a behavioral contract for planned rotation (credential changes take effect within a configurable polling interval, default 5 minutes, without requiring a restart); (c) the deployment documentation and Stream H runbook must include an emergency rotation procedure.
+**ADR recommendation:** New ADR required (Draft ADR-37, below). The token-broker-spec must gain: (a) a `rotateCredential` JSON-RPC method triggering immediate backend re-read and optional mass revocation of in-flight tokens; (b) a planned rotation polling behavior (credential changes take effect within a configurable interval without restart); (c) deployment documentation and Stream H runbook must include an emergency rotation procedure.
 
 ---
 
 ### F-9 — MCP Permission Tier Enforcement Is Phase 2 With No Interim Controls
 
 **Original severity:** Medium
-**Confirmed severity:** Medium (risk acceptance confirmed; interim control gap confirmed)
+**Confirmed severity:** Medium (risk acceptance confirmed; interim control gap confirmed — unchanged from v1 report)
+**Scope change impact:** None. MCP permission tier enforcement is independent of channel scope.
 
 **Threat narrative:**
-The `.intent.md` schema correctly includes `min_permission_tier` for MCP server declarations. Decision 29 accepts that enforcement is deferred to Phase 2 with the interim control: MCP-declaring skills restricted to administrator-only groups. The attack path in the interim period: a lower-tier group member instructs Alef to perform an action that triggers an MCP call (code commit, project management update, knowledge base write) for which they would not have direct authorisation in the target system. Because the MCP call is made using a credential that Alef's session has access to, and because permission tier enforcement is not implemented, the call succeeds regardless of the user's actual authorisation level.
+The `.intent.md` schema requires `min_permission_tier` per MCP server entry, and the skill-schema-spec validates this field as required (AC-3f). However, enforcement of the field at call time — verifying that the triggering user's permission tier meets or exceeds the declared minimum — is deferred to Phase 2. During Phase 1, any user who can send a message to a group where an MCP-declaring skill is active can trigger MCP calls to declared endpoints regardless of whether their permission tier would authorise those calls.
 
-The bounds of this risk are: the skill must be administrator-applied, so the call must be to an MCP server the administrator has explicitly enabled; and the MCP endpoint is in the Call Inspector's constraint list (registered via `registerSkillScope`). The risk is not unlimited — it is confined to declared, administrator-approved MCP endpoints. The concern is that administrator approval of the skill does not imply authorization for every user in every group.
+The bounds of this risk: the MCP server must be administrator-applied, the endpoint must be in the Call Inspector's constraint list (registered via `registerSkillScope`), and the Call Inspector enforces endpoint scope. The concern is not unconstrained access — it is that administrator approval of the skill does not imply per-user per-call authorisation, and that constraint is invisible in Phase 1.
 
-**Spec coverage: interim control — not implemented in any spec.**
+**Spec coverage: the interim control from Decision 29 is confirmed absent from all behavioral specs.**
 
-Decision 29 records the PM's risk acceptance and states the interim control: "MCP-declaring skills are restricted to administrator-only groups until Phase 2 permission tier enforcement is implemented. This must be stated as explicit deployment guidance in the documentation, not left implicit."
+Decision 29 records PM risk acceptance with the following explicit condition: "MCP-declaring skills are restricted to administrator-only groups until Phase 2 permission tier enforcement is implemented. This must be stated as explicit deployment guidance in the documentation, not left implicit."
 
-Checking the relevant specs:
-- The skill-schema-spec.md defines `min_permission_tier` as a required field per MCP server entry, but the behavioral contract does not describe how it is enforced (it cannot in Phase 1 — enforcement is deferred). The spec does not contain the interim control statement from Decision 29.
-- The channel-adapters-spec.md, orchestrator-spec.md, and soul-psyche-spec.md contain no reference to the MCP permission tier limitation or the admin-only restriction.
-- No deployment documentation currently exists that would carry this warning (it is being written as part of the v1.0 stream).
+Checking all relevant specs confirms the gap is unchanged from v1:
 
-**The interim control documented in Decision 29 is not yet reflected in any behavioral spec.** This is the gap flagged by the task instructions, and it must be closed before any MCP-declaring skill ships.
+- skill-schema-spec.md validates `min_permission_tier` as a required field (AC-3f) but contains no behavioral clause stating that MCP-declaring skills must only be applied to administrator-only groups, no administrator warning at application time, and no reference to Decision 29's conditions.
+- orchestrator-spec.md, channel-adapters-spec.md, and soul-psyche-spec.md contain no reference to the MCP permission tier limitation or the admin-only restriction.
+- No deployment documentation currently carries the required warning.
 
-**ADR recommendation:** Decision 29 is already the governing record. The required action is spec additions, not a new ADR. The skill-schema-spec.md behavioral contract must add: "Phase 1 MCP limitation: `min_permission_tier` is validated as a required field but is not enforced at call time. MCP-declaring skills must not be applied to groups with non-administrator members until Phase 2 permission tier enforcement is implemented (see Decision 29). The orchestrator must surface a warning at skill application time when a skill declares MCP servers: 'This skill declares MCP servers. Permission tier enforcement is not active in Phase 1. Apply this skill only to administrator-only groups.'" This warning is the spec-level implementation of the interim control.
+The risk acceptance recorded in Decision 29 is **conditional** on the interim control being documented. That condition has not been met. Any MCP-declaring skill published before this gap is closed violates the conditions of Decision 29.
+
+**ADR recommendation:** Decision 29 is already the governing record. No new ADR is needed. The required action is a specific spec addition. The skill-schema-spec.md behavioral contract (On skill application section) must add: "When a skill has a non-empty `mcp.servers` list, the orchestrator must surface an administrator-visible warning at application time: 'This skill declares MCP servers. Permission tier enforcement (`min_permission_tier`) is parsed and stored but is not enforced at call time in Phase 1 (see Decision 29). This skill must only be applied to administrator-only groups until Phase 2 permission tier enforcement is implemented.' The administrator must explicitly confirm before the skill is applied. The confirmation is logged to the audit log as a `skill_mcp_warning_acknowledged` event with `skillId` and `timestamp`."
+
+This single clause is the spec-level implementation of Decision 29's interim control. It must be in place before any MCP-declaring skill is published.
 
 ---
 
 ### F-10 — External Dependency Surface Is an Unaddressed Systemic Risk
 
 **Original severity:** High
-**Confirmed severity:** High (this finding is the most likely practical attack vector in Phase 1)
+**Confirmed severity:** High (moderately reduced by scope change; Baileys is absent, which removes the largest transitive surface)
+**Scope change impact:** Moderate. The v1 report noted Baileys as the largest transitive dependency surface — hundreds of dependencies processing a binary protocol — and flagged its addition as warranting its own audit review. Baileys is not in the v1.0 `package.json` and is not in scope. This reduces the immediate risk materially. However, Grammy's semver float (`^1.39.3`) remains, better-sqlite3's native addon remains, and the absence of a lockfile or npm audit policy remains fully open.
 
-**Threat narrative:**
-This finding covers three distinct surfaces. Each is assessed separately.
+**Threat narrative — three surfaces assessed separately:**
 
 **Surface 1: Node.js runtime.**
-The orchestrator, Token Broker, and Cato all run in Node.js processes. Any V8 or libuv vulnerability is unconditionally inherited. Node.js has had multiple security-relevant CVEs including prototype pollution vulnerabilities (CVE-2022-21824, CVE-2023-30588), HTTP/2 implementation flaws (Rapid Reset, CVE-2023-44487 affected Node.js), and permission model bypasses. The OpenGolem trust domain model operates above the runtime layer — no application-layer control mitigates a runtime vulnerability. The requirement `"node": ">=20"` in `package.json` is a floor, not a ceiling. Running the latest LTS (Node 22.x) minimises exposure. This is a hygiene concern that the deployment documentation should address; it is not addressable in the application architecture.
+All host-side processes (orchestrator, Token Broker, Cato) run in Node.js. Any V8 or libuv vulnerability is unconditionally inherited below the application layer. OpenGolem's trust domain model and Call Inspector gates do not apply below the runtime. Node 20 is the minimum per `package.json`; Node 22 LTS is the current stable release. Running the latest LTS minimises exposure. This is a hygiene concern addressed by deployment documentation — it is not fixable in the application architecture.
 
-**Surface 2: npm direct dependencies (package.json analysis).**
+**Surface 2: npm direct and transitive dependencies (v1.0 package.json analysis).**
 
-The production dependencies are:
-
-| Package | Version | Risk surface | Assessment |
+| Package | Pinning | Risk surface | Assessment |
 |---------|---------|--------------|------------|
-| `better-sqlite3` | 11.10.0 | Filesystem access; native addon; parsing orchestrator/broker/cato audit data | **High risk surface.** Native C++ addon runs in-process. An exploit in the addon or a malicious version could execute arbitrary native code within any process that opens a database. This package has direct access to `data/audit.db`, `data/memory.db`, and all `messages.db` files. It is a single point of trust for all persistence. The pinned exact version (`11.10.0`) is good hygiene; verify this version has no known CVEs at ship time. Transitive dependencies: sqlite3 source (compiled in); no npm transitive graph of concern, but the native build chain (node-gyp, Python, C++ compiler) is a build-time supply-chain surface. |
-| `cron-parser` | 5.5.0 | Parses untrusted configuration (CATO_AUDIT_INTERVAL) | **Low-medium risk.** Parses configuration strings, not user input. The input is operator-supplied configuration, not attacker-controlled in the normal threat model. ReDoS risk in cron expression parsers is known; the version should be verified as not subject to CVE-2021-23369 class issues. Exact pin is good. |
-| `grammy` | ^1.39.3 | Network access (Telegram API); parsing untrusted input (Telegram payloads) | **High risk surface.** Receives and parses all inbound Telegram messages before any application-layer validation. A malicious or compromised Telegram payload is processed by Grammy before Cato or the Call Inspector see it. Grammy uses semver caret (`^1.39.3`) — will automatically consume minor and patch updates without a lockfile audit. Grammy's transitive graph includes `@grammyjs/types` (Telegram API type definitions) and an HTTP client. The semver float is a supply-chain risk: a compromised Grammy patch release would be automatically adopted on `npm install`. Grammy runs in-process with the orchestrator and has the same access as a channel adapter. |
+| `better-sqlite3` `11.10.0` | Exact pin | Native C++ addon; in-process with all three host processes; parses all SQLite files including `data/audit.db` | **High concern.** The exact pin is correct hygiene. A native addon exploit executes native code in all three processes simultaneously and has direct read/write access to the audit log and all group message databases. Verify `11.10.0` has no known CVEs at ship time. The native build chain (node-gyp, Python, C++) is a build-time supply-chain surface. |
+| `cron-parser` `5.5.0` | Exact pin | Parses `CATO_AUDIT_INTERVAL` configuration string | **Low concern.** Operator-supplied configuration, not attacker-controlled in the normal threat model. Exact pin is correct. ReDoS class issues have affected cron parsers; verify the version. |
+| `grammy` `^1.39.3` | Semver caret — **floats** | Receives and parses all inbound Telegram messages before any application validation; runs in-process with the orchestrator | **High concern.** The semver float is the primary actionable gap: a compromised Grammy patch release is automatically adopted on `npm install`. Grammy's transitive graph includes `@grammyjs/types` and an HTTP client. Grammy is also the entry point for all untrusted Telegram payload data before Cato or the Call Inspector see it. **The `^` must be replaced with an exact pin before v1.0 ships.** |
 
-The `devDependencies` (eslint, typescript, vitest, prettier, husky, tsx) do not run in production and are lower risk, though they execute during the build pipeline. A compromised build dependency could inject malicious code into the compiled output. `tsx` (TypeScript executor used in `dev` mode and scripts) is notable: it executes TypeScript source directly and runs in production context during development mode (`npm run dev`). The `tsx` semver float (`^4.19.0`) is a minor concern.
+**Missing lockfile:** A `package-lock.json` is not confirmed present in the repository (git status shows no lockfile changes). Without a lockfile, `npm install` does not guarantee reproducible installs. Any `npm install` on a fresh clone can produce a different dependency tree from what was tested.
 
-**Highest-risk transitive surfaces:**
-- Grammy's HTTP client and WebSocket implementation: processes all inbound Telegram data before any OpenGolem validation. A zero-day in Grammy's HTTP client parsing (similar to class of issues that have affected other Node.js HTTP libraries) could be exploited by a malicious Telegram server response.
-- `better-sqlite3`'s native addon: any compromise here affects all three host processes simultaneously, since all use the same SQLite database files.
-- Baileys (WhatsApp): **notably absent from `package.json`** in the current v0.1 baseline, although the channel-adapters-spec covers WhatsApp. When Baileys is added (Stream F), it will be the largest transitive dependency surface: Baileys has hundreds of transitive dependencies and processes WhatsApp's binary protocol. It is a known supply-chain concern and should receive its own audit review at introduction time.
-
-**Missing items:**
-- No `package-lock.json` or `npm-shrinkwrap.json` is referenced in the repository structure (not confirmed present in this review; the git status shows no lockfile changes). If absent, `npm install` does not guarantee reproducible installs.
-- No `npm audit` policy is specified.
-- No CI integration for dependency scanning is specified.
+**Missing npm audit policy:** No spec, no CI configuration, and no process document specifies that `npm audit` should be run or that a zero-high-severity policy is enforced. A high-severity vulnerability in any direct or transitive dependency has no detection gate before reaching production.
 
 **Surface 3: Agent container image.**
-The container base image (referenced as `ubuntu:25.10` in ECOSYSTEM.md comparator context) and the Claude Agent SDK installed inside it are outside direct OpenGolem control. A compromised base image would affect container code, but the container trust boundary limits the impact: containers hold only derivative tokens, have no access to the audit log, and cannot communicate with the orchestrator beyond the stdout sentinel. This surface is partially mitigated by the container isolation model, but image pinning (using SHA256 digest rather than a mutable tag) is not specified.
+The container base image and Claude Agent SDK installed inside are outside direct OpenGolem control. The container isolation model limits the impact: containers hold only derivative tokens, cannot write to the audit log, and cannot communicate with the orchestrator beyond the stdout sentinel. Image pinning by SHA256 digest (rather than mutable tag) is not specified, meaning a base image update could introduce a regression silently.
 
 **Spec coverage:** Fully open.
 
-No spec in the current set addresses npm audit policy, lockfile requirements, dependency pinning, or container image pinning. The SECURITY_STRENGTHENING.md recommendation (npm audit in CI, locked lockfile, Phase 2 Rust crate minimisation objective) is not reflected in any spec or process document.
+No spec in the current set addresses npm audit policy, lockfile requirements, dependency version pinning, container image pinning, or supply-chain scanning. SECURITY_STRENGTHENING.md recommendations are not reflected in any spec or process document.
 
-**ADR recommendation:** New ADR required. See Draft ADR Text section below (ADR-38). Note: Stream L (Supply-Chain Auditor) is commissioned for the full dependency audit. This ADR establishes the minimum policy gate — it does not replace Stream L.
+**ADR recommendation:** New ADR required (Draft ADR-38, below). Immediate actions before v1.0 ships: Grammy `^` changed to exact pin; `package-lock.json` committed; `npm audit --audit-level=high` enforced (zero tolerance for high/critical). Phase 2: explicit Rust crate dependency minimisation objective. Container image SHA256 pinning is deployable now and should be addressed in the container build scripts.
 
 ---
 
@@ -260,52 +259,63 @@ No spec in the current set addresses npm audit policy, lockfile requirements, de
 
 ### Must be addressed before v1.0 ships
 
-| Priority | Finding | Reason | Owner |
+| Priority | Finding | Action required | Owner |
 |---|---|---|---|
-| 1 | **F-10 (npm audit policy and lockfile)** | Most likely practical attack vector; mitigations are low-friction; Stream L can only provide a full audit once basic policy infrastructure exists. | Stream L (Supply-Chain Auditor) + Stream G ADR |
-| 2 | **F-2 (credential proxy binding)** | Specifying the binding posture is a one-line addition to the token-broker-spec; no implementation complexity; the risk surface is live in Phase 1. | Token Broker spec + ADR-32 |
-| 3 | **F-1 (inbound transport security)** | Teams and Telegram webhook modes are active in Phase 1; payload signature verification must be a mandatory spec requirement before any adapter is shipped in webhook mode. | Channel Adapters spec + ADR-31 |
-| 4 | **F-9 interim control documentation** | Decision 29 conditions the risk acceptance on documentation being in place before any MCP skill ships. This is not a new decision — it is a documentation obligation that must be discharged. | Skill Schema spec addition |
-| 5 | **F-6 (inbound rate limiting)** | Cost amplification via queue flooding is exploitable in Phase 1 without any elevated access; default limits are a simple spec addition. | Orchestrator spec + ADR-35 |
-| 6 | **F-5 (mid-task broker loss)** | Spec addition to orchestrator failure modes; enables Stream H to write the correct supervisor restart runbook. | Orchestrator spec addition |
-| 7 | **F-8 (credential rotation)** | `rotateCredential` method is a bounded spec addition; the emergency runbook is a Stream H deliverable but requires this spec as input. | Token Broker spec + ADR-37 |
-| 8 | **F-7 (self-hosted provider warning)** | Skill-schema-spec and soul-psyche-spec additions; no new ADR needed beyond ADR-36; low implementation cost. | Skill Schema spec + soul-psyche-spec + ADR-36 |
+| 1 | **F-9 interim control** | Add MCP warning clause to skill-schema-spec.md. This is the condition on which Decision 29's risk acceptance is contingent. No MCP skill may ship without it. | Stream G spec addition (immediate) |
+| 2 | **F-10 (lockfile + Grammy pin + npm audit)** | Pin Grammy to exact version; commit `package-lock.json`; add `npm audit --audit-level=high` to CI. These are low-friction, high-impact mitigations. | Stream L (Supply-Chain Auditor) + Stream G ADR-38 |
+| 3 | **F-2 (credential proxy binding)** | One-clause addition to token-broker-spec; no implementation complexity; risk surface is live in Phase 1. | Token Broker spec + ADR-32 |
+| 4 | **F-6 (inbound rate limiting)** | Queue flooding is exploitable without elevated access; default limits prevent cost amplification attacks. Spec addition to orchestrator-spec. | Orchestrator spec + ADR-35 |
+| 5 | **F-1 (Telegram webhook signature verification)** | Add INV-10 to channel-adapters-spec requiring signature verification when webhook mode is enabled. Long-poll mode is already safe by absence of inbound endpoint. | Channel Adapters spec + ADR-31 |
+| 6 | **F-5 (mid-task broker loss)** | Orchestrator-spec failure modes table addition. Enables Stream H to write the correct supervisor restart runbook. | Orchestrator spec addition |
+| 7 | **F-8 (credential rotation)** | `rotateCredential` method is a bounded spec addition; emergency runbook is a Stream H deliverable but requires this spec as input. | Token Broker spec + ADR-37 |
+| 8 | **F-7 (self-hosted provider disclosure)** | Skill-schema-spec and soul-psyche-spec additions; low implementation cost; responsible AI obligation. | Skill Schema spec + soul-psyche-spec + ADR-36 |
 
 ### Phase 2 commitments (scheduled, not deferred indefinitely)
 
 | Finding | Phase 2 deliverable |
 |---|---|
-| **F-3 (audit log integrity)** | HMAC chain per ADR-33; spec fields reserved in Phase 1 (no data populated). Phase 2 milestone must include this as a named deliverable, not an open item. |
-| **F-4 (in-process adapter isolation)** | Node.js `--permission` enforcement in production (ADR-34 Phase 1 policy layer); out-of-process adapters as Phase 2 design objective. |
-| **F-10 (Rust crate minimisation objective)** | Phase 2 crate dependency graph acceptance criterion per ADR-38. |
+| **F-3 (audit log integrity)** | HMAC chain per ADR-33; `hmac` column reserved in Phase 1 schema (all writes NULL in Phase 1). Phase 2 milestone must include this as a named deliverable. |
+| **F-4 (in-process adapter isolation)** | Node.js `--permission` enforcement per ADR-34 (Phase 1 deployment policy); out-of-process adapters as Phase 2 design objective when Teams/WhatsApp are added. |
+| **F-10 (Rust crate minimisation)** | Phase 2 crate dependency graph acceptance criterion per ADR-38. |
 
-### Already closed
+### Closed or materially reduced by scope change (Decision 30)
 
-No finding from F-1 through F-10 is fully closed. F-9's risk acceptance is documented (Decision 29) but the corresponding interim control is not yet implemented in any spec — it is conditionally accepted, not closed.
+| Finding | Status |
+|---|---|
+| **F-1 (Teams inbound HTTP endpoint)** | Closed for the specific Teams Bot Framework inbound HTTP threat. The finding is re-framed as a conditional Medium for Telegram webhook mode. |
+| **F-10 (Baileys transitive graph)** | Materially reduced: Baileys is not in the v1.0 dependency graph. When WhatsApp is added as an optional skill, Baileys introduction requires a dedicated supply-chain review at that time, per ADR-38. |
+
+### Confirmed fully open (no spec coverage in current documents)
+
+F-2, F-6, F-8, F-9 (interim control), F-10 (lockfile, npm audit policy, Grammy pin, container image pinning).
 
 ---
 
 ## Draft ADR Text
 
-*The following ADR drafts are offered for PM review. Jim's approval is required before any is added to DECISIONS.md. ADR numbers 31–38 are proposed; the PM should verify sequencing against any ADRs produced by other streams.*
+*The following ADR drafts are offered for PM review. Jim's approval is required before any is added to DECISIONS.md. ADR numbers 31–38 are proposed; the PM should verify sequencing against any ADRs produced by other streams in the same session.*
 
 ---
 
-### Draft ADR-31: Inbound Channel Endpoint Authentication and Transport Binding
+### Draft ADR-31: Inbound Channel Endpoint Authentication and Deployment Mode Policy
 
-**Question:** What authentication and transport binding requirements apply to channel adapter inbound HTTP endpoints (Teams Bot Framework, Telegram webhook mode)?
+**Question:** What transport security and authentication requirements apply to channel adapter inbound endpoints? What is the required default deployment mode for Telegram?
 
-**Decision:** Every channel adapter that receives inbound messages via an HTTP or WebSocket endpoint (as opposed to long-poll) must:
-1. Bind the inbound endpoint to `127.0.0.1` (localhost) only. Exposure beyond localhost requires an explicit reverse-proxy configuration documented in the deployment runbook.
-2. Verify the channel provider's payload signature on every inbound request before delivering the event to the orchestrator. For Teams (Bot Framework), this is HMAC-SHA256 verification using the Bot Framework authentication token. For Telegram in webhook mode, this is the optional `X-Telegram-Bot-Api-Secret-Token` header verification against a configured secret. Events that fail signature verification are discarded; a `message_signature_invalid` event is written to the audit log.
-3. Return HTTP 401 to the caller on signature verification failure. No partial payload is delivered.
+**Decision:**
 
-**Recommendation for default mode:** Telegram and WhatsApp adapters should default to long-poll mode (where supported), not webhook mode, to avoid the inbound HTTP surface by default. Webhook mode is an operator-enabled configuration.
+1. **Default mode is long-poll.** The Telegram adapter default deployment mode is long-poll (`getUpdates`). Long-poll creates no inbound TCP listener and presents no inbound network attack surface. This is the required default for v1.0.
+
+2. **Webhook mode is an operator opt-in.** Webhook mode is a supported variant but requires explicit operator configuration. It is not enabled by default. Operators who enable webhook mode accept responsibility for correct reverse-proxy configuration.
+
+3. **Signature verification is mandatory for webhook mode.** Any channel adapter configured in webhook mode must verify the channel provider's payload signature on every inbound request before delivering the event to the orchestrator. For Telegram webhook mode, this is `X-Telegram-Bot-Api-Secret-Token` header verification against a configured secret. Events that fail verification are discarded; a `message_signature_invalid` event is written to the audit log. The adapter returns HTTP 401 to the caller on verification failure. No partial event is delivered.
+
+4. **This policy extends to future channel adapters.** When Teams and WhatsApp are added as optional skills, the same policy applies: any adapter that receives inbound push from a channel provider must implement the provider's signature verification scheme before v1.0-quality shipment.
 
 **Implications:**
-- channel-adapters-spec.md must add INV-N: "Adapters that receive inbound messages via an HTTP endpoint must perform payload signature verification before delivering to the orchestrator."
-- Teams adapter `.intent.md` must declare `inbound_endpoint: { bind: "127.0.0.1", auth: "botframework_signature" }` (schema to be defined in the channel-adapters-spec).
-- The deployment documentation must specify the reverse-proxy configuration for Teams (nginx or Caddy with TLS termination) before Teams is shipped.
+- channel-adapters-spec.md must add INV-10 codifying the webhook signature verification requirement.
+- channel-adapters-spec.md must add a behavioral contract clause stating long-poll as the Telegram default.
+- The deployment documentation must specify the reverse-proxy configuration for webhook mode (nginx or Caddy with TLS termination and `X-Telegram-Bot-Api-Secret-Token` configuration) before webhook mode is documented as a supported option.
+- The Teams and WhatsApp optional skill specs must document the relevant signature verification requirements at the time those skills are developed.
 
 ---
 
@@ -313,141 +323,159 @@ No finding from F-1 through F-10 is fully closed. F-9's risk acceptance is docum
 
 **Question:** What interface does the Token Broker's credential proxy HTTP server bind to, and what are the constraints on its network exposure?
 
-**Decision:** The credential proxy HTTP server binds to the Docker bridge network interface address (default `172.17.0.1`) only. It does not bind to `0.0.0.0` or any host-external interface under any configuration. The bind address is resolved at startup by inspecting the active Docker bridge interface. If the bridge address cannot be determined (e.g. because Docker is not running or the bridge network is not configured), the broker fails closed — it does not fall back to `0.0.0.0`.
+**Decision:** The credential proxy HTTP server binds to the Docker bridge network interface address only. It does not bind to `0.0.0.0` or any host-external interface under any configuration.
 
-The `CREDENTIAL_PROXY_BIND_ADDRESS` environment variable overrides the resolved bridge address for deployments that use a non-standard Docker network configuration (e.g. a named Docker network, Podman, Apple Container). This is a non-secret config var and belongs in `bootstrap.ts`'s `CONFIG_KEYS` whitelist per Decision 9.
+The bind address is resolved at broker startup by inspecting the active Docker bridge interface. The default Docker bridge address is `172.17.0.1`; non-standard Docker network configurations (named networks, Podman, Apple Container) may differ. If the bridge address cannot be determined at startup (Docker not running, bridge not configured), the broker fails closed — it does not fall back to `0.0.0.0`.
 
-Alternative container runtimes: for Apple Container (`applecontainer run`), the equivalent host-side network interface address must be used. The deployment documentation must specify the correct bind address per supported runtime.
+`CREDENTIAL_PROXY_BIND_ADDRESS` overrides the resolved bridge address for deployments using non-standard container network configurations. This is a non-secret config var and belongs in `bootstrap.ts`'s `CONFIG_KEYS` whitelist per Decision 9.
 
 **Implications:**
-- token-broker-spec.md must add a behavioral contract: "The credential proxy HTTP server binds to `CREDENTIAL_PROXY_BIND_ADDRESS` if set, otherwise to the resolved Docker bridge address. It never binds to `0.0.0.0`."
-- If bridge address resolution fails at startup, the broker writes a fatal log entry and does not start.
-- The Tester must verify: the proxy is not reachable from an IP address other than the configured bind address.
+- token-broker-spec.md must add a behavioral contract clause: "The credential proxy HTTP server binds to `CREDENTIAL_PROXY_BIND_ADDRESS` if set, otherwise to the resolved Docker bridge network interface address. It never binds to `0.0.0.0`. If the bind address cannot be determined, the broker writes a fatal log entry and does not start."
+- The deployment documentation must specify the correct `CREDENTIAL_PROXY_BIND_ADDRESS` value for each supported container runtime (Docker, Apple Container).
+- The Tester must verify: the proxy is not reachable from a network address other than the configured bind address.
+- If the project adds support for Apple Container (the `convert-to-apple-container` skill), the Apple Container host-side network interface address must be documented and the `CREDENTIAL_PROXY_BIND_ADDRESS` default must be updated accordingly.
 
 ---
 
-### Draft ADR-33: Audit Log Cryptographic Integrity — HMAC Chain (Phase 2 Commitment)
+### Draft ADR-33: Audit Log Cryptographic Integrity — HMAC Chain (Phase 2 Commitment with Phase 1 Schema Reservation)
 
-**Question:** How should the audit log be protected against OS-level tampering (row deletion, field modification, database file replacement)?
+**Question:** How should the audit log be protected against OS-level tampering (row deletion, field modification, database file replacement) that bypasses the application-layer INSERT-only semantics?
 
-**Decision:** Phase 2 will implement a per-writer HMAC entry chain in the audit log. The implementation details are:
-- Each audit log `INSERT` includes an `hmac` field (SHA-256 HMAC over the serialised row content plus the previous entry's HMAC for that writer, using a writer-specific key held in the Token Broker's credential backend).
-- The HMAC key per writer is distinct. It is not stored in the audit log or in the group filesystem. It is sourced from the credential backend (same backend as LLM credentials, Decision 8).
-- Cato's scheduled audit verifies the HMAC chain for the period under audit. A broken chain entry is reported as a `AUDIT_CHAIN_BREAK` anomaly finding in the hansei report.
+**Decision:** Phase 2 will implement a per-writer HMAC entry chain. Each audit log INSERT will include an `hmac` field: SHA-256 HMAC of the serialised row content concatenated with the previous entry's HMAC for that writer, using a writer-specific key held in the Token Broker's credential backend (same backend as LLM credentials, per Decision 8). The HMAC key per writer is distinct and is not stored in the audit log or group filesystem. Cato's scheduled audit will verify the HMAC chain for the audit period; a broken chain entry is reported as a `AUDIT_CHAIN_BREAK` anomaly in the hansei report.
 
-Phase 1 reservation: the `events` table schema (audit-log-spec.md §3.1) must add a nullable `hmac TEXT` column to reserve the field before Phase 2. In Phase 1, all writes set `hmac = NULL`. Phase 2 changes the writers to populate this field; the schema is forward-compatible.
+Phase 1 schema reservation: the `events` table schema must add a nullable column `hmac TEXT` before Phase 1 ships. All Phase 1 writes set `hmac = NULL`. The schema is forward-compatible with Phase 2 population.
+
+**Why not Phase 1:** The HMAC key provisioning mechanism requires the Token Broker credential backend to hold per-writer keys. In Phase 1, the `.env` backend is the primary backend, and adding cryptographic material to it before the multi-backend interface is stabilised would create a maintenance burden. Phase 2 introduces the full credential backend interface (Decision 8), at which point HMAC key provisioning is a natural addition.
 
 **Implications:**
-- audit-log-spec.md §3.1 must add `hmac TEXT` as a nullable column to the `events` table schema.
-- audit-log-spec.md §3.7 must add: "Cryptographic chain integrity (ADR-33) is required for the audit log to be treated as a tamper-evident record. The `sequence_id` gap detection is a complementary software-layer signal only."
-- Cato-spec.md scheduled audit section must note: "Phase 2: verify HMAC chain integrity for the audit period. Report `AUDIT_CHAIN_BREAK` findings."
-- The HMAC key provisioning mechanism must be addressed in the Token Broker spec when Phase 2 is planned.
+- audit-log-spec.md §3.1 must add `hmac TEXT` (nullable) to the `events` table schema.
+- audit-log-spec.md §3.7 (sequence_id documentation) must add: "The `sequence_id` gap detection mechanism is a software-layer integrity signal. It detects dropped rows within a single process run but does not protect against OS-level file replacement, field-level modification, or cross-run manipulation. Cryptographic chain integrity (ADR-33, Phase 2) is the authoritative tamper-evidence mechanism."
+- cato-spec.md scheduled audit section must add a Phase 2 note: "Phase 2: Cato verifies the HMAC chain for each writer for the covered audit period. A broken chain (NULL `hmac` where non-NULL is expected, or a hash mismatch) is reported as `AUDIT_CHAIN_BREAK` in the hansei report."
+- Phase 2 scope must include HMAC key provisioning mechanism as a named deliverable.
 
 ---
 
 ### Draft ADR-34: In-Process Adapter Supply-Chain Policy
 
-**Question:** What mitigating controls apply to in-process channel adapters given the accepted supply-chain risk (ADR-6)?
+**Question:** Given the accepted supply-chain risk of in-process channel adapters (ADR-6), what mitigating controls apply?
 
-**Decision:** Three mandatory controls for Phase 1; one Phase 2 design objective.
+**Decision:** Three mandatory controls for Phase 1. One Phase 2 design objective.
 
 **Phase 1 controls:**
-1. **Sourcing requirement:** Channel adapter skills applied to a production deployment must be sourced from the canonical OpenGolem repository or from an administrator-audited source. The deployment documentation must state this requirement. An administrator who applies a third-party adapter skill accepts responsibility for its supply-chain risk.
-2. **Node.js `--permission` flags in production:** Production deployments must launch the orchestrator process with Node.js `--permission` flags restricting filesystem access to the declared paths (`groups/`, `data/`, `SOUL.md`, `PSYCHE.md`) and network access to the declared adapter endpoints. The exact flag set is deployment documentation (Stream H). This is mandatory for production; development mode (`npm run dev`) may relax this.
-3. **Audit log anomaly for undeclared outbound connections:** The `.intent.md` invariant (Skill Schema spec Invariant 1) already states no undeclared capability. The orchestrator must log a `UNDECLARED_OUTBOUND` anomaly event to the audit log when an outbound network connection from the orchestrator process targets a pattern not declared in any active skill's `.intent.md`. This requires the orchestrator to intercept or observe outbound network activity — implementation via Node.js `--permission` network restriction combined with startup-time allowlist enforcement is the recommended approach.
 
-**Phase 2 design objective:** High-privilege channel adapters (those with `apply_permission: admin` and a large outbound endpoint set) should be candidates for out-of-process isolation with serialized IPC. The Architect should evaluate this at Phase 2 design time. It is a design objective, not a Phase 2 commitment, because the serialization cost and complexity are not yet evaluated.
+1. **Exact version pinning for adapter dependencies.** All packages that implement or support channel adapter functionality (e.g. Grammy for Telegram) must be pinned to exact versions in `package.json`. Semver caret or tilde ranges are not permitted for adapter-supporting packages in production. The rationale: a supply-chain compromise in a semver-floating adapter dependency is automatically adopted on `npm install` with no human review gate.
+
+2. **Sourcing requirement.** Channel adapter skills applied to a production deployment must be sourced from the canonical OpenGolem repository or from an administrator-audited source. The deployment documentation must state this requirement explicitly. An administrator who applies a third-party adapter skill accepts sole responsibility for its supply-chain risk, and the deployment documentation must make this obligation visible.
+
+3. **Node.js `--permission` flags in production.** Production deployments must launch the orchestrator process with Node.js `--permission` flags restricting filesystem access to declared paths (`groups/`, `data/`, `SOUL.md`, `PSYCHE.md`, `package.json`) and network access to the declared adapter endpoints. The exact flag set is a Stream H (DevOps) deliverable. Development mode (`npm run dev`) may relax this restriction.
+
+**Phase 2 design objective.** High-privilege channel adapters (those with `apply_permission: admin` and a large outbound endpoint set) are candidates for out-of-process isolation with serialised IPC. The Architect should evaluate this at Phase 2 design time when Teams and/or WhatsApp are added. This is a design objective, not a Phase 2 commitment, because the serialisation cost is not yet evaluated.
 
 **Implications:**
-- Deployment documentation must include adapter sourcing guidance.
-- Stream H must produce the `--permission` flag set for production launch scripts.
-- Orchestrator spec must add: a `UNDECLARED_OUTBOUND` event type to the audit log and the behavioral contract for detecting and logging it.
+- Grammy `^1.39.3` must be changed to an exact pin before v1.0 ships. Stream L identifies the correct pinned version following a supply-chain review.
+- `package-lock.json` must be committed to the repository before v1.0 ships.
+- Deployment documentation must include an adapter sourcing guidance section.
+- Stream H must produce the `--permission` flag set for production launch scripts and service unit files.
 
 ---
 
 ### Draft ADR-35: Inbound Message Rate Limiting and Queue Depth Control
 
-**Question:** How does the orchestrator protect against inbound message flooding (per-sender abuse, queue exhaustion, cost amplification)?
+**Question:** How does the orchestrator protect against inbound message flooding, queue exhaustion, and API cost amplification?
 
-**Decision:** The orchestrator enforces two configurable limits:
+**Decision:** The orchestrator enforces two configurable limits at the message queue boundary.
 
-1. **Per-sender rate limit:** Maximum N messages per sender (by `senderId`) per group per rolling 60-second window. Default: 10. Configurable via `INBOUND_RATE_LIMIT_PER_SENDER` (non-secret config var, Decision 9). Messages exceeding the limit are held in a per-sender cooldown queue (not dropped) for up to a configurable hold period, default 5 minutes. If still held after the hold period, they are dropped and a `message_rate_limited` audit event is written.
+**Per-sender rate limit:** Maximum N messages per sender (by `senderId`) per group per rolling 60-second window. Default: 10. Configurable via `INBOUND_RATE_LIMIT_PER_SENDER` (non-secret config var per Decision 9). Messages exceeding the rate limit are held in a per-sender cooldown queue (not dropped) for up to a configurable hold period (default: 5 minutes). If still held after the hold period, they are dropped and a `message_rate_limited` audit event is written with `senderId` hash, `groupId`, and `droppedCount`. The sender is notified via the channel that their messages are being rate-limited.
 
-2. **Per-group queue depth maximum:** Maximum M pending messages in any single group's queue at any time. Default: 100. Configurable via `INBOUND_QUEUE_MAX_DEPTH` (non-secret config var, Decision 9). When a new message arrives and the group queue is at capacity, the message is dropped immediately. A `queue_depth_exceeded` audit event is written. The user is notified via the channel.
+**Per-group queue depth maximum:** Maximum M pending messages in any single group's queue at any time. Default: 100. Configurable via `INBOUND_QUEUE_MAX_DEPTH` (non-secret config var per Decision 9). When a new message arrives and the group queue is at capacity, the new message is dropped immediately. A `queue_depth_exceeded` audit event is written. The sender is notified via the channel.
 
-**Both limits produce audit log events** (`message_rate_limited`, `queue_depth_exceeded`) that are detectable by Cato's scheduled audit. A future dao_score KPI extension may derive an inbound anomaly rate from these events.
+**No silently dropped messages:** The system must either queue, rate-hold, or explicitly drop (with audit log entry and sender notification) every inbound message. Messages are never silently lost.
 
-**No silently dropped messages:** The system must either queue, rate-hold, or explicitly drop (with audit log entry and user notification) every inbound message. Messages are never silently lost.
+**Audit observability:** Both event types (`message_rate_limited`, `queue_depth_exceeded`) are detectable by Cato's scheduled audit. A future dao_score extension may derive an inbound anomaly rate from these events.
 
 **Implications:**
-- orchestrator-spec.md §3.2 (queue management) must add the rate limit and queue depth behavioral contract.
-- audit-log-spec.md event type table must add `message_rate_limited` and `queue_depth_exceeded`.
-- `INBOUND_RATE_LIMIT_PER_SENDER` and `INBOUND_QUEUE_MAX_DEPTH` must be added to `bootstrap.ts`'s `CONFIG_KEYS`.
+- orchestrator-spec.md §3.2 (queue management) must add the rate limit and queue depth behavioral contract, including the exact event types and the no-silent-drop invariant.
+- audit-log-spec.md event type table must add `message_rate_limited` (fields: `senderIdHash`, `groupId`, `droppedCount`) and `queue_depth_exceeded` (fields: `groupId`, `queueDepth`, `droppedMessageHash`).
+- `INBOUND_RATE_LIMIT_PER_SENDER` and `INBOUND_QUEUE_MAX_DEPTH` must be added to `bootstrap.ts`'s `CONFIG_KEYS` whitelist.
 
 ---
 
 ### Draft ADR-36: Self-Hosted Provider Safety Posture Disclosure
 
-**Question:** What in-product disclosure is required when an operator configures a self-hosted (Ollama or custom) LLM provider?
+**Question:** What in-product disclosure is required when an operator configures a self-hosted (Ollama or custom) LLM provider? Who is responsible for surfacing the safety posture change?
 
-**Decision:** When a skill with `providers.compatible` containing `ollama` or `custom` (not `any`, not `anthropic`, not `openrouter`) is applied, the orchestrator emits an administrator-visible acknowledgement prompt: "This skill is configured for a self-hosted provider (`ollama` or `custom`). No upstream content moderation or safety filtering applies. Cato's inline checks are the complete safety envelope for calls made through this provider. Review your PSYCHE.md thresholds before deploying this skill in production. Confirm with [yes/no]." The skill is not applied until the administrator explicitly confirms.
+**Decision:** When a skill with `providers.compatible` containing `ollama` or `custom` (not `any`, not `anthropic`, not `openrouter`) is applied by an administrator, the orchestrator emits an acknowledgement prompt before completing the application:
 
-This acknowledgement is a one-time event per skill ID, not per invocation. It is logged to the audit log as a `skill_safety_acknowledged` event with `provider_type` and `skill_id`.
+> "This skill is configured for a self-hosted provider (`ollama` or `custom`). No upstream content moderation or safety filtering applies to calls made through this provider. Cato's inline checks are the complete safety envelope for these calls. In Phase 1, Cato's inline checks are deterministic stubs (path traversal and oversized payload detection). Review your PSYCHE.md thresholds before deploying this skill in production. Confirm [yes/no]."
 
-PSYCHE.md must include a section `Self-Hosted Provider Posture` specifying that when a self-hosted provider is the active provider for any group: (a) the scheduled audit interval should be reviewed against the default (6 hours); for high-volume deployments with local models, 1–2 hours is recommended; and (b) Cato's block thresholds should be verified before production use.
+The skill is not applied until the administrator explicitly confirms. This acknowledgement is a one-time event per `skillId`. It is logged to the audit log as a `skill_safety_acknowledged` event with fields `skillId`, `providerType` (`ollama` or `custom`), and `acknowledgedAt`.
+
+PSYCHE.md must include a required section `Self-Hosted Provider Posture` that specifies: (a) when a self-hosted provider is the active provider for any group, the scheduled audit interval should be reviewed; for high-call-volume self-hosted deployments, an interval of 1–2 hours (rather than the default 6 hours) is recommended; and (b) Cato's block thresholds should be verified before production use. The soul-psyche-spec must require this section's presence as a validation rule.
 
 **Implications:**
-- skill-schema-spec.md must add the acknowledgement flow to the behavioral contract.
-- soul-psyche-spec.md must add `Self-Hosted Provider Posture` as a required PSYCHE.md section.
-- audit-log-spec.md must add `skill_safety_acknowledged` event type.
+- skill-schema-spec.md behavioral contract (On skill application) must add the provider acknowledgement flow.
+- soul-psyche-spec.md PSYCHE.md schema section must add `Self-Hosted Provider Posture` as a required section.
+- audit-log-spec.md event type table must add `skill_safety_acknowledged`.
+- The deployment documentation must include a "Safety posture by provider" table before any external deployment is published.
 
 ---
 
-### Draft ADR-37: Credential Rotation Behavior
+### Draft ADR-37: Credential Rotation Procedure
 
-**Question:** What does the Token Broker do when a long-lived credential is rotated, and what is the emergency rotation procedure?
+**Question:** What happens when a long-lived credential (Anthropic API key, OAuth token, Bitwarden vault credential) is rotated? Can the Token Broker reload credentials without a full service restart? What is the emergency rotation procedure?
 
-**Decision:** Three behaviors are required:
+**Decision:**
 
-1. **Planned rotation (polling):** The Token Broker re-reads the active credential backend on a configurable interval (default: 5 minutes, configurable via `CREDENTIAL_POLL_INTERVAL`, non-secret config var per Decision 9). If the credential has changed, the broker updates its in-process credential reference. In-flight derivative tokens issued before the rotation remain valid for their declared TTL — they bear the old credential value injected at forward time. New tokens issued after the poll cycle use the new credential. No restart is required for planned rotation.
+**Planned rotation (credential updated in the backend):** The Token Broker polls the configured credential backend on a configurable interval (default: 5 minutes; configurable via `CREDENTIAL_RELOAD_INTERVAL`, non-secret config var per Decision 9) and reloads the long-lived credential if it has changed. In-flight derivative tokens continue to use the old credential for calls already in the proxy pipeline; new tokens issued after the reload use the new credential. The broker logs a `credential_reloaded` event to the audit log on each successful reload that detects a credential change.
 
-2. **Emergency rotation (`rotateCredential` RPC):** A new JSON-RPC method `rotateCredential` is defined on the token lifecycle socket (`data/sockets/broker.sock`). The Orchestrator calls this method on administrator request (via the remote-control surface or a CLI command). Parameters: `{ "force_revoke_all": true | false }`. On `force_revoke_all: true`, the broker immediately re-reads the backend and revokes all currently active tokens. Running containers receive HTTP 403 on their next proxied call. The orchestrator detects mid-task token invalidation (via the existing fail-closed posture) and tears down the affected containers, logging `container_teardown` with `reason: emergency_rotation`. On `force_revoke_all: false`, only the backend is re-read; no active tokens are revoked.
+**Emergency rotation (suspected compromise):** A `rotateCredential` JSON-RPC method is defined on the existing token lifecycle socket (`data/sockets/broker.sock`, per Decision 15):
 
-3. **Backend re-read failure:** If the broker cannot read the backend during a poll cycle (backend unreachable), it retains the last-known credential and logs a `credential_backend_unreachable` audit event. It does not clear the credential or invalidate tokens. The next poll cycle will retry. This is fail-retain for planned rotation; emergency rotation failures fail-closed (if the backend cannot be read, `rotateCredential` returns an error and no tokens are revoked).
+```json
+{"jsonrpc":"2.0","method":"rotateCredential","params":{"revokeInFlight":true},"id":30}
+{"jsonrpc":"2.0","result":{"reloaded":true,"revokedCount":N},"id":30}
+```
+
+`revokeInFlight: true` triggers: (a) immediate backend re-read; (b) revocation of all currently active derivative tokens (in-flight containers receive HTTP 403 on their next proxied call and are torn down by the orchestrator per the mid-task broker loss procedure, Decision F-5 spec addition); (c) a `credential_emergency_rotation` audit log event with `revokedCount` and `timestamp`. This is the in-product emergency rotation path. No service restart is required.
+
+The deployment documentation and Stream H runbook must include an emergency rotation procedure with target time-to-rotation for each backend type: `.env` (immediate — edit file, then invoke `rotateCredential`), Bitwarden (update vault entry, then invoke `rotateCredential`), OneCLI (update via OneCLI, then invoke `rotateCredential`).
 
 **Implications:**
-- token-broker-spec.md must add `rotateCredential` to the external interface and behavioral contract.
-- Stream H (DevOps) must produce an emergency rotation runbook that calls this method, with time-to-rotation targets per backend type.
-- `CREDENTIAL_POLL_INTERVAL` must be added to `bootstrap.ts`'s `CONFIG_KEYS`.
-- audit-log-spec.md must add `credential_backend_unreachable` and `emergency_rotation_executed` event types.
+- token-broker-spec.md must add `rotateCredential` to its External Interface section (§4.2.1) with the params schema and behavioral contract above.
+- token-broker-spec.md must add a behavioral contract for the polling-based planned rotation.
+- audit-log-spec.md must add `credential_reloaded` and `credential_emergency_rotation` event types.
+- `CREDENTIAL_RELOAD_INTERVAL` must be added to `bootstrap.ts`'s `CONFIG_KEYS` whitelist.
+- The Tester must verify: (a) after updating the `.env` credential and invoking `rotateCredential`, new proxied calls use the new credential; (b) `revokeInFlight: true` causes active containers to receive HTTP 403 on their next proxied call.
 
 ---
 
-### Draft ADR-38: Phase 1 Dependency Audit Policy and Phase 2 Crate Minimisation Objective
+### Draft ADR-38: External Dependency Supply-Chain Policy
 
-**Question:** What is the minimum dependency governance policy for the Phase 1 npm baseline, and what is the Phase 2 Rust crate minimisation requirement?
+**Question:** What minimum policy governs the npm dependency surface in Phase 1? What acceptance criterion applies to the Phase 2 Rust crate dependency graph? What policy governs the agent container base image?
 
-**Decision:** Two parts.
+**Decision:**
 
-**Part 1 — Phase 1 npm policy:**
-1. A `package-lock.json` must be committed and kept up to date. All installs in CI and production use `npm ci` (not `npm install`) to enforce lockfile reproducibility.
-2. `npm audit` must run in CI on every commit. The CI gate policy is: zero high-severity findings. Medium-severity findings produce a warning and must be reviewed within 14 days. Low-severity findings are logged but do not block CI.
-3. Before v1.0 ships, Stream L (Supply-Chain Auditor) must produce a dependency audit report (`docs/security/dependency-audit.md`) reviewing every direct production dependency against the risk surface classification in this ADR (F-10).
-4. When Baileys (WhatsApp) is added as a dependency (Stream F), it must receive its own Supply-Chain Auditor review before the WhatsApp adapter is enabled in any production deployment.
-5. The agent container base image must be pinned by SHA256 digest, not by mutable tag. The pinned digest must be recorded in `container/build.sh` and updated only via an explicit, reviewed commit.
+**Phase 1 — npm dependency policy (minimum gate):**
 
-**Part 2 — Phase 2 Rust crate minimisation:**
-The Rust rewrite specification must include an explicit dependency minimisation objective as an acceptance criterion alongside functional correctness. Concretely: the target crate graph for each Phase 2 component must be defined before implementation begins, and each direct crate dependency must have a documented justification. The Supply-Chain Auditor (Stream M) must review the target graph before development starts.
+1. `package-lock.json` must be committed to the repository. `npm install` in CI and on deployment machines must use `npm ci` (not `npm install`) to guarantee reproducible installs from the lockfile.
+2. All production dependencies in `package.json` must be pinned to exact versions (no `^`, no `~`, no semver ranges). This applies to `dependencies`; `devDependencies` may retain ranges.
+3. `npm audit --audit-level=high` must pass with zero findings as a required CI gate. Any high or critical CVE in a direct or transitive production dependency blocks the build until resolved (patched, pinned to a safe version, or explicitly excepted with a recorded risk acceptance).
+4. When a new channel adapter package is introduced (Baileys for WhatsApp, botbuilder for Teams), it must undergo a dedicated supply-chain review by Stream L (Supply-Chain Auditor) before it is merged to `main`. The review report must be approved by the PM before the package is committed.
 
-The motivation for the Rust rewrite is formally extended to include supply-chain risk reduction, not only performance and auditability (per SECURITY_STRENGTHENING.md F-10 recommendation). DECISIONS.md Decision 7 must be updated to reflect this.
+**Phase 2 — Rust crate minimisation:**
+
+The Phase 2 Rust rewrite must include an explicit acceptance criterion: "The crate dependency graph for each rewritten component must be reviewed and justified. Each crate dependency requires a written rationale in the component's spec or ADR. The total transitive dependency count for the host-side process must be tracked and reported as a named metric in the Phase 2 milestone review." This makes supply-chain surface reduction a first-class design objective in Phase 2, alongside functional correctness.
+
+**Container image pinning:**
+
+The agent container base image (referenced in `container/build.sh`) must be pinned by SHA256 digest rather than a mutable tag before v1.0 ships. A mutable image tag silently adopts upstream OS updates that may introduce regressions or vulnerabilities. Pinning by digest guarantees the build is reproducible. The `container/build.sh` script must use `FROM <image>@sha256:<digest>` syntax. The pinned digest must be reviewed and updated deliberately, with a written rationale, rather than automatically on each build.
 
 **Implications:**
-- A `package-lock.json` must be created and committed before v1.0 ships.
-- CI pipeline (not yet defined) must include `npm ci` and `npm audit --audit-level=high`.
-- Stream L is the authoritative process for the full audit; this ADR is the minimum gate.
-- Phase 2 planning documentation must add crate minimisation as a named acceptance criterion.
+- The `grammy` entry in `package.json` must change from `^1.39.3` to the exact version identified by Stream L's review before v1.0 ships.
+- `package-lock.json` must be committed before v1.0 ships.
+- CI configuration must add `npm audit --audit-level=high` as a required step.
+- `container/build.sh` must be updated to use SHA256 image digest pinning.
+- Phase 2 scope must include the crate dependency acceptance criterion as a named deliverable.
 
 ---
 
-*End of Stream G — Cybersecurity Specialist Report.*
-*Status: Awaiting PM approval. No existing file has been modified. This report is a read-and-recommend artifact — findings become actionable only after Jim's review and approval.*
+*End of report. All findings and ADR drafts are offered for PM review. Jim's approval is required before any ADR is added to DECISIONS.md or any spec is modified based on these recommendations.*
