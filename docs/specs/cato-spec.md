@@ -104,6 +104,7 @@ Cato delivers scheduled audit results by writing files to an inbox directory on 
   "generatedAt": "<ISO8601>",
   "periodStart": "<ISO8601>",
   "periodEnd": "<ISO8601>",
+  "totalCallsInPeriod": 834,
   "daoScore": {
     "security_failures_per_call": 0.012,
     "data_leaks_per_call": 0.003,
