@@ -485,7 +485,7 @@ describe('Tier 2', () => {
   });
 
   // Helper: open a raw better-sqlite3 connection for assertion purposes only
-  function rawDb(dbPath: string): Database.Database {
+  function _rawDb(dbPath: string): Database.Database {
     return new Database(dbPath);
   }
 

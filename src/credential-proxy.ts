@@ -13,9 +13,7 @@
  */
 import http from 'http';
 import https from 'https';
-import net from 'net';
 import os from 'os';
-import path from 'path';
 import url from 'url';
 
 import { createCredentialBackend } from './broker/credentials/factory.js';

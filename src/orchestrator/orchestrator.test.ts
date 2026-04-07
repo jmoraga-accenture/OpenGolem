@@ -68,7 +68,12 @@ interface IssueTokenResult {
 /** Spec §2.4 — Cato inline check request. */
 interface CatoCheckRequest {
   checkId: string;
-  action: 'AGENT_PROMPT' | 'OUTBOUND_API_CALL' | 'FILESYSTEM_WRITE' | 'CREDENTIAL_REQUEST' | 'MEMORY_WRITE';
+  action:
+    | 'AGENT_PROMPT'
+    | 'OUTBOUND_API_CALL'
+    | 'FILESYSTEM_WRITE'
+    | 'CREDENTIAL_REQUEST'
+    | 'MEMORY_WRITE';
   contextId: string;
   tokenId: string;
   payloadHash: string;
@@ -180,7 +185,9 @@ function startFakeBroker(sockPath: string) {
   const revoked: string[] = [];
   const registered: unknown[] = [];
   const resolved: Array<{ checkId: string; decision: string }> = [];
-  let issueResult: IssueTokenResult | { error: { code: number; message: string } } = {
+  let issueResult:
+    | IssueTokenResult
+    | { error: { code: number; message: string } } = {
     token: 'tok-abc',
     tokenId: 'tid-001',
     expiresAt: new Date(Date.now() + 300_000).toISOString(),
@@ -195,31 +202,82 @@ function startFakeBroker(sockPath: string) {
         const line = buf.slice(0, nl).trim();
         buf = buf.slice(nl + 1);
         if (!line) continue;
-        let req: { jsonrpc: string; method: string; params: unknown; id: number };
-        try { req = JSON.parse(line); } catch { continue; }
+        let req: {
+          jsonrpc: string;
+          method: string;
+          params: unknown;
+          id: number;
+        };
+        try {
+          req = JSON.parse(line);
+        } catch {
+          continue;
+        }
 
         if (req.method === 'issueToken') {
           issued.push(req.params as IssueTokenParams);
           if ('error' in issueResult) {
-            socket.write(JSON.stringify({ jsonrpc: '2.0', error: (issueResult as { error: unknown }).error, id: req.id }) + '\n');
+            socket.write(
+              JSON.stringify({
+                jsonrpc: '2.0',
+                error: (issueResult as { error: unknown }).error,
+                id: req.id,
+              }) + '\n',
+            );
           } else {
-            socket.write(JSON.stringify({ jsonrpc: '2.0', result: issueResult, id: req.id }) + '\n');
+            socket.write(
+              JSON.stringify({
+                jsonrpc: '2.0',
+                result: issueResult,
+                id: req.id,
+              }) + '\n',
+            );
           }
         } else if (req.method === 'revokeToken') {
           const p = req.params as { tokenId: string };
           revoked.push(p.tokenId);
-          socket.write(JSON.stringify({ jsonrpc: '2.0', result: { revoked: true }, id: req.id }) + '\n');
+          socket.write(
+            JSON.stringify({
+              jsonrpc: '2.0',
+              result: { revoked: true },
+              id: req.id,
+            }) + '\n',
+          );
         } else if (req.method === 'health') {
-          socket.write(JSON.stringify({ jsonrpc: '2.0', result: { status: 'ok' }, id: req.id }) + '\n');
+          socket.write(
+            JSON.stringify({
+              jsonrpc: '2.0',
+              result: { status: 'ok' },
+              id: req.id,
+            }) + '\n',
+          );
         } else if (req.method === 'registerSkillScope') {
           registered.push(req.params);
-          socket.write(JSON.stringify({ jsonrpc: '2.0', result: { registered: true }, id: req.id }) + '\n');
+          socket.write(
+            JSON.stringify({
+              jsonrpc: '2.0',
+              result: { registered: true },
+              id: req.id,
+            }) + '\n',
+          );
         } else if (req.method === 'deregisterSkillScope') {
-          socket.write(JSON.stringify({ jsonrpc: '2.0', result: { deregistered: true }, id: req.id }) + '\n');
+          socket.write(
+            JSON.stringify({
+              jsonrpc: '2.0',
+              result: { deregistered: true },
+              id: req.id,
+            }) + '\n',
+          );
         } else if (req.method === 'resolveSupervised') {
           const p = req.params as { checkId: string; decision: string };
           resolved.push(p);
-          socket.write(JSON.stringify({ jsonrpc: '2.0', result: { accepted: true }, id: req.id }) + '\n');
+          socket.write(
+            JSON.stringify({
+              jsonrpc: '2.0',
+              result: { accepted: true },
+              id: req.id,
+            }) + '\n',
+          );
         }
       }
     });
@@ -232,7 +290,9 @@ function startFakeBroker(sockPath: string) {
     revoked,
     registered,
     resolved,
-    setIssueResult(r: typeof issueResult) { issueResult = r; },
+    setIssueResult(r: typeof issueResult) {
+      issueResult = r;
+    },
     close: () => new Promise<void>((res) => server.close(() => res())),
   };
 }
@@ -245,7 +305,7 @@ function startFakeBroker(sockPath: string) {
 function startFakeCato(sockPath: string) {
   const received: CatoCheckRequest[] = [];
   let allowAll = true;
-  let blockCode = 'BLOCKED_BY_TEST';
+  const blockCode = 'BLOCKED_BY_TEST';
 
   const server = net.createServer((socket) => {
     let buf = '';
@@ -257,11 +317,20 @@ function startFakeCato(sockPath: string) {
         buf = buf.slice(nl + 1);
         if (!line) continue;
         let req: CatoCheckRequest;
-        try { req = JSON.parse(line); } catch { continue; }
+        try {
+          req = JSON.parse(line);
+        } catch {
+          continue;
+        }
         received.push(req);
         const resp: CatoCheckResponse = allowAll
           ? { checkId: req.checkId, allow: true, code: null, reason: null }
-          : { checkId: req.checkId, allow: false, code: blockCode, reason: 'Blocked by test' };
+          : {
+              checkId: req.checkId,
+              allow: false,
+              code: blockCode,
+              reason: 'Blocked by test',
+            };
         socket.write(JSON.stringify(resp) + '\n');
       }
     });
@@ -271,8 +340,12 @@ function startFakeCato(sockPath: string) {
   return {
     server,
     received,
-    blockAll() { allowAll = false; },
-    allowAll() { allowAll = true; },
+    blockAll() {
+      allowAll = false;
+    },
+    allowAll() {
+      allowAll = true;
+    },
     close: () => new Promise<void>((res) => server.close(() => res())),
   };
 }
@@ -280,15 +353,23 @@ function startFakeCato(sockPath: string) {
 /** Captures audit log entries emitted by the Orchestrator (in-memory stub). */
 class AuditCapture {
   entries: AuditEntry[] = [];
-  append(entry: AuditEntry) { this.entries.push(entry); }
-  ofType(eventType: string) { return this.entries.filter(e => e.eventType === eventType); }
-  hasType(eventType: string) { return this.ofType(eventType).length > 0; }
+  append(entry: AuditEntry) {
+    this.entries.push(entry);
+  }
+  ofType(eventType: string) {
+    return this.entries.filter((e) => e.eventType === eventType);
+  }
+  hasType(eventType: string) {
+    return this.ofType(eventType).length > 0;
+  }
 }
 
 /** In-memory stub channel adapter for routing tests. */
 class FakeChannel {
   sent: string[] = [];
-  sendMessage(_jid: string, text: string) { this.sent.push(text); }
+  sendMessage(_jid: string, text: string) {
+    this.sent.push(text);
+  }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -304,7 +385,11 @@ vi.mock('../container-runner.js', () => ({
   runContainer: vi.fn().mockResolvedValue({
     stdout: [
       '---OPENGOLEM_OUTPUT_START---',
-      JSON.stringify({ status: 'success', result: 'done', newSessionId: 'sess-001' }),
+      JSON.stringify({
+        status: 'success',
+        result: 'done',
+        newSessionId: 'sess-001',
+      }),
       '---OPENGOLEM_OUTPUT_END---',
     ].join('\n'),
     exitCode: 0,
@@ -318,8 +403,12 @@ vi.mock('../container-runner.js', () => ({
 describe('Unit — Per-group inbound message queue (INV-1, spec §3.2)', () => {
   let env: ReturnType<typeof makeTmpEnv>;
 
-  beforeEach(() => { env = makeTmpEnv(); });
-  afterEach(() => { env.cleanup(); });
+  beforeEach(() => {
+    env = makeTmpEnv();
+  });
+  afterEach(() => {
+    env.cleanup();
+  });
 
   it('dispatches immediately when no task is active for the group', async () => {
     // Given: a group with no active task
@@ -329,7 +418,9 @@ describe('Unit — Per-group inbound message queue (INV-1, spec §3.2)', () => {
     const audit = new AuditCapture();
     const orch = new Orchestrator({ rootDir: env.root, audit });
     const dispatched: string[] = [];
-    orch.onDispatch((msg: InboundMessage) => { dispatched.push(msg.messageId); });
+    orch.onDispatch((msg: InboundMessage) => {
+      dispatched.push(msg.messageId);
+    });
 
     const msg = makeMessage({ groupId: 'grp-a' });
     orch.deliver(msg);
@@ -388,10 +479,10 @@ describe('Unit — Per-group inbound message queue (INV-1, spec §3.2)', () => {
     const orch = new Orchestrator({ rootDir: env.root, audit });
 
     const messages = Array.from({ length: 5 }, (_, i) =>
-      makeMessage({ groupId: 'grp-d', messageId: `m${i}` })
+      makeMessage({ groupId: 'grp-d', messageId: `m${i}` }),
     );
     orch.markGroupActive('grp-d');
-    messages.forEach(m => orch.deliver(m));
+    messages.forEach((m) => orch.deliver(m));
 
     const queued = orch.getQueueDepth('grp-d');
     expect(queued).toBe(5); // all queued, none dropped
@@ -401,8 +492,12 @@ describe('Unit — Per-group inbound message queue (INV-1, spec §3.2)', () => {
 describe('Unit — Security mode loading from group config (spec §3.9, Decision 25)', () => {
   let env: ReturnType<typeof makeTmpEnv>;
 
-  beforeEach(() => { env = makeTmpEnv(); });
-  afterEach(() => { env.cleanup(); });
+  beforeEach(() => {
+    env = makeTmpEnv();
+  });
+  afterEach(() => {
+    env.cleanup();
+  });
 
   it('reads securityMode from groups/{name}/config.json', async () => {
     const { loadGroupConfig } = await import('./index.js');
@@ -411,7 +506,9 @@ describe('Unit — Security mode loading from group config (spec §3.9, Decision
     fs.mkdirSync(groupDir, { recursive: true });
     fs.writeFileSync(
       path.join(groupDir, 'config.json'),
-      JSON.stringify(makeGroupConfig({ securityMode: 'supervised', assertiveness_level: 4 })),
+      JSON.stringify(
+        makeGroupConfig({ securityMode: 'supervised', assertiveness_level: 4 }),
+      ),
     );
 
     const cfg = await loadGroupConfig(groupDir);
@@ -428,7 +525,9 @@ describe('Unit — Security mode loading from group config (spec §3.9, Decision
 
     const cfg = await loadGroupConfig(groupDir);
     expect(cfg.securityMode).toBe(DEPLOYMENT_DEFAULTS.securityMode);
-    expect(cfg.assertiveness_level).toBe(DEPLOYMENT_DEFAULTS.assertiveness_level);
+    expect(cfg.assertiveness_level).toBe(
+      DEPLOYMENT_DEFAULTS.assertiveness_level,
+    );
   });
 
   it('falls back to defaults on malformed config.json and logs config_parse_error', async () => {
@@ -455,7 +554,10 @@ describe('Unit — Security mode loading from group config (spec §3.9, Decision
     const groupDir = path.join(env.groupsDir, 'missing-field-group');
     fs.mkdirSync(groupDir, { recursive: true });
     // assertiveness_level present but securityMode missing
-    fs.writeFileSync(path.join(groupDir, 'config.json'), JSON.stringify({ assertiveness_level: 2 }));
+    fs.writeFileSync(
+      path.join(groupDir, 'config.json'),
+      JSON.stringify({ assertiveness_level: 2 }),
+    );
 
     const cfg = await loadGroupConfig(groupDir, { audit });
     expect(cfg.securityMode).toBe(DEPLOYMENT_DEFAULTS.securityMode);
@@ -470,7 +572,10 @@ describe('Unit — Security mode loading from group config (spec §3.9, Decision
     fs.mkdirSync(groupDir, { recursive: true });
     fs.writeFileSync(
       path.join(groupDir, 'config.json'),
-      JSON.stringify({ securityMode: 'ultra_paranoid', assertiveness_level: 3 }),
+      JSON.stringify({
+        securityMode: 'ultra_paranoid',
+        assertiveness_level: 3,
+      }),
     );
 
     const cfg = await loadGroupConfig(groupDir, { audit });
@@ -482,8 +587,12 @@ describe('Unit — Security mode loading from group config (spec §3.9, Decision
 describe('Unit — issueToken carries correct securityMode (spec §3.3, AC-5)', () => {
   let env: ReturnType<typeof makeTmpEnv>;
 
-  beforeEach(() => { env = makeTmpEnv(); });
-  afterEach(() => { env.cleanup(); });
+  beforeEach(() => {
+    env = makeTmpEnv();
+  });
+  afterEach(() => {
+    env.cleanup();
+  });
 
   it('passes securityMode from group config to issueToken params', async () => {
     const { Orchestrator } = await import('./index.js');
@@ -535,7 +644,9 @@ describe('Unit — issueToken carries correct securityMode (spec §3.3, AC-5)', 
     const msg = makeMessage({ groupId: 'default-group' });
     await orch.deliver(msg);
 
-    expect(broker.issued[0].securityMode).toBe(DEPLOYMENT_DEFAULTS.securityMode);
+    expect(broker.issued[0].securityMode).toBe(
+      DEPLOYMENT_DEFAULTS.securityMode,
+    );
 
     await broker.close();
     await cato.close();
@@ -545,8 +656,12 @@ describe('Unit — issueToken carries correct securityMode (spec §3.3, AC-5)', 
 describe('Unit — revokeToken lifecycle (spec §3.4, §3.5, §3.3, AC-6)', () => {
   let env: ReturnType<typeof makeTmpEnv>;
 
-  beforeEach(() => { env = makeTmpEnv(); });
-  afterEach(() => { env.cleanup(); });
+  beforeEach(() => {
+    env = makeTmpEnv();
+  });
+  afterEach(() => {
+    env.cleanup();
+  });
 
   it('revokes token on task completion (spec §3.4 step 5)', async () => {
     const { Orchestrator } = await import('./index.js');
@@ -557,7 +672,12 @@ describe('Unit — revokeToken lifecycle (spec §3.4, §3.5, §3.3, AC-6)', () =
     const groupDir = path.join(env.groupsDir, 'revoke-group');
     fs.mkdirSync(groupDir, { recursive: true });
 
-    const orch = new Orchestrator({ rootDir: env.root, audit, brokerSocketPath: env.brokerSock, catoSocketPath: env.catoSock });
+    const orch = new Orchestrator({
+      rootDir: env.root,
+      audit,
+      brokerSocketPath: env.brokerSock,
+      catoSocketPath: env.catoSock,
+    });
     const msg = makeMessage({ groupId: 'revoke-group' });
     await orch.deliver(msg);
 
@@ -589,17 +709,22 @@ describe('Unit — revokeToken lifecycle (spec §3.4, §3.5, §3.3, AC-6)', () =
     // Hang the container runner so TTL fires
     const { runContainer } = await import('../container-runner.js');
     (runContainer as ReturnType<typeof vi.fn>).mockImplementationOnce(
-      () => new Promise((_res) => { /* never resolves */ }),
+      () =>
+        new Promise((_res) => {
+          /* never resolves */
+        }),
     );
 
     const msg = makeMessage({ groupId: 'ttl-group' });
     const deliveryPromise = orch.deliver(msg);
-    await new Promise(res => setTimeout(res, 200)); // wait for TTL to fire
+    await new Promise((res) => setTimeout(res, 200)); // wait for TTL to fire
 
     expect(broker.revoked).toContain('tid-001');
     expect(audit.hasType('container_ttl_expired')).toBe(true);
 
-    await deliveryPromise.catch(() => { /* TTL teardown may reject */ });
+    await deliveryPromise.catch(() => {
+      /* TTL teardown may reject */
+    });
     await broker.close();
     await cato.close();
   });
@@ -614,7 +739,12 @@ describe('Unit — revokeToken lifecycle (spec §3.4, §3.5, §3.3, AC-6)', () =
     const groupDir = path.join(env.groupsDir, 'block-revoke-group');
     fs.mkdirSync(groupDir, { recursive: true });
 
-    const orch = new Orchestrator({ rootDir: env.root, audit, brokerSocketPath: env.brokerSock, catoSocketPath: env.catoSock });
+    const orch = new Orchestrator({
+      rootDir: env.root,
+      audit,
+      brokerSocketPath: env.brokerSock,
+      catoSocketPath: env.catoSock,
+    });
     const msg = makeMessage({ groupId: 'block-revoke-group' });
     await orch.deliver(msg);
 
@@ -628,8 +758,12 @@ describe('Unit — revokeToken lifecycle (spec §3.4, §3.5, §3.3, AC-6)', () =
 describe('Unit — Hansei inbox poll (spec §2.8, Decision 26)', () => {
   let env: ReturnType<typeof makeTmpEnv>;
 
-  beforeEach(() => { env = makeTmpEnv(); });
-  afterEach(() => { env.cleanup(); });
+  beforeEach(() => {
+    env = makeTmpEnv();
+  });
+  afterEach(() => {
+    env.cleanup();
+  });
 
   it('ingests a valid report from data/hansei/inbox/ (spec §2.8)', async () => {
     const { Orchestrator } = await import('./index.js');
@@ -642,13 +776,23 @@ describe('Unit — Hansei inbox poll (spec §2.8, Decision 26)', () => {
     const report = {
       reportId,
       timestamp: new Date().toISOString(),
-      periodCovered: { from: '2026-04-07T00:00:00Z', to: '2026-04-07T06:00:00Z' },
-      kpis: { security_failures_per_call: 0.01, data_leaks_per_call: 0, behavioral_change_rate: 0.5 },
+      periodCovered: {
+        from: '2026-04-07T00:00:00Z',
+        to: '2026-04-07T06:00:00Z',
+      },
+      kpis: {
+        security_failures_per_call: 0.01,
+        data_leaks_per_call: 0,
+        behavioral_change_rate: 0.5,
+      },
       anomalyFindings: [],
       recommendationFlags: [],
     };
 
-    fs.writeFileSync(path.join(env.hanseiInboxDir, reportName), JSON.stringify(report));
+    fs.writeFileSync(
+      path.join(env.hanseiInboxDir, reportName),
+      JSON.stringify(report),
+    );
 
     await orch.pollHanseiInbox();
 
@@ -664,7 +808,10 @@ describe('Unit — Hansei inbox poll (spec §2.8, Decision 26)', () => {
     const orch = new Orchestrator({ rootDir: env.root, audit });
 
     const badName = `hansei-20260407T130000-${crypto.randomUUID()}.json`;
-    fs.writeFileSync(path.join(env.hanseiInboxDir, badName), '{ not valid json :::');
+    fs.writeFileSync(
+      path.join(env.hanseiInboxDir, badName),
+      '{ not valid json :::',
+    );
 
     await orch.pollHanseiInbox();
 
@@ -683,7 +830,10 @@ describe('Unit — Hansei inbox poll (spec §2.8, Decision 26)', () => {
 
   it('increments quarantinedHanseiReports health count after parse error (Decision 26)', async () => {
     const { Orchestrator } = await import('./index.js');
-    const orch = new Orchestrator({ rootDir: env.root, audit: new AuditCapture() });
+    const orch = new Orchestrator({
+      rootDir: env.root,
+      audit: new AuditCapture(),
+    });
 
     fs.writeFileSync(
       path.join(env.hanseiInboxDir, 'hansei-bad.json'),
@@ -706,12 +856,18 @@ describe('Unit — Hansei inbox poll (spec §2.8, Decision 26)', () => {
     const report = {
       reportId: crypto.randomUUID(),
       timestamp: new Date().toISOString(),
-      periodCovered: { from: '2026-04-07T08:00:00Z', to: '2026-04-07T14:00:00Z' },
+      periodCovered: {
+        from: '2026-04-07T08:00:00Z',
+        to: '2026-04-07T14:00:00Z',
+      },
       kpis: {},
       anomalyFindings: [],
       recommendationFlags: [],
     };
-    fs.writeFileSync(path.join(env.hanseiInboxDir, reportName), JSON.stringify(report));
+    fs.writeFileSync(
+      path.join(env.hanseiInboxDir, reportName),
+      JSON.stringify(report),
+    );
 
     await orch.pollHanseiInbox();
     const countAfterFirst = audit.ofType('hansei_report_ingested').length;
@@ -726,8 +882,12 @@ describe('Unit — Hansei inbox poll (spec §2.8, Decision 26)', () => {
 describe('Unit — Remote-control surface fails closed when bridge unreachable (spec §2.7, Decision 13)', () => {
   let env: ReturnType<typeof makeTmpEnv>;
 
-  beforeEach(() => { env = makeTmpEnv(); });
-  afterEach(() => { env.cleanup(); });
+  beforeEach(() => {
+    env = makeTmpEnv();
+  });
+  afterEach(() => {
+    env.cleanup();
+  });
 
   it('returns error and does not create a task record when bridge errors (AC-28, spec §2.7)', async () => {
     const { Orchestrator } = await import('./index.js');
@@ -753,7 +913,10 @@ describe('Unit — Remote-control surface fails closed when bridge unreachable (
 
   it('does not queue the task when bridge is unreachable (fail-closed)', async () => {
     const { Orchestrator } = await import('./index.js');
-    const orch = new Orchestrator({ rootDir: env.root, audit: new AuditCapture() });
+    const orch = new Orchestrator({
+      rootDir: env.root,
+      audit: new AuditCapture(),
+    });
 
     try {
       await orch.handleRemoteControlInvocation({
@@ -761,7 +924,9 @@ describe('Unit — Remote-control surface fails closed when bridge unreachable (
         taskDescription: 'Another task',
         bridgeStatus: 'unreachable',
       });
-    } catch { /* expected */ }
+    } catch {
+      /* expected */
+    }
 
     expect(orch.getQueueDepth('remote-group-2')).toBe(0);
   });
@@ -774,36 +939,72 @@ describe('Unit — Remote-control surface fails closed when bridge unreachable (
 describe('Contract — Normalized InboundMessage schema (spec §2.1)', () => {
   it('rejects delivery of a message missing groupId', async () => {
     const { Orchestrator } = await import('./index.js');
-    const orch = new Orchestrator({ rootDir: '/tmp', audit: new AuditCapture() });
+    const orch = new Orchestrator({
+      rootDir: '/tmp',
+      audit: new AuditCapture(),
+    });
 
-    const bad = { channelId: 'tui', senderId: 'u', messageId: 'm', text: 'hi', timestamp: new Date().toISOString() };
+    const bad = {
+      channelId: 'tui',
+      senderId: 'u',
+      messageId: 'm',
+      text: 'hi',
+      timestamp: new Date().toISOString(),
+    };
     // @ts-expect-error — intentionally missing groupId
     await expect(orch.deliver(bad)).rejects.toThrow();
   });
 
   it('rejects delivery of a message missing senderId', async () => {
     const { Orchestrator } = await import('./index.js');
-    const orch = new Orchestrator({ rootDir: '/tmp', audit: new AuditCapture() });
+    const orch = new Orchestrator({
+      rootDir: '/tmp',
+      audit: new AuditCapture(),
+    });
 
-    const bad = { groupId: 'g', channelId: 'tui', messageId: 'm', text: 'hi', timestamp: new Date().toISOString() };
+    const bad = {
+      groupId: 'g',
+      channelId: 'tui',
+      messageId: 'm',
+      text: 'hi',
+      timestamp: new Date().toISOString(),
+    };
     // @ts-expect-error — intentionally missing senderId
     await expect(orch.deliver(bad)).rejects.toThrow();
   });
 
   it('rejects delivery of a message missing content/text', async () => {
     const { Orchestrator } = await import('./index.js');
-    const orch = new Orchestrator({ rootDir: '/tmp', audit: new AuditCapture() });
+    const orch = new Orchestrator({
+      rootDir: '/tmp',
+      audit: new AuditCapture(),
+    });
 
-    const bad = { groupId: 'g', channelId: 'tui', senderId: 'u', messageId: 'm', timestamp: new Date().toISOString() };
+    const bad = {
+      groupId: 'g',
+      channelId: 'tui',
+      senderId: 'u',
+      messageId: 'm',
+      timestamp: new Date().toISOString(),
+    };
     // @ts-expect-error — intentionally missing text
     await expect(orch.deliver(bad)).rejects.toThrow();
   });
 
   it('rejects delivery of a message missing timestamp', async () => {
     const { Orchestrator } = await import('./index.js');
-    const orch = new Orchestrator({ rootDir: '/tmp', audit: new AuditCapture() });
+    const orch = new Orchestrator({
+      rootDir: '/tmp',
+      audit: new AuditCapture(),
+    });
 
-    const bad = { groupId: 'g', channelId: 'tui', senderId: 'u', messageId: 'm', text: 'hi' };
+    const bad = {
+      groupId: 'g',
+      channelId: 'tui',
+      senderId: 'u',
+      messageId: 'm',
+      text: 'hi',
+    };
     // @ts-expect-error — intentionally missing timestamp
     await expect(orch.deliver(bad)).rejects.toThrow();
   });
@@ -835,7 +1036,11 @@ describe('Contract — Sentinel protocol parsing (spec §2.5)', () => {
     const raw = [
       'some noise before',
       '---OPENGOLEM_OUTPUT_START---',
-      JSON.stringify({ status: 'success', result: 'hello', newSessionId: 'sess-123' }),
+      JSON.stringify({
+        status: 'success',
+        result: 'hello',
+        newSessionId: 'sess-123',
+      }),
       '---OPENGOLEM_OUTPUT_END---',
       'some noise after',
     ].join('\n');
@@ -855,7 +1060,9 @@ describe('Contract — Sentinel protocol parsing (spec §2.5)', () => {
       '---OPENGOLEM_OUTPUT_END---',
     ].join('\n');
 
-    const result = parseSentinelOutput(raw, { onError: (e: string) => errors.push(e) });
+    const result = parseSentinelOutput(raw, {
+      onError: (e: string) => errors.push(e),
+    });
     expect(result).toBeNull();
     expect(errors.length).toBeGreaterThan(0);
   });
@@ -870,7 +1077,9 @@ describe('Contract — Sentinel protocol parsing (spec §2.5)', () => {
       '---OPENGOLEM_OUTPUT_END---',
     ].join('\n');
 
-    const result = parseSentinelOutput(raw, { onError: (e: string) => errors.push(e) });
+    const result = parseSentinelOutput(raw, {
+      onError: (e: string) => errors.push(e),
+    });
     expect(result).toBeNull();
     expect(errors.length).toBeGreaterThan(0);
   });
@@ -898,8 +1107,12 @@ describe('Contract — Sentinel protocol parsing (spec §2.5)', () => {
 describe('Contract — Sentinel parse error: token revoked, no crash (spec §2.5, AC-6)', () => {
   let env: ReturnType<typeof makeTmpEnv>;
 
-  beforeEach(() => { env = makeTmpEnv(); });
-  afterEach(() => { env.cleanup(); });
+  beforeEach(() => {
+    env = makeTmpEnv();
+  });
+  afterEach(() => {
+    env.cleanup();
+  });
 
   it('revokes token when start sentinel is missing from container output', async () => {
     const { Orchestrator } = await import('./index.js');
@@ -917,7 +1130,12 @@ describe('Contract — Sentinel parse error: token revoked, no crash (spec §2.5
     const groupDir = path.join(env.groupsDir, 'bad-sentinel-group');
     fs.mkdirSync(groupDir, { recursive: true });
 
-    const orch = new Orchestrator({ rootDir: env.root, audit, brokerSocketPath: env.brokerSock, catoSocketPath: env.catoSock });
+    const orch = new Orchestrator({
+      rootDir: env.root,
+      audit,
+      brokerSocketPath: env.brokerSock,
+      catoSocketPath: env.catoSock,
+    });
     await orch.deliver(makeMessage({ groupId: 'bad-sentinel-group' }));
 
     // Token must be revoked despite the parse error
@@ -936,14 +1154,20 @@ describe('Contract — Sentinel parse error: token revoked, no crash (spec §2.5
 
     const { runContainer } = await import('../container-runner.js');
     (runContainer as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
-      stdout: '---OPENGOLEM_OUTPUT_START---\n{ bad json\n---OPENGOLEM_OUTPUT_END---\n',
+      stdout:
+        '---OPENGOLEM_OUTPUT_START---\n{ bad json\n---OPENGOLEM_OUTPUT_END---\n',
       exitCode: 0,
     });
 
     const groupDir = path.join(env.groupsDir, 'malformed-json-group');
     fs.mkdirSync(groupDir, { recursive: true });
 
-    const orch = new Orchestrator({ rootDir: env.root, audit, brokerSocketPath: env.brokerSock, catoSocketPath: env.catoSock });
+    const orch = new Orchestrator({
+      rootDir: env.root,
+      audit,
+      brokerSocketPath: env.brokerSock,
+      catoSocketPath: env.catoSock,
+    });
     await orch.deliver(makeMessage({ groupId: 'malformed-json-group' }));
 
     expect(broker.revoked).toContain('tid-001');
@@ -967,10 +1191,17 @@ describe('Contract — Sentinel parse error: token revoked, no crash (spec §2.5
     const groupDir = path.join(env.groupsDir, 'no-markers-group');
     fs.mkdirSync(groupDir, { recursive: true });
 
-    const orch = new Orchestrator({ rootDir: env.root, audit, brokerSocketPath: env.brokerSock, catoSocketPath: env.catoSock });
+    const orch = new Orchestrator({
+      rootDir: env.root,
+      audit,
+      brokerSocketPath: env.brokerSock,
+      catoSocketPath: env.catoSock,
+    });
 
     // Must not throw
-    await expect(orch.deliver(makeMessage({ groupId: 'no-markers-group' }))).resolves.not.toThrow();
+    await expect(
+      orch.deliver(makeMessage({ groupId: 'no-markers-group' })),
+    ).resolves.not.toThrow();
 
     await broker.close();
     await cato.close();
@@ -980,8 +1211,12 @@ describe('Contract — Sentinel parse error: token revoked, no crash (spec §2.5
 describe('Contract — catoEscalate relay (spec §3.6, Decision 23)', () => {
   let env: ReturnType<typeof makeTmpEnv>;
 
-  beforeEach(() => { env = makeTmpEnv(); });
-  afterEach(() => { env.cleanup(); });
+  beforeEach(() => {
+    env = makeTmpEnv();
+  });
+  afterEach(() => {
+    env.cleanup();
+  });
 
   it('forwards catoEscalate to cato.sock after stripping escalationReason and inspectorCheck', async () => {
     const { Orchestrator } = await import('./index.js');
@@ -1012,11 +1247,16 @@ describe('Contract — catoEscalate relay (spec §3.6, Decision 23)', () => {
       contentExcerpt: Buffer.from('hello world').toString('base64'),
     };
 
-    const response = await sendJsonRpcToSocket(env.escalationSock, 'catoEscalate', escalateParams, 42);
+    const response = await sendJsonRpcToSocket(
+      env.escalationSock,
+      'catoEscalate',
+      escalateParams,
+      42,
+    );
 
     // catoEscalate forwarded to Cato
     expect(cato.received.length).toBeGreaterThanOrEqual(1);
-    const catoReq = cato.received.find(r => r.checkId === checkId);
+    const catoReq = cato.received.find((r) => r.checkId === checkId);
     expect(catoReq).toBeDefined();
 
     // Broker-only fields must NOT be in the Cato request
@@ -1057,17 +1297,22 @@ describe('Contract — catoEscalate relay (spec §3.6, Decision 23)', () => {
     await orch.start();
 
     const checkId = crypto.randomUUID();
-    const response = await sendJsonRpcToSocket(env.escalationSock, 'catoEscalate', {
-      checkId,
-      action: 'OUTBOUND_API_CALL',
-      contextId: 'ctx-2',
-      tokenId: 'tid-esc2',
-      payloadHash: 'def456',
-      payloadSize: 500,
-      escalationReason: 'INSPECTOR_INCONCLUSIVE',
-      inspectorCheck: 'SKILL_WHITELIST',
-      contentExcerpt: null,
-    }, 43);
+    const response = await sendJsonRpcToSocket(
+      env.escalationSock,
+      'catoEscalate',
+      {
+        checkId,
+        action: 'OUTBOUND_API_CALL',
+        contextId: 'ctx-2',
+        tokenId: 'tid-esc2',
+        payloadHash: 'def456',
+        payloadSize: 500,
+        escalationReason: 'INSPECTOR_INCONCLUSIVE',
+        inspectorCheck: 'SKILL_WHITELIST',
+        contentExcerpt: null,
+      },
+      43,
+    );
 
     expect(response.result.allow).toBe(false);
     expect(audit.hasType('cato_check_relayed')).toBe(true);
@@ -1095,17 +1340,22 @@ describe('Contract — catoEscalate relay (spec §3.6, Decision 23)', () => {
     await orch.start();
 
     const checkId = crypto.randomUUID();
-    await sendJsonRpcToSocket(env.escalationSock, 'catoEscalate', {
-      checkId,
-      action: 'OUTBOUND_API_CALL',
-      contextId: 'ctx-3',
-      tokenId: 'tid-esc3',
-      payloadHash: 'ghi789',
-      payloadSize: 200,
-      escalationReason: 'INSPECTOR_INCONCLUSIVE',
-      inspectorCheck: 'ENDPOINT_SCOPE',
-      contentExcerpt: null,
-    }, 44);
+    await sendJsonRpcToSocket(
+      env.escalationSock,
+      'catoEscalate',
+      {
+        checkId,
+        action: 'OUTBOUND_API_CALL',
+        contextId: 'ctx-3',
+        tokenId: 'tid-esc3',
+        payloadHash: 'ghi789',
+        payloadSize: 200,
+        escalationReason: 'INSPECTOR_INCONCLUSIVE',
+        inspectorCheck: 'ENDPOINT_SCOPE',
+        contentExcerpt: null,
+      },
+      44,
+    );
 
     expect(audit.hasType('cato_check_relayed')).toBe(true);
     const entry = audit.ofType('cato_check_relayed')[0];
@@ -1126,8 +1376,12 @@ describe('Contract — catoEscalate relay (spec §3.6, Decision 23)', () => {
 describe('Integration — Full task lifecycle (spec §3.2–§3.4)', () => {
   let env: ReturnType<typeof makeTmpEnv>;
 
-  beforeEach(() => { env = makeTmpEnv(); });
-  afterEach(() => { env.cleanup(); });
+  beforeEach(() => {
+    env = makeTmpEnv();
+  });
+  afterEach(() => {
+    env.cleanup();
+  });
 
   it('completes the full lifecycle: message in → token issued → container spawned → sentinel parsed → token revoked → outbound routed (AC-5, AC-6, AC-13, AC-15)', async () => {
     const { Orchestrator } = await import('./index.js');
@@ -1140,7 +1394,11 @@ describe('Integration — Full task lifecycle (spec §3.2–§3.4)', () => {
     (runContainer as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
       stdout: [
         '---OPENGOLEM_OUTPUT_START---',
-        JSON.stringify({ status: 'success', result: 'Task complete!', newSessionId: 'sess-xyz' }),
+        JSON.stringify({
+          status: 'success',
+          result: 'Task complete!',
+          newSessionId: 'sess-xyz',
+        }),
         '---OPENGOLEM_OUTPUT_END---',
       ].join('\n'),
       exitCode: 0,
@@ -1178,7 +1436,7 @@ describe('Integration — Full task lifecycle (spec §3.2–§3.4)', () => {
     expect(audit.hasType('token_revoke')).toBe(true);
 
     // 5. Result routed to channel
-    expect(channel.sent.some(s => s.includes('Task complete!'))).toBe(true);
+    expect(channel.sent.some((s) => s.includes('Task complete!'))).toBe(true);
 
     await broker.close();
     await cato.close();
@@ -1267,8 +1525,12 @@ describe('Integration — Full task lifecycle (spec §3.2–§3.4)', () => {
 describe('Integration — Supervised mode soft-block and timeout (spec §3.7, Decision 24)', () => {
   let env: ReturnType<typeof makeTmpEnv>;
 
-  beforeEach(() => { env = makeTmpEnv(); });
-  afterEach(() => { env.cleanup(); });
+  beforeEach(() => {
+    env = makeTmpEnv();
+  });
+  afterEach(() => {
+    env.cleanup();
+  });
 
   it.skip('routes soft-block signal to channel for user confirmation (Phase 2 — supervised mode)', async () => {
     // Phase 2: The broker returns a soft-block signal.
@@ -1302,21 +1564,24 @@ describe('Integration — Supervised mode soft-block and timeout (spec §3.7, De
 
     const checkId = crypto.randomUUID();
     // Simulate the orchestrator receiving a soft-block signal and waiting for user
-    await orch.startSupervisedWait({ checkId, groupId: 'supervised-timeout-group' });
+    await orch.startSupervisedWait({
+      checkId,
+      groupId: 'supervised-timeout-group',
+    });
 
     // Wait for timeout
-    await new Promise(res => setTimeout(res, 200));
+    await new Promise((res) => setTimeout(res, 200));
 
     // resolveSupervised must have been called with cancel
-    const resolved = broker.resolved.find(r => r.checkId === checkId);
+    const resolved = broker.resolved.find((r) => r.checkId === checkId);
     expect(resolved).toBeDefined();
     expect(resolved!.decision).toBe('cancel');
 
     // Audit log must have cato_block with reason supervised_timeout
     expect(audit.hasType('cato_block')).toBe(true);
-    const blockEntry = audit.ofType('cato_block').find(
-      e => e.reason === 'supervised_timeout',
-    );
+    const blockEntry = audit
+      .ofType('cato_block')
+      .find((e) => e.reason === 'supervised_timeout');
     expect(blockEntry).toBeDefined();
     expect(blockEntry!.code).toBeNull();
 
@@ -1334,8 +1599,12 @@ describe('Integration — Supervised mode soft-block and timeout (spec §3.7, De
 describe('Integration — Cato block halts task dispatch, token revoked, [BLOCKED] routed (spec §3.3 step 3, INV-3)', () => {
   let env: ReturnType<typeof makeTmpEnv>;
 
-  beforeEach(() => { env = makeTmpEnv(); });
-  afterEach(() => { env.cleanup(); });
+  beforeEach(() => {
+    env = makeTmpEnv();
+  });
+  afterEach(() => {
+    env.cleanup();
+  });
 
   it('does not spawn container when Cato blocks AGENT_PROMPT (AC-8)', async () => {
     const { Orchestrator } = await import('./index.js');
@@ -1371,7 +1640,11 @@ describe('Integration — Cato block halts task dispatch, token revoked, [BLOCKE
     expect(audit.hasType('cato_block')).toBe(true);
 
     // [BLOCKED] explanation routed to channel
-    expect(channel.sent.some(s => s.includes('[BLOCKED]') || s.toLowerCase().includes('block'))).toBe(true);
+    expect(
+      channel.sent.some(
+        (s) => s.includes('[BLOCKED]') || s.toLowerCase().includes('block'),
+      ),
+    ).toBe(true);
 
     await broker.close();
     await cato.close();
@@ -1415,8 +1688,12 @@ describe('Integration — Cato block halts task dispatch, token revoked, [BLOCKE
 describe('Stub detection — Cato block actually stops container spawn (INV-3)', () => {
   let env: ReturnType<typeof makeTmpEnv>;
 
-  beforeEach(() => { env = makeTmpEnv(); });
-  afterEach(() => { env.cleanup(); });
+  beforeEach(() => {
+    env = makeTmpEnv();
+  });
+  afterEach(() => {
+    env.cleanup();
+  });
 
   it('FAILS if Cato block does not prevent container spawn (runContainer must not be called)', async () => {
     // This test is designed to FAIL if the implementation has a stub that always spawns.
@@ -1428,7 +1705,8 @@ describe('Stub detection — Cato block actually stops container spawn (INV-3)',
     cato.blockAll(); // Cato will block every AGENT_PROMPT check
 
     const { runContainer } = await import('../container-runner.js');
-    const callCount = (runContainer as ReturnType<typeof vi.fn>).mock.calls.length;
+    const callCount = (runContainer as ReturnType<typeof vi.fn>).mock.calls
+      .length;
 
     const groupDir = path.join(env.groupsDir, 'stub-detect-cato');
     fs.mkdirSync(groupDir, { recursive: true });
@@ -1443,7 +1721,8 @@ describe('Stub detection — Cato block actually stops container spawn (INV-3)',
     await orch.deliver(makeMessage({ groupId: 'stub-detect-cato' }));
 
     // Assert: runContainer was NOT called after the Cato block
-    const newCallCount = (runContainer as ReturnType<typeof vi.fn>).mock.calls.length;
+    const newCallCount = (runContainer as ReturnType<typeof vi.fn>).mock.calls
+      .length;
     expect(newCallCount).toBe(callCount); // no new spawns
 
     await broker.close();
@@ -1459,7 +1738,8 @@ describe('Stub detection — Cato block actually stops container spawn (INV-3)',
     cato.allowAll(); // Cato will allow everything
 
     const { runContainer } = await import('../container-runner.js');
-    const callCount = (runContainer as ReturnType<typeof vi.fn>).mock.calls.length;
+    const callCount = (runContainer as ReturnType<typeof vi.fn>).mock.calls
+      .length;
 
     const groupDir = path.join(env.groupsDir, 'stub-detect-allow');
     fs.mkdirSync(groupDir, { recursive: true });
@@ -1473,7 +1753,8 @@ describe('Stub detection — Cato block actually stops container spawn (INV-3)',
 
     await orch.deliver(makeMessage({ groupId: 'stub-detect-allow' }));
 
-    const newCallCount = (runContainer as ReturnType<typeof vi.fn>).mock.calls.length;
+    const newCallCount = (runContainer as ReturnType<typeof vi.fn>).mock.calls
+      .length;
     expect(newCallCount).toBeGreaterThan(callCount); // at least one spawn
 
     await broker.close();
@@ -1484,8 +1765,12 @@ describe('Stub detection — Cato block actually stops container spawn (INV-3)',
 describe('Stub detection — Missing broker socket queues messages, does not dispatch (AC-7, Decision 6)', () => {
   let env: ReturnType<typeof makeTmpEnv>;
 
-  beforeEach(() => { env = makeTmpEnv(); });
-  afterEach(() => { env.cleanup(); });
+  beforeEach(() => {
+    env = makeTmpEnv();
+  });
+  afterEach(() => {
+    env.cleanup();
+  });
 
   it('FAILS if implementation spawns a container when broker socket is absent', async () => {
     // This test is designed to FAIL if the implementation dispatches without a broker.
@@ -1493,7 +1778,8 @@ describe('Stub detection — Missing broker socket queues messages, does not dis
     const { Orchestrator } = await import('./index.js');
     // No broker server started — broker.sock does not exist
     const { runContainer } = await import('../container-runner.js');
-    const callCount = (runContainer as ReturnType<typeof vi.fn>).mock.calls.length;
+    const callCount = (runContainer as ReturnType<typeof vi.fn>).mock.calls
+      .length;
 
     const audit = new AuditCapture();
     const channel = new FakeChannel();
@@ -1512,7 +1798,8 @@ describe('Stub detection — Missing broker socket queues messages, does not dis
     await orch.deliver(makeMessage({ groupId: 'no-broker-group' }));
 
     // Container must NOT have been spawned
-    const newCallCount = (runContainer as ReturnType<typeof vi.fn>).mock.calls.length;
+    const newCallCount = (runContainer as ReturnType<typeof vi.fn>).mock.calls
+      .length;
     expect(newCallCount).toBe(callCount);
 
     // Message should be queued (queue depth 1) or at least not dispatched
@@ -1529,7 +1816,8 @@ describe('Stub detection — Missing broker socket queues messages, does not dis
     });
 
     const { runContainer } = await import('../container-runner.js');
-    const callCount = (runContainer as ReturnType<typeof vi.fn>).mock.calls.length;
+    const callCount = (runContainer as ReturnType<typeof vi.fn>).mock.calls
+      .length;
 
     const channel = new FakeChannel();
     const groupDir = path.join(env.groupsDir, 'store-full-group');
@@ -1545,7 +1833,8 @@ describe('Stub detection — Missing broker socket queues messages, does not dis
 
     await orch.deliver(makeMessage({ groupId: 'store-full-group' }));
 
-    const newCallCount = (runContainer as ReturnType<typeof vi.fn>).mock.calls.length;
+    const newCallCount = (runContainer as ReturnType<typeof vi.fn>).mock.calls
+      .length;
     expect(newCallCount).toBe(callCount); // no new spawn
 
     // User notified
@@ -1562,8 +1851,12 @@ describe('Stub detection — Missing broker socket queues messages, does not dis
 describe('Invariants — contentExcerpt presence matches action type (INV-12, Decision 17)', () => {
   let env: ReturnType<typeof makeTmpEnv>;
 
-  beforeEach(() => { env = makeTmpEnv(); });
-  afterEach(() => { env.cleanup(); });
+  beforeEach(() => {
+    env = makeTmpEnv();
+  });
+  afterEach(() => {
+    env.cleanup();
+  });
 
   it('includes non-null contentExcerpt in AGENT_PROMPT Cato check (AC-10)', async () => {
     const { Orchestrator } = await import('./index.js');
@@ -1581,9 +1874,13 @@ describe('Invariants — contentExcerpt presence matches action type (INV-12, De
       catoSocketPath: env.catoSock,
     });
 
-    await orch.deliver(makeMessage({ groupId: 'excerpt-group', text: 'some prompt text' }));
+    await orch.deliver(
+      makeMessage({ groupId: 'excerpt-group', text: 'some prompt text' }),
+    );
 
-    const agentPromptChecks = cato.received.filter(r => r.action === 'AGENT_PROMPT');
+    const agentPromptChecks = cato.received.filter(
+      (r) => r.action === 'AGENT_PROMPT',
+    );
     expect(agentPromptChecks.length).toBeGreaterThanOrEqual(1);
     for (const check of agentPromptChecks) {
       expect(check.contentExcerpt).not.toBeNull();
@@ -1619,7 +1916,9 @@ describe('Invariants — contentExcerpt presence matches action type (INV-12, De
       proposedDelta: proposal,
     });
 
-    const memWriteChecks = cato.received.filter(r => r.action === 'MEMORY_WRITE');
+    const memWriteChecks = cato.received.filter(
+      (r) => r.action === 'MEMORY_WRITE',
+    );
     expect(memWriteChecks.length).toBeGreaterThanOrEqual(1);
     for (const check of memWriteChecks) {
       expect(check.contentExcerpt).not.toBeNull();
@@ -1657,13 +1956,96 @@ describe('Invariants — contentExcerpt presence matches action type (INV-12, De
       payloadSize: 50,
     });
 
-    const fsChecks = cato.received.filter(r => r.action === 'FILESYSTEM_WRITE');
-    const credChecks = cato.received.filter(r => r.action === 'CREDENTIAL_REQUEST');
+    const fsChecks = cato.received.filter(
+      (r) => r.action === 'FILESYSTEM_WRITE',
+    );
+    const credChecks = cato.received.filter(
+      (r) => r.action === 'CREDENTIAL_REQUEST',
+    );
 
     for (const check of [...fsChecks, ...credChecks]) {
       // Must be null or absent (not a non-null string)
-      expect(check.contentExcerpt === null || check.contentExcerpt === undefined).toBe(true);
+      expect(
+        check.contentExcerpt === null || check.contentExcerpt === undefined,
+      ).toBe(true);
     }
+
+    await broker.close();
+    await cato.close();
+  });
+
+  it('AC-11: MEMORY_WRITE approved — delta written to CLAUDE.md and memory_write_approved audit event emitted', async () => {
+    const { Orchestrator } = await import('./index.js');
+    const env = makeTmpEnv();
+    const broker = startFakeBroker(env.brokerSock);
+    const cato = startFakeCato(env.catoSock); // default: allow:true
+    const audit = new AuditCapture();
+
+    const groupDir = path.join(env.groupsDir, 'ac11-group');
+    fs.mkdirSync(groupDir, { recursive: true });
+    fs.writeFileSync(path.join(groupDir, 'CLAUDE.md'), '', 'utf8');
+
+    const orch = new Orchestrator({
+      rootDir: env.root,
+      audit,
+      brokerSocketPath: env.brokerSock,
+      catoSocketPath: env.catoSock,
+    });
+
+    const delta = 'User prefers bullet points.';
+    await orch.applyMemoryWriteProposal({
+      groupId: 'ac11-group',
+      taskId: 'task-ac11',
+      tokenId: 'tid-ac11',
+      proposedDelta: delta,
+    });
+
+    // Delta must be written to CLAUDE.md
+    const written = fs.readFileSync(path.join(groupDir, 'CLAUDE.md'), 'utf8');
+    expect(written).toBe(delta);
+
+    // Audit event must use the spec name
+    expect(audit.entries.some((e) => e.eventType === 'memory_write_approved')).toBe(true);
+    expect(audit.entries.some((e) => e.eventType === 'memory_write_allowed')).toBe(false);
+
+    await broker.close();
+    await cato.close();
+  });
+
+  it('AC-12: MEMORY_WRITE blocked — CLAUDE.md unchanged and memory_write_blocked audit event emitted', async () => {
+    const { Orchestrator } = await import('./index.js');
+    const env = makeTmpEnv();
+    const broker = startFakeBroker(env.brokerSock);
+    const cato = startFakeCato(env.catoSock);
+    cato.blockAll(); // Cato blocks all checks
+    const audit = new AuditCapture();
+
+    const groupDir = path.join(env.groupsDir, 'ac12-group');
+    fs.mkdirSync(groupDir, { recursive: true });
+    const originalContent = 'original content';
+    fs.writeFileSync(path.join(groupDir, 'CLAUDE.md'), originalContent, 'utf8');
+
+    const orch = new Orchestrator({
+      rootDir: env.root,
+      audit,
+      brokerSocketPath: env.brokerSock,
+      catoSocketPath: env.catoSock,
+    });
+
+    await orch.applyMemoryWriteProposal({
+      groupId: 'ac12-group',
+      taskId: 'task-ac12',
+      tokenId: 'tid-ac12',
+      proposedDelta: 'malicious override',
+    });
+
+    // CLAUDE.md must be unchanged
+    const content = fs.readFileSync(path.join(groupDir, 'CLAUDE.md'), 'utf8');
+    expect(content).toBe(originalContent);
+
+    // Audit event must use the spec name
+    expect(audit.entries.some((e) => e.eventType === 'memory_write_blocked')).toBe(true);
+    expect(audit.entries.some((e) => e.eventType === 'memory_write_allowed')).toBe(false);
 
     await broker.close();
     await cato.close();
@@ -1707,7 +2089,8 @@ describe('Invariants — No raw credentials in orchestrator memory (INV-7)', () 
 
 describe('Invariants — Audit log is append-only (INV-9, AC-21)', () => {
   it('Orchestrator write interface issues only INSERT statements — no UPDATE or DELETE', async () => {
-    const { Orchestrator, getAuditWriteStatements } = await import('./index.js');
+    const { Orchestrator: _Orchestrator, getAuditWriteStatements } =
+      await import('./index.js');
     // getAuditWriteStatements must return the list of SQL statements used by the orchestrator.
     // The developer must export this for testability.
     const statements = getAuditWriteStatements();
@@ -1722,8 +2105,12 @@ describe('Invariants — Audit log is append-only (INV-9, AC-21)', () => {
 describe('Invariants — Remote-control tasks audited identically to channel tasks (INV-11, AC-27)', () => {
   let env: ReturnType<typeof makeTmpEnv>;
 
-  beforeEach(() => { env = makeTmpEnv(); });
-  afterEach(() => { env.cleanup(); });
+  beforeEach(() => {
+    env = makeTmpEnv();
+  });
+  afterEach(() => {
+    env.cleanup();
+  });
 
   it('task_start entry includes sourceChannel: "remote-control" for remote-control tasks (AC-27)', async () => {
     const { Orchestrator } = await import('./index.js');
@@ -1785,9 +2172,14 @@ function sendJsonRpcToSocket(
     });
     socket.on('error', reject);
     socket.on('connect', () => {
-      socket.write(JSON.stringify({ jsonrpc: '2.0', method, params, id }) + '\n');
+      socket.write(
+        JSON.stringify({ jsonrpc: '2.0', method, params, id }) + '\n',
+      );
     });
     // Timeout for test safety
-    setTimeout(() => { socket.destroy(); reject(new Error('sendJsonRpcToSocket timeout')); }, 5000);
+    setTimeout(() => {
+      socket.destroy();
+      reject(new Error('sendJsonRpcToSocket timeout'));
+    }, 5000);
   });
 }

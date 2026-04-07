@@ -55,15 +55,17 @@ export class BitwardenCredentialBackend implements CredentialBackend {
     } catch (err) {
       throw new Error(
         `BitwardenCredentialBackend: failed to fetch item "${itemName}": ${err}`,
+        { cause: err },
       );
     }
 
     let item: { fields?: Array<{ name: string; value: string }> };
     try {
       item = JSON.parse(stdout);
-    } catch {
+    } catch (err) {
       throw new Error(
         `BitwardenCredentialBackend: could not parse bw output for item "${itemName}"`,
+        { cause: err },
       );
     }
 

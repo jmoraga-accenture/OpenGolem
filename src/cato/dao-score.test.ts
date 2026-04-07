@@ -14,10 +14,10 @@ import {
   computeDaoScore,
   saveDaoScore,
   getLatestDaoScore,
-  initDaoScoreDb,
+  initDaoScoreDb as _initDaoScoreDb,
   _setDaoScoreDb,
 } from './dao-score.js';
-import { DAO_SCORE_DB_PATH } from '../config.js';
+import { DAO_SCORE_DB_PATH as _DAO_SCORE_DB_PATH } from '../config.js';
 
 // ---------------------------------------------------------------------------
 // Fixture: minimal audit.db schema

@@ -81,7 +81,12 @@ export interface OrchestratorOptions {
 
 /** Cato check request (spec §2.4). */
 export interface CatoCheckParams {
-  action: 'AGENT_PROMPT' | 'OUTBOUND_API_CALL' | 'FILESYSTEM_WRITE' | 'CREDENTIAL_REQUEST' | 'MEMORY_WRITE';
+  action:
+    | 'AGENT_PROMPT'
+    | 'OUTBOUND_API_CALL'
+    | 'FILESYSTEM_WRITE'
+    | 'CREDENTIAL_REQUEST'
+    | 'MEMORY_WRITE';
   contextId: string;
   tokenId: string;
   payloadHash: string;
@@ -161,7 +166,11 @@ export function parseSentinelOutput(
   raw: string,
   opts: ParseSentinelOptions = {},
 ): SentinelResult | null {
-  const onError = opts.onError ?? (() => { /* no-op */ });
+  const onError =
+    opts.onError ??
+    (() => {
+      /* no-op */
+    });
 
   const startIdx = raw.indexOf(OUTPUT_START_MARKER);
   if (startIdx === -1) {
@@ -174,7 +183,9 @@ export function parseSentinelOutput(
     return null;
   }
 
-  const jsonPart = raw.slice(startIdx + OUTPUT_START_MARKER.length, endIdx).trim();
+  const jsonPart = raw
+    .slice(startIdx + OUTPUT_START_MARKER.length, endIdx)
+    .trim();
   try {
     const parsed = JSON.parse(jsonPart) as SentinelResult;
     return parsed;
@@ -320,7 +331,12 @@ function sendJsonRpc(
         clearTimeout(timer);
         socket.destroy();
         try {
-          resolve(JSON.parse(line) as { result?: unknown; error?: { code: number; message: string } });
+          resolve(
+            JSON.parse(line) as {
+              result?: unknown;
+              error?: { code: number; message: string };
+            },
+          );
         } catch (e) {
           reject(e);
         }
@@ -545,7 +561,9 @@ export class Orchestrator {
           try {
             fs.copyFileSync(filePath, destPath);
             fs.unlinkSync(filePath);
-          } catch { /* best effort */ }
+          } catch {
+            /* best effort */
+          }
         }
         this.quarantinedHanseiReports++;
         this.audit.append({
@@ -648,7 +666,10 @@ export class Orchestrator {
     const checkId = crypto.randomUUID();
     const payloadHash =
       params.payloadHash ??
-      crypto.createHash('sha256').update(String(params.payloadSize)).digest('hex');
+      crypto
+        .createHash('sha256')
+        .update(String(params.payloadSize))
+        .digest('hex');
 
     // contentExcerpt rules per AC-10
     let contentExcerpt: string | null;
@@ -698,7 +719,9 @@ export class Orchestrator {
             checkId,
             decision: 'cancel',
           });
-        } catch { /* best effort */ }
+        } catch {
+          /* best effort */
+        }
 
         this.audit.append({
           eventType: 'cato_block',
@@ -738,7 +761,7 @@ export class Orchestrator {
 
     if (!result.allow) {
       this.audit.append({
-        eventType: 'cato_block',
+        eventType: 'memory_write_blocked',
         action: 'MEMORY_WRITE',
         groupId: proposal.groupId,
         taskId: proposal.taskId,
@@ -750,9 +773,12 @@ export class Orchestrator {
       return;
     }
 
-    // Memory write allowed — caller is responsible for actual persistence
+    // Write approved delta to CLAUDE.md (spec §6.1, Decision 22)
+    const claudePath = path.join(this.rootDir, 'groups', proposal.groupId, 'CLAUDE.md');
+    fs.writeFileSync(claudePath, proposal.proposedDelta, 'utf8');
+
     this.audit.append({
-      eventType: 'memory_write_allowed',
+      eventType: 'memory_write_approved',
       groupId: proposal.groupId,
       taskId: proposal.taskId,
       tokenId: proposal.tokenId,
@@ -764,10 +790,14 @@ export class Orchestrator {
    * Handles a remote-control invocation (spec §2.7, Decision 13).
    * Fail-closed: if bridgeStatus is 'unreachable', throws without creating a task.
    */
-  async handleRemoteControlInvocation(params: RemoteControlParams): Promise<void> {
+  async handleRemoteControlInvocation(
+    params: RemoteControlParams,
+  ): Promise<void> {
     if (params.bridgeStatus === 'unreachable') {
       // Fail-closed — do not create a task record, do not queue (AC-28)
-      throw new Error('Remote-control bridge is unreachable; task rejected (fail-closed)');
+      throw new Error(
+        'Remote-control bridge is unreachable; task rejected (fail-closed)',
+      );
     }
 
     // Bridge is ok — treat as a dispatched task with sourceChannel: remote-control
@@ -798,8 +828,10 @@ export class Orchestrator {
 
   /** Validates required fields on an InboundMessage, throws on missing. */
   private _validateMessage(msg: InboundMessage): void {
-    if (!msg.groupId) throw new Error('InboundMessage missing required field: groupId');
-    if (!msg.senderId) throw new Error('InboundMessage missing required field: senderId');
+    if (!msg.groupId)
+      throw new Error('InboundMessage missing required field: groupId');
+    if (!msg.senderId)
+      throw new Error('InboundMessage missing required field: senderId');
     if (msg.text === undefined || msg.text === null)
       throw new Error('InboundMessage missing required field: text');
     if (!msg.timestamp)
@@ -844,7 +876,7 @@ export class Orchestrator {
 
     // Issue token (spec §3.3)
     let tokenId: string;
-    let token: string;
+    let _token: string;
 
     this.audit.append({
       eventType: 'token_request',
@@ -866,17 +898,27 @@ export class Orchestrator {
       });
 
       if (issueResp.error) {
-        this._notifyChannel(groupId, `[ERROR] Token issue failed: ${issueResp.error.message}`);
+        this._notifyChannel(
+          groupId,
+          `[ERROR] Token issue failed: ${issueResp.error.message}`,
+        );
         this.activeGroups.delete(groupId);
         this._drainQueue(groupId);
         return;
       }
 
-      const issueResult = issueResp.result as { token: string; tokenId: string; expiresAt: string };
+      const issueResult = issueResp.result as {
+        token: string;
+        tokenId: string;
+        expiresAt: string;
+      };
       tokenId = issueResult.tokenId;
-      token = issueResult.token;
+      _token = issueResult.token;
     } catch (err) {
-      this._notifyChannel(groupId, `[ERROR] Broker unavailable: ${String(err)}`);
+      this._notifyChannel(
+        groupId,
+        `[ERROR] Broker unavailable: ${String(err)}`,
+      );
       this.activeGroups.delete(groupId);
       this._drainQueue(groupId);
       return;
@@ -934,7 +976,13 @@ export class Orchestrator {
           ts: Date.now(),
         });
         await this._revokeToken(tokenId);
-        this._notifyChannel(groupId, `[BLOCKED] Action blocked by Cato: ${catoResult.code ?? 'unknown'}`);
+        this._notifyChannel(
+          groupId,
+          `[BLOCKED] Action blocked by Cato: ${catoResult.code ?? 'unknown'}`,
+        );
+        // BLK-2 fix: release group lock so queue can drain
+        this.activeGroups.delete(groupId);
+        this._drainQueue(groupId);
         return;
       }
 
@@ -1000,7 +1048,7 @@ export class Orchestrator {
           this._notifyChannel(groupId, parsed.result);
         }
       }
-    } catch (err) {
+    } catch (_err) {
       // TTL abort or other error — clean up if TTL didn't already
       clearTimeout(ttlTimer);
       if (!ttlFired) {
@@ -1023,7 +1071,9 @@ export class Orchestrator {
   private async _revokeToken(tokenId: string): Promise<void> {
     try {
       await sendJsonRpc(this.brokerSocketPath, 'revokeToken', { tokenId });
-    } catch { /* best effort */ }
+    } catch {
+      /* best effort */
+    }
 
     this.audit.append({
       eventType: 'token_revoke',
@@ -1070,7 +1120,9 @@ export class Orchestrator {
         if (fs.existsSync(this.escalationSocketPath)) {
           fs.unlinkSync(this.escalationSocketPath);
         }
-      } catch { /* best effort */ }
+      } catch {
+        /* best effort */
+      }
 
       this.escalationServer = net.createServer((socket) => {
         let buf = '';
@@ -1082,7 +1134,12 @@ export class Orchestrator {
             buf = buf.slice(nl + 1);
             if (!line) continue;
 
-            let req: { jsonrpc: string; method: string; params: unknown; id: number };
+            let req: {
+              jsonrpc: string;
+              method: string;
+              params: unknown;
+              id: number;
+            };
             try {
               req = JSON.parse(line) as typeof req;
             } catch {
@@ -1092,21 +1149,28 @@ export class Orchestrator {
             if (req.method === 'catoEscalate') {
               void this.handleCatoEscalate(
                 req.params as Parameters<typeof this.handleCatoEscalate>[0],
-              ).then((result) => {
-                socket.write(
-                  JSON.stringify({ jsonrpc: '2.0', result, id: req.id }) + '\n',
-                );
-              }).catch(() => {
-                const failResult: CatoCheckResult = {
-                  checkId: (req.params as { checkId?: string }).checkId ?? '',
-                  allow: false,
-                  code: 'RELAY_ERROR',
-                  reason: 'Escalation relay failed',
-                };
-                socket.write(
-                  JSON.stringify({ jsonrpc: '2.0', result: failResult, id: req.id }) + '\n',
-                );
-              });
+              )
+                .then((result) => {
+                  socket.write(
+                    JSON.stringify({ jsonrpc: '2.0', result, id: req.id }) +
+                      '\n',
+                  );
+                })
+                .catch(() => {
+                  const failResult: CatoCheckResult = {
+                    checkId: (req.params as { checkId?: string }).checkId ?? '',
+                    allow: false,
+                    code: 'RELAY_ERROR',
+                    reason: 'Escalation relay failed',
+                  };
+                  socket.write(
+                    JSON.stringify({
+                      jsonrpc: '2.0',
+                      result: failResult,
+                      id: req.id,
+                    }) + '\n',
+                  );
+                });
             }
           }
         });

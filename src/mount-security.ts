@@ -119,7 +119,7 @@ function parseAndValidateAllowlist(raw: string): MountAllowlist {
     parsed = JSON.parse(raw);
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
-    throw new Error(`Invalid JSON: ${msg}`);
+    throw new Error(`Invalid JSON: ${msg}`, { cause: e });
   }
   if (typeof parsed !== 'object' || parsed === null) {
     throw new Error('Allowlist must be a JSON object');

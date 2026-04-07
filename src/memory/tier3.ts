@@ -264,9 +264,7 @@ export async function getContextForAgent(
   }
 
   // Return plain text excerpts — never expose DB path or connection
-  return rows
-    .map((r) => `[${r.entry_type}] ${r.content_text}`)
-    .join('\n');
+  return rows.map((r) => `[${r.entry_type}] ${r.content_text}`).join('\n');
 }
 
 // ---------------------------------------------------------------------------

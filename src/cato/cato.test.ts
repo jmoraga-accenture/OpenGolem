@@ -21,7 +21,7 @@
  * has not been updated.)
  */
 
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import net from 'net';
 import os from 'os';
 import path from 'path';
@@ -504,7 +504,7 @@ function stopStubServer(server: net.Server, socketPath: string): Promise<void> {
 // Hansei report helpers (for scheduled audit tests)
 // ---------------------------------------------------------------------------
 
-const HANSEI_FILENAME_RE = /^hansei-[0-9TZ:.\-]+-[0-9a-f-]{36}\.json$/;
+const HANSEI_FILENAME_RE = /^hansei-[0-9TZ:.-]+-[0-9a-f-]{36}\.json$/;
 
 function makeHanseiReport(overrides: Record<string, unknown> = {}): object {
   return {
@@ -850,7 +850,7 @@ describe('Unit — AC-8: Audit log write precedes response', () => {
 
   it('AC-8 / §3.6 audit-before-response invariant: allow:false returned when audit write fails', async () => {
     // Signal the stub to fail the next audit write
-    const { server: srv, auditLog: log } = startStubServer(
+    const { server: srv, auditLog: _log } = startStubServer(
       TEST_SOCKET_PATH + '-fail',
     );
     await new Promise((r) => setTimeout(r, 20));

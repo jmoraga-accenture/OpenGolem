@@ -50,6 +50,7 @@ export class OneCLICredentialBackend implements CredentialBackend {
     } catch (err) {
       throw new Error(
         `OneCLICredentialBackend: request to ${url} failed: ${err}`,
+        { cause: err },
       );
     }
 
@@ -62,9 +63,10 @@ export class OneCLICredentialBackend implements CredentialBackend {
     let raw: unknown;
     try {
       raw = await res.json();
-    } catch {
+    } catch (err) {
       throw new Error(
         `OneCLICredentialBackend: could not parse gateway response from ${url}`,
+        { cause: err },
       );
     }
 

@@ -96,7 +96,10 @@ function parseFrontmatter(content: string): Record<string, unknown> | null {
 function parseYaml(text: string): Record<string, unknown> {
   // We need a proper YAML parser for nested structures.
   // Since no yaml dependency is available, implement a recursive descent parser.
-  return parseYamlBlock(text.split('\n'), 0, 0).value as Record<string, unknown>;
+  return parseYamlBlock(text.split('\n'), 0, 0).value as Record<
+    string,
+    unknown
+  >;
 }
 
 interface ParseResult {
@@ -104,7 +107,11 @@ interface ParseResult {
   nextLine: number;
 }
 
-function parseYamlBlock(lines: string[], startLine: number, baseIndent: number): ParseResult {
+function parseYamlBlock(
+  lines: string[],
+  startLine: number,
+  baseIndent: number,
+): ParseResult {
   const result: Record<string, unknown> = {};
   let i = startLine;
 
@@ -190,7 +197,11 @@ function parseYamlBlock(lines: string[], startLine: number, baseIndent: number):
   return { value: result, nextLine: i };
 }
 
-function parseYamlList(lines: string[], startLine: number, baseIndent: number): ParseResult {
+function parseYamlList(
+  lines: string[],
+  startLine: number,
+  baseIndent: number,
+): ParseResult {
   const items: unknown[] = [];
   let i = startLine;
 
@@ -239,7 +250,10 @@ function parseYamlList(lines: string[], startLine: number, baseIndent: number): 
         while (j < lines.length) {
           const nl = lines[j];
           const ni = nl.length - nl.trimStart().length;
-          if (nl.trim() === '') { j++; continue; }
+          if (nl.trim() === '') {
+            j++;
+            continue;
+          }
           if (ni > baseIndent) {
             subLines.push(nl);
             j++;
@@ -271,7 +285,10 @@ function parseScalar(s: string): unknown {
   if (t === '{}') return {};
   if (t === '[]') return [];
   // Quoted string
-  if ((t.startsWith('"') && t.endsWith('"')) || (t.startsWith("'") && t.endsWith("'"))) {
+  if (
+    (t.startsWith('"') && t.endsWith('"')) ||
+    (t.startsWith("'") && t.endsWith("'"))
+  ) {
     return t.slice(1, -1);
   }
   // Number
@@ -286,7 +303,13 @@ function parseScalar(s: string): unknown {
 const KEBAB_CASE = /^[a-z][a-z0-9]*(-[a-z0-9]+)*$/;
 const SEMVER = /^\d+\.\d+\.\d+(-[\w.]+)?(\+[\w.]+)?$/;
 const VALID_TYPES = new Set(['feature', 'utility', 'container']);
-const VALID_PROVIDERS = new Set(['anthropic', 'openrouter', 'ollama', 'any', 'custom']);
+const VALID_PROVIDERS = new Set([
+  'anthropic',
+  'openrouter',
+  'ollama',
+  'any',
+  'custom',
+]);
 const VALID_PROTOCOLS = new Set(['https', 'wss']);
 const VALID_DIRECTIONS = new Set(['outbound']);
 const VALID_ACCESS = new Set(['read', 'read-write']);
@@ -300,38 +323,78 @@ interface ValidationError {
 
 function validateIntent(raw: Record<string, unknown>): ValidationError | null {
   // Required: skill
-  if (!raw.skill || typeof raw.skill !== 'string' || !KEBAB_CASE.test(raw.skill)) {
-    return { field: 'skill', reason: 'skill must be a non-empty kebab-case string' };
+  if (
+    !raw.skill ||
+    typeof raw.skill !== 'string' ||
+    !KEBAB_CASE.test(raw.skill)
+  ) {
+    return {
+      field: 'skill',
+      reason: 'skill must be a non-empty kebab-case string',
+    };
   }
 
   // Required: version
-  if (!raw.version || typeof raw.version !== 'string' || !SEMVER.test(String(raw.version))) {
-    return { field: 'version', reason: 'version must be a valid semantic version (MAJOR.MINOR.PATCH)' };
+  if (
+    !raw.version ||
+    typeof raw.version !== 'string' ||
+    !SEMVER.test(String(raw.version))
+  ) {
+    return {
+      field: 'version',
+      reason: 'version must be a valid semantic version (MAJOR.MINOR.PATCH)',
+    };
   }
 
   // Required: type
   if (!raw.type || !VALID_TYPES.has(String(raw.type))) {
-    return { field: 'type', reason: 'type must be one of: feature, utility, container' };
+    return {
+      field: 'type',
+      reason: 'type must be one of: feature, utility, container',
+    };
   }
 
   // Required: description
-  if (!raw.description || typeof raw.description !== 'string' || raw.description.trim() === '') {
-    return { field: 'description', reason: 'description must be a non-empty single-line string' };
+  if (
+    !raw.description ||
+    typeof raw.description !== 'string' ||
+    raw.description.trim() === ''
+  ) {
+    return {
+      field: 'description',
+      reason: 'description must be a non-empty single-line string',
+    };
   }
 
   // Required: apply_permission
-  if (!raw.apply_permission || !VALID_APPLY_PERMISSIONS.has(String(raw.apply_permission))) {
-    return { field: 'apply_permission', reason: 'apply_permission must be one of: admin, power_user' };
+  if (
+    !raw.apply_permission ||
+    !VALID_APPLY_PERMISSIONS.has(String(raw.apply_permission))
+  ) {
+    return {
+      field: 'apply_permission',
+      reason: 'apply_permission must be one of: admin, power_user',
+    };
   }
 
   // Required: providers.compatible (non-empty)
   const providers = raw.providers as Record<string, unknown> | undefined;
-  if (!providers || !Array.isArray(providers.compatible) || providers.compatible.length === 0) {
-    return { field: 'providers.compatible', reason: 'providers.compatible must be a non-empty list' };
+  if (
+    !providers ||
+    !Array.isArray(providers.compatible) ||
+    providers.compatible.length === 0
+  ) {
+    return {
+      field: 'providers.compatible',
+      reason: 'providers.compatible must be a non-empty list',
+    };
   }
   for (const p of providers.compatible) {
     if (!VALID_PROVIDERS.has(String(p))) {
-      return { field: 'providers.compatible', reason: `unknown provider value: ${p}` };
+      return {
+        field: 'providers.compatible',
+        reason: `unknown provider value: ${p}`,
+      };
     }
   }
 
@@ -339,7 +402,10 @@ function validateIntent(raw: Record<string, unknown>): ValidationError | null {
   const tokenScopes = raw.token_scopes as Record<string, unknown> | undefined;
   if (tokenScopes && tokenScopes.skills !== undefined) {
     if (!Array.isArray(tokenScopes.skills)) {
-      return { field: 'token_scopes.skills', reason: 'token_scopes.skills must be a list' };
+      return {
+        field: 'token_scopes.skills',
+        reason: 'token_scopes.skills must be a list',
+      };
     }
     for (const s of tokenScopes.skills) {
       if (typeof s !== 'string' || !KEBAB_CASE.test(s)) {
@@ -384,7 +450,8 @@ function validateIntent(raw: Record<string, unknown>): ValidationError | null {
 
       // host_path must be within permitted mount roots (checked against canonical path)
       const withinPermitted = PERMITTED_MOUNT_ROOTS.some(
-        (root) => resolvedHostPath === root || resolvedHostPath.startsWith(root + '/'),
+        (root) =>
+          resolvedHostPath === root || resolvedHostPath.startsWith(root + '/'),
       );
       if (!withinPermitted) {
         return {
@@ -491,10 +558,10 @@ function validateIntent(raw: Record<string, unknown>): ValidationError | null {
 
 function extractIntent(raw: Record<string, unknown>): InstalledSkill {
   const tokenScopes = raw.token_scopes as Record<string, unknown> | undefined;
-  const filesystem = raw.filesystem as Record<string, unknown> | undefined;
+  const _filesystem = raw.filesystem as Record<string, unknown> | undefined;
   const network = raw.network as Record<string, unknown> | undefined;
   const mcp = raw.mcp as Record<string, unknown> | undefined;
-  const providers = raw.providers as Record<string, unknown>;
+  const _providers = raw.providers as Record<string, unknown>;
 
   const skillTokenScopes: string[] = [];
   if (tokenScopes && Array.isArray(tokenScopes.skills)) {
@@ -521,7 +588,9 @@ function extractIntent(raw: Record<string, unknown>): InstalledSkill {
         id: String(s.id),
         url: String(s.url),
         scopes: (s.scopes as string[]).map(String),
-        min_permission_tier: String(s.min_permission_tier) as McpServer['min_permission_tier'],
+        min_permission_tier: String(
+          s.min_permission_tier,
+        ) as McpServer['min_permission_tier'],
       });
     }
   }
@@ -534,7 +603,9 @@ function extractIntent(raw: Record<string, unknown>): InstalledSkill {
     tokenScopes: skillTokenScopes,
     networkEndpoints,
     mcpServers,
-    applyPermission: String(raw.apply_permission) as InstalledSkill['applyPermission'],
+    applyPermission: String(
+      raw.apply_permission,
+    ) as InstalledSkill['applyPermission'],
   };
 }
 
@@ -566,7 +637,10 @@ interface JsonRpcResponse {
  * Returns the parsed response or throws if the broker is unreachable or
  * responds with an error.
  */
-function sendRpc(socketPath: string, req: JsonRpcRequest): Promise<JsonRpcResponse> {
+function sendRpc(
+  socketPath: string,
+  req: JsonRpcRequest,
+): Promise<JsonRpcResponse> {
   return new Promise((resolve, reject) => {
     const conn = net.createConnection(socketPath);
     let buf = '';
@@ -695,7 +769,11 @@ export async function applySkill(
       field: validationError.field,
       reason: validationError.reason,
     });
-    return { ok: false, field: validationError.field, reason: validationError.reason };
+    return {
+      ok: false,
+      field: validationError.field,
+      reason: validationError.reason,
+    };
   }
 
   // Check skill ID collision
@@ -705,8 +783,7 @@ export async function applySkill(
   const skillId = String(raw.skill);
   const existing = installedSkills.get(skillId);
   if (existing) {
-    const sameContext =
-      existing._registeredWith === options.brokerSocketPath;
+    const sameContext = existing._registeredWith === options.brokerSocketPath;
     if (sameContext) {
       return {
         ok: false,
@@ -732,10 +809,13 @@ export async function applySkill(
     } catch (err) {
       // Rollback
       installedSkills.delete(skillId);
-      logger.error('broker notification failed; rolling back skill registration', {
-        skillId,
-        err: String(err),
-      });
+      logger.error(
+        'broker notification failed; rolling back skill registration',
+        {
+          skillId,
+          err: String(err),
+        },
+      );
       return {
         ok: false,
         reason: `broker unavailable: ${err}`,

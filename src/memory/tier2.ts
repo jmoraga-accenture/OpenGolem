@@ -179,7 +179,9 @@ export function completeTaskRecord(
   },
 ): void {
   const now = Math.floor(Date.now() / 1000);
-  db.prepare(
-    `UPDATE tasks SET status = ?, ended_at = ? WHERE id = ?`,
-  ).run(params.status, now, params.id);
+  db.prepare(`UPDATE tasks SET status = ?, ended_at = ? WHERE id = ?`).run(
+    params.status,
+    now,
+    params.id,
+  );
 }

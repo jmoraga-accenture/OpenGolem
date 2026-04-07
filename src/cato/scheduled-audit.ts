@@ -13,7 +13,11 @@
 import fs from 'fs';
 import path from 'path';
 
-import { CATO_AUDIT_INTERVAL_MS, DATA_DIR, GROUPS_DIR, PSYCHE_MD_PATH } from '../config.js';
+import {
+  CATO_AUDIT_INTERVAL_MS,
+  GROUPS_DIR,
+  PSYCHE_MD_PATH,
+} from '../config.js';
 import { runContainerAgent } from '../container-runner.js';
 import { getAuditDb } from '../inspector/audit.js';
 import { logger } from '../logger.js';

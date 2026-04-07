@@ -30,7 +30,6 @@ import {
   removeSkill,
   listInstalledSkills,
   type SkillApplyResult,
-  type SkillRemoveResult,
   type InstalledSkill,
 } from './skill-schema.js';
 

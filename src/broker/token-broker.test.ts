@@ -26,22 +26,20 @@ import net from 'net';
 import os from 'os';
 import path from 'path';
 import {
-  afterAll,
   afterEach,
   beforeAll,
   beforeEach,
   describe,
   expect,
   it,
-  vi,
 } from 'vitest';
 
 // ─── Socket paths ────────────────────────────────────────────────────────────
 // Spec Decision 15: two distinct paths under data/sockets/.
 // Tests use temp-dir variants so they are isolated from any running service.
 const TMP_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'opengolem-broker-ac-'));
-const BROKER_SOCK = path.join(TMP_DIR, 'broker.sock');
-const ESCALATION_SOCK = path.join(TMP_DIR, 'escalation.sock');
+const _BROKER_SOCK = path.join(TMP_DIR, 'broker.sock');
+const _ESCALATION_SOCK = path.join(TMP_DIR, 'escalation.sock');
 
 // ─── JSON-RPC 2.0 helpers ────────────────────────────────────────────────────
 type JsonRpcRequest = {
@@ -270,7 +268,7 @@ describe('Unit — Token Broker JSON-RPC 2.0 interface', () => {
   }) => Promise<BrokerHandle>;
 
   let broker: BrokerHandle;
-  let issuedTokenId: string;
+  let _issuedTokenId: string;
 
   beforeAll(async () => {
     // This dynamic import will fail until the spec-compliant implementation
@@ -307,7 +305,7 @@ describe('Unit — Token Broker JSON-RPC 2.0 interface', () => {
     expect(UUID_RE.test(r.result.tokenId as string)).toBe(true);
     expect(typeof r.result.expiresAt).toBe('string');
     expect(ISO8601_RE.test(r.result.expiresAt as string)).toBe(true);
-    issuedTokenId = r.result.tokenId as string;
+    _issuedTokenId = r.result.tokenId as string;
   });
 
   it('AC-1: token value is opaque — no decodable plaintext credential structure', async () => {
@@ -1384,7 +1382,7 @@ describe.skipIf(!INTEGRATION)(
 
     it('Decision 16: when token store is full, issueToken returns a token_store_full JSON-RPC error', async () => {
       // The broker must expose a way to configure the max store size for testing.
-      type ConfigurableProxy = { maxTokens?: number };
+      type _ConfigurableProxy = { maxTokens?: number };
       const mod = (await import('./index.js')) as Record<string, unknown>;
       const startBrokerLimited = (mod['startBrokerV2Limited'] ??
         mod['startBrokerV2']) as typeof startBrokerV2;

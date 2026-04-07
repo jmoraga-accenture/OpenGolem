@@ -99,7 +99,7 @@ let lastTimestamp = '';
 let lastAgentTimestamp: Record<string, string> = {};
 let sessions: Record<string, string> = {};
 let registeredGroups: Record<string, RegisteredGroup> = {};
-let channels: Channel[] = [];
+const channels: Channel[] = [];
 const queue = new GroupQueue();
 let broker: BrokerHandle | null = null;
 
