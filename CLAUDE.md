@@ -25,11 +25,13 @@ Single Node.js process (v1.0-dev branch, Phase 2 development in progress). Chann
 | `src/container-runner.ts` | Spawns agent containers with mounts |
 | `src/task-scheduler.ts` | Runs scheduled tasks |
 | `src/db.ts` | SQLite operations |
+| `runtime/SOUL.md` | Alef's character, commitments, and [FLAG]/[BLOCKED] protocol |
+| `runtime/PSYCHE.md` | Cato's operating contract, PSY-NN criteria, dao_score thresholds |
 | `groups/{name}/CLAUDE.md` | Per-group memory (isolated) |
 | `container/skills/` | Skills loaded inside agent containers (browser, status) |
 | `docs/ARCHITECTURE.md` | Architecture specification (v1.0) |
 | `docs/PLAN_V1.md` | Implementation plan with milestone status |
-| `docs/DECISIONS.md` | Architecture decision records (ADR-1 through ADR-38) |
+| `docs/DECISIONS.md` | Architecture decision records (ADR-1 through ADR-39) |
 | `docs/SECURITY_STRENGTHENING.md` | Security findings F-1–F-10 and closure status |
 | `docs/PM_BRIEF.md` | PM operating document — open decisions and stream status |
 | `docs/specs/` | Behavioral specs for all components |

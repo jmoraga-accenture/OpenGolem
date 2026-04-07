@@ -13,6 +13,7 @@ import {
   EXTRA_DIR,
   GROUPS_DIR,
   IDLE_TIMEOUT,
+  SOUL_MD_PATH,
   TIMEZONE,
 } from './config.js';
 import { detectAuthMode, getContainerProxyUrl } from './credential-proxy.js';
@@ -116,7 +117,7 @@ function safeContainerFolderName(folder: string): string {
 
 function loadSoulMd(group: RegisteredGroup, input: ContainerInput): void {
   if (input.soulMd !== undefined) return;
-  const soulPath = path.join(process.cwd(), 'SOUL.md');
+  const soulPath = SOUL_MD_PATH;
   try {
     if (!fs.existsSync(soulPath)) return;
     const raw = fs.readFileSync(soulPath, 'utf8');

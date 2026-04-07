@@ -13,7 +13,7 @@
 import fs from 'fs';
 import path from 'path';
 
-import { CATO_AUDIT_INTERVAL_MS, DATA_DIR, GROUPS_DIR } from '../config.js';
+import { CATO_AUDIT_INTERVAL_MS, DATA_DIR, GROUPS_DIR, PSYCHE_MD_PATH } from '../config.js';
 import { runContainerAgent } from '../container-runner.js';
 import { getAuditDb } from '../inspector/audit.js';
 import { logger } from '../logger.js';
@@ -126,7 +126,7 @@ function buildAuditSummary(windowMs: number): string {
 // ---------------------------------------------------------------------------
 
 function loadPsycheMd(): string {
-  const p = path.join(process.cwd(), 'PSYCHE.md');
+  const p = PSYCHE_MD_PATH;
   try {
     return fs.readFileSync(p, 'utf8');
   } catch {

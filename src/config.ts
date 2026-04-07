@@ -38,6 +38,9 @@ export const SENDER_ALLOWLIST_PATH = path.join(
   'opengolem',
   'sender-allowlist.json',
 );
+export const RUNTIME_DIR = path.resolve(PROJECT_ROOT, 'runtime');
+export const SOUL_MD_PATH = path.resolve(RUNTIME_DIR, 'SOUL.md');
+export const PSYCHE_MD_PATH = path.resolve(RUNTIME_DIR, 'PSYCHE.md');
 export const STORE_DIR = path.resolve(PROJECT_ROOT, 'store');
 export const GROUPS_DIR = path.resolve(PROJECT_ROOT, 'groups');
 export const DATA_DIR = path.resolve(PROJECT_ROOT, 'data');

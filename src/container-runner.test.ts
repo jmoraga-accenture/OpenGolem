@@ -16,6 +16,7 @@ vi.mock('./config.js', () => ({
   EXTRA_DIR: '/tmp/opengolem-test-data/extra',
   GROUPS_DIR: '/tmp/opengolem-test-groups',
   IDLE_TIMEOUT: 1800000, // 30min
+  SOUL_MD_PATH: '/tmp/opengolem-test-runtime/SOUL.md',
   TIMEZONE: 'America/Los_Angeles',
 }));
 

@@ -38,10 +38,10 @@ Both files live on the **host filesystem** under the deployment root. They are n
 
 | File | Normative host path | Notes |
 |------|---------------------|-------|
-| `SOUL.md` | `<deployment-root>/SOUL.md` | Prepended verbatim to every Alef container run as a system prompt prefix |
-| `PSYCHE.md` | `<deployment-root>/PSYCHE.md` | Read by Cato at startup and at each scheduled audit run |
+| `SOUL.md` | `<deployment-root>/runtime/SOUL.md` | Prepended verbatim to every Alef container run as a system prompt prefix |
+| `PSYCHE.md` | `<deployment-root>/runtime/PSYCHE.md` | Read by Cato at startup and at each scheduled audit run |
 
-`<deployment-root>` is the directory from which the orchestrator process is launched — typically the project root in development, and a configured service directory in production. The orchestrator resolves both paths to absolute paths at startup. Path overrides are not supported; the files must be at the declared locations.
+`<deployment-root>` is the directory from which the orchestrator process is launched — typically the project root in development, and a configured service directory in production. The `runtime/` subdirectory separates operator content files (character definitions, oversight contracts) from source code and build artifacts. The orchestrator resolves both paths to absolute paths at startup via `SOUL_MD_PATH` and `PSYCHE_MD_PATH` constants in `src/config.ts`. Path overrides are not supported; the files must be at the declared locations.
 
 **Trust domain placement:**
 - SOUL.md's content crosses from TD-ADMIN (host filesystem) into TD-CONTAINER when the orchestrator injects it as a system prompt. This crossing is the orchestrator's responsibility (§4.4, ARCHITECTURE.md) and is audited at container spawn.
@@ -222,7 +222,7 @@ An agent that produces output proposing a SOUL.md or PSYCHE.md modification has 
 The orchestrator validates SOUL.md at startup. Cato validates PSYCHE.md at startup. Neither process proceeds with its normal operation if its respective file fails validation.
 
 **SOUL.md validation checks (orchestrator, at startup):**
-1. File exists at `<deployment-root>/SOUL.md`
+1. File exists at `<deployment-root>/runtime/SOUL.md`
 2. File is valid UTF-8
 3. File size is between 500 bytes and 50 KB (warning logged above 50 KB; error on 0–499 bytes)
 4. All five required section headings are present
@@ -230,7 +230,7 @@ The orchestrator validates SOUL.md at startup. Cato validates PSYCHE.md at start
 6. File does not contain sentinel marker strings
 
 **PSYCHE.md validation checks (Cato, at startup):**
-1. File exists at `<deployment-root>/PSYCHE.md`
+1. File exists at `<deployment-root>/runtime/PSYCHE.md`
 2. File is valid UTF-8
 3. All seven required sections are present
 4. Each `LLM Escalation Criteria` entry has all five required fields in the correct format
@@ -246,8 +246,8 @@ Validation failures are logged to stderr (before the audit log is available) and
 
 | File | Behavior if missing at startup |
 |------|-------------------------------|
-| `SOUL.md` | Orchestrator logs a fatal error and does not start. No containers are spawned. The administrator must create the file before the orchestrator can run. |
-| `PSYCHE.md` | Cato logs a fatal error and does not start. The orchestrator's startup sequence contacts Cato for a health check before completing; a missing Cato causes the orchestrator to queue messages and not spawn containers (§1.3, ARCHITECTURE.md). |
+| `runtime/SOUL.md` | Orchestrator logs a fatal error and does not start. No containers are spawned. The administrator must create the file before the orchestrator can run. |
+| `runtime/PSYCHE.md` | Cato logs a fatal error and does not start. The orchestrator's startup sequence contacts Cato for a health check before completing; a missing Cato causes the orchestrator to queue messages and not spawn containers (§1.3, ARCHITECTURE.md). |
 
 Neither file has an auto-create behavior. Both must be explicitly provided by the administrator. The canonical v1.0 content of each file is maintained in the repository.
 
@@ -372,9 +372,9 @@ Risk class translation examples (for VoC reference; not normative format):
 
 These properties hold at all times, regardless of group configuration or assertiveness settings.
 
-1. **SOUL.md is not modifiable by agents.** No output from any agent container, however constructed, results in a change to `<deployment-root>/SOUL.md`. Proposed memory mutations touching this path are rejected by Cato's `MEMORY_WRITE` gate.
+1. **SOUL.md is not modifiable by agents.** No output from any agent container, however constructed, results in a change to `<deployment-root>/runtime/SOUL.md`. Proposed memory mutations touching this path are rejected by Cato's `MEMORY_WRITE` gate.
 
-2. **PSYCHE.md is not modifiable at runtime.** No running process (Cato, orchestrator, agent container, channel adapter) writes to `<deployment-root>/PSYCHE.md` during normal operation. Writes to PSYCHE.md occur only via administrator action through the local filesystem.
+2. **PSYCHE.md is not modifiable at runtime.** No running process (Cato, orchestrator, agent container, channel adapter) writes to `<deployment-root>/runtime/PSYCHE.md` during normal operation. Writes to PSYCHE.md occur only via administrator action through the local filesystem.
 
 3. **Every [FLAG] is audited.** Every response containing the flag marker (canonical form `[FLAG]`) is recorded in Cato's scheduled audit input as a behavioral signal. The audit log records the flag event; Cato's scheduled audit reads and assesses `[FLAG]` frequency and pattern.
 
@@ -428,7 +428,7 @@ Given a running container, the content of SOUL.md appears verbatim as a prefix i
 Given a group configured with `assertiveness_level: 7`, the injected system prompt contains `7 / 10` (or the literal resolved value) in place of the template variable. Verified by: instrumented spawn with a known assertiveness value.
 
 **AC-SP-05: PSYCHE.md validation rejects missing sections.**
-Given a PSYCHE.md with any of the six required sections removed, Cato fails to start and logs an error naming the missing section. Verified by: removing each required section in turn and confirming the error message.
+Given a PSYCHE.md with any of the seven required sections removed, Cato fails to start and logs an error naming the missing section. Verified by: removing each required section in turn and confirming the error message.
 
 **AC-SP-06: PSYCHE.md validation rejects unknown action types in criteria.**
 Given a PSYCHE.md with a PSY-NN criterion listing an `Applicable actions` value not in the fixed enumeration, Cato fails to start and logs the criterion ID and unrecognized value. Verified by: adding a criterion with `action: UNKNOWN_ACTION`.
@@ -443,13 +443,13 @@ Given a PSYCHE.md where PSY-01 is followed by PSY-03 (PSY-02 skipped), Cato fail
 Given a PSYCHE.md with a KPI table row using a field name not in the canonical set (e.g. `security_blocks_per_call`), Cato fails to start and logs the unrecognized field name. Verified by: substituting a wrong KPI name.
 
 **AC-SP-10: PSYCHE.md is not modified at runtime.**
-Given normal operation over a full scheduled audit cycle, the modification timestamp of `<deployment-root>/PSYCHE.md` is unchanged. Verified by: recording the mtime before and after a complete audit cycle.
+Given normal operation over a full scheduled audit cycle, the modification timestamp of `<deployment-root>/runtime/PSYCHE.md` is unchanged. Verified by: recording the mtime before and after a complete audit cycle.
 
 **AC-SP-11: SOUL.md is not modified at runtime.**
-Given normal operation across multiple container spawns, the modification timestamp of `<deployment-root>/SOUL.md` is unchanged. Verified by: recording the mtime before and after multiple container spawns.
+Given normal operation across multiple container spawns, the modification timestamp of `<deployment-root>/runtime/SOUL.md` is unchanged. Verified by: recording the mtime before and after multiple container spawns.
 
 **AC-SP-12: Agent-proposed SOUL.md mutation is blocked.**
-Given an agent container that produces output proposing a write to `<deployment-root>/SOUL.md` (or any path matching the SOUL.md location), the orchestrator submits a `MEMORY_WRITE` check to Cato, Cato returns `allow: false`, and the mutation is not applied. The audit log records the blocked check. Verified by: instrumented agent output with a SOUL.md mutation proposal; audit log inspection.
+Given an agent container that produces output proposing a write to `<deployment-root>/runtime/SOUL.md` (or any path matching the SOUL.md location), the orchestrator submits a `MEMORY_WRITE` check to Cato, Cato returns `allow: false`, and the mutation is not applied. The audit log records the blocked check. Verified by: instrumented agent output with a SOUL.md mutation proposal; audit log inspection.
 
 **AC-SP-13: [FLAG] prefix is present when Alef declines a request.**
 Given an agent run where Alef declines a user request (hard limit or assertiveness-driven), the response begins with the configured `ALEF_FLAG_DISPLAY_TAG` string. Verified by: controlled test with a request that triggers a hard limit refusal; response content inspection.
@@ -464,10 +464,10 @@ Given a `[BLOCKED]` response, the message content does not contain the literal b
 Given a group configured with `ALEF_FLAG_DISPLAY_TAG: "[MARCA]"`, the audit log records `[FLAG]` (canonical English form) while the channel message delivered to the user begins with `[MARCA]`. Verified by: configuring a custom tag; triggering a flag event; inspecting both the channel output and the audit log.
 
 **AC-SP-17: Missing SOUL.md prevents orchestrator startup.**
-Given `<deployment-root>/SOUL.md` is absent, the orchestrator does not start and logs a fatal error. No container is spawned. Verified by: removing the file and attempting orchestrator startup.
+Given `<deployment-root>/runtime/SOUL.md` is absent, the orchestrator does not start and logs a fatal error. No container is spawned. Verified by: removing the file and attempting orchestrator startup.
 
 **AC-SP-18: Missing PSYCHE.md prevents Cato startup and blocks container dispatch.**
-Given `<deployment-root>/PSYCHE.md` is absent, Cato does not start. The orchestrator's startup health check to Cato fails. The orchestrator enters message-queuing mode and does not spawn containers. Verified by: removing PSYCHE.md; attempting orchestrator startup; confirming no container is spawned and messages queue.
+Given `<deployment-root>/runtime/PSYCHE.md` is absent, Cato does not start. The orchestrator's startup health check to Cato fails. The orchestrator enters message-queuing mode and does not spawn containers. Verified by: removing PSYCHE.md; attempting orchestrator startup; confirming no container is spawned and messages queue.
 
 **AC-SP-19: SOUL.md changes take effect after restart.**
 Given SOUL.md is edited while the orchestrator is running, the change is not visible in containers spawned before a restart. After the orchestrator is restarted, the next container spawned uses the updated SOUL.md content. Verified by: editing SOUL.md mid-run; spawning a container before and after restart; comparing injected system prompt content.
