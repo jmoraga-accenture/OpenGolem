@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
   _initTestDatabase,
@@ -8,30 +8,33 @@ import {
   getTaskById,
   setRegisteredGroup,
 } from './db.js';
-import { processTaskIpc, IpcDeps } from './ipc.js';
-import { RegisteredGroup } from './types.js';
+import { processTaskIpc, type IpcDeps } from './ipc.js';
+import type { RegisteredGroup } from './types.js';
 
-// Set up registered groups used across tests
-const MAIN_GROUP: RegisteredGroup = {
+// ---------------------------------------------------------------------------
+// Test fixtures
+// ---------------------------------------------------------------------------
+
+const MAIN: RegisteredGroup = {
   name: 'Main',
-  folder: 'whatsapp_main',
+  folder: 'main-group',
   trigger: 'always',
-  added_at: '2024-01-01T00:00:00.000Z',
+  added_at: '2026-01-01T00:00:00.000Z',
   isMain: true,
 };
 
-const OTHER_GROUP: RegisteredGroup = {
-  name: 'Other',
-  folder: 'other-group',
+const GROUP_A: RegisteredGroup = {
+  name: 'Group A',
+  folder: 'group-a',
   trigger: '@Alef',
-  added_at: '2024-01-01T00:00:00.000Z',
+  added_at: '2026-01-01T00:00:00.000Z',
 };
 
-const THIRD_GROUP: RegisteredGroup = {
-  name: 'Third',
-  folder: 'third-group',
+const GROUP_B: RegisteredGroup = {
+  name: 'Group B',
+  folder: 'group-b',
   trigger: '@Alef',
-  added_at: '2024-01-01T00:00:00.000Z',
+  added_at: '2026-01-01T00:00:00.000Z',
 };
 
 let groups: Record<string, RegisteredGroup>;
@@ -41,414 +44,153 @@ beforeEach(() => {
   _initTestDatabase();
 
   groups = {
-    'main@g.us': MAIN_GROUP,
-    'other@g.us': OTHER_GROUP,
-    'third@g.us': THIRD_GROUP,
+    'main@g.us': MAIN,
+    'a@g.us': GROUP_A,
+    'b@g.us': GROUP_B,
   };
 
-  // Populate DB as well
-  setRegisteredGroup('main@g.us', MAIN_GROUP);
-  setRegisteredGroup('other@g.us', OTHER_GROUP);
-  setRegisteredGroup('third@g.us', THIRD_GROUP);
+  setRegisteredGroup('main@g.us', MAIN);
+  setRegisteredGroup('a@g.us', GROUP_A);
+  setRegisteredGroup('b@g.us', GROUP_B);
 
   deps = {
-    sendMessage: async () => {},
+    sendMessage: vi.fn(async () => {}),
     registeredGroups: () => groups,
     registerGroup: (jid, group) => {
       groups[jid] = group;
       setRegisteredGroup(jid, group);
-      // Mock the fs.mkdirSync that registerGroup does
     },
-    syncGroups: async () => {},
+    syncGroups: vi.fn(async () => {}),
     getAvailableGroups: () => [],
-    writeGroupsSnapshot: () => {},
-    onTasksChanged: () => {},
+    writeGroupsSnapshot: vi.fn(),
+    onTasksChanged: vi.fn(),
   };
 });
 
-// --- schedule_task authorization ---
+// ---------------------------------------------------------------------------
+// schedule_task — authorization
+// ---------------------------------------------------------------------------
 
 describe('schedule_task authorization', () => {
-  it('main group can schedule for another group', async () => {
+  it('main group can schedule a task for another group', async () => {
     await processTaskIpc(
       {
         type: 'schedule_task',
-        prompt: 'do something',
+        prompt: 'do work',
         schedule_type: 'once',
-        schedule_value: '2025-06-01T00:00:00',
-        targetJid: 'other@g.us',
+        schedule_value: '2027-01-01T00:00:00.000Z',
+        targetJid: 'a@g.us',
       },
-      'whatsapp_main',
+      'main-group',
       true,
       deps,
     );
 
-    // Verify task was created in DB for the other group
-    const allTasks = getAllTasks();
-    expect(allTasks.length).toBe(1);
-    expect(allTasks[0].group_folder).toBe('other-group');
+    const tasks = getAllTasks();
+    expect(tasks).toHaveLength(1);
+    expect(tasks[0].group_folder).toBe('group-a');
   });
 
-  it('non-main group can schedule for itself', async () => {
+  it('non-main group can schedule a task for itself', async () => {
     await processTaskIpc(
       {
         type: 'schedule_task',
         prompt: 'self task',
         schedule_type: 'once',
-        schedule_value: '2025-06-01T00:00:00',
-        targetJid: 'other@g.us',
+        schedule_value: '2027-01-01T00:00:00.000Z',
+        targetJid: 'a@g.us',
       },
-      'other-group',
+      'group-a',
       false,
       deps,
     );
 
-    const allTasks = getAllTasks();
-    expect(allTasks.length).toBe(1);
-    expect(allTasks[0].group_folder).toBe('other-group');
+    const tasks = getAllTasks();
+    expect(tasks).toHaveLength(1);
+    expect(tasks[0].group_folder).toBe('group-a');
   });
 
-  it('non-main group cannot schedule for another group', async () => {
+  it('non-main group cannot schedule a task for another group', async () => {
     await processTaskIpc(
       {
         type: 'schedule_task',
-        prompt: 'unauthorized',
+        prompt: 'cross-group',
         schedule_type: 'once',
-        schedule_value: '2025-06-01T00:00:00',
+        schedule_value: '2027-01-01T00:00:00.000Z',
         targetJid: 'main@g.us',
       },
-      'other-group',
+      'group-a',
       false,
       deps,
     );
 
-    const allTasks = getAllTasks();
-    expect(allTasks.length).toBe(0);
+    expect(getAllTasks()).toHaveLength(0);
   });
 
-  it('rejects schedule_task for unregistered target JID', async () => {
+  it('rejects schedule_task with an unregistered target JID', async () => {
     await processTaskIpc(
       {
         type: 'schedule_task',
         prompt: 'no target',
         schedule_type: 'once',
-        schedule_value: '2025-06-01T00:00:00',
+        schedule_value: '2027-01-01T00:00:00.000Z',
         targetJid: 'unknown@g.us',
       },
-      'whatsapp_main',
+      'main-group',
       true,
       deps,
     );
 
-    const allTasks = getAllTasks();
-    expect(allTasks.length).toBe(0);
-  });
-});
-
-// --- pause_task authorization ---
-
-describe('pause_task authorization', () => {
-  beforeEach(() => {
-    createTask({
-      id: 'task-main',
-      group_folder: 'whatsapp_main',
-      chat_jid: 'main@g.us',
-      prompt: 'main task',
-      schedule_type: 'once',
-      schedule_value: '2025-06-01T00:00:00',
-      context_mode: 'isolated',
-      next_run: '2025-06-01T00:00:00.000Z',
-      status: 'active',
-      created_at: '2024-01-01T00:00:00.000Z',
-    });
-    createTask({
-      id: 'task-other',
-      group_folder: 'other-group',
-      chat_jid: 'other@g.us',
-      prompt: 'other task',
-      schedule_type: 'once',
-      schedule_value: '2025-06-01T00:00:00',
-      context_mode: 'isolated',
-      next_run: '2025-06-01T00:00:00.000Z',
-      status: 'active',
-      created_at: '2024-01-01T00:00:00.000Z',
-    });
+    expect(getAllTasks()).toHaveLength(0);
   });
 
-  it('main group can pause any task', async () => {
-    await processTaskIpc(
-      { type: 'pause_task', taskId: 'task-other' },
-      'whatsapp_main',
-      true,
-      deps,
-    );
-    expect(getTaskById('task-other')!.status).toBe('paused');
-  });
-
-  it('non-main group can pause its own task', async () => {
-    await processTaskIpc(
-      { type: 'pause_task', taskId: 'task-other' },
-      'other-group',
-      false,
-      deps,
-    );
-    expect(getTaskById('task-other')!.status).toBe('paused');
-  });
-
-  it('non-main group cannot pause another groups task', async () => {
-    await processTaskIpc(
-      { type: 'pause_task', taskId: 'task-main' },
-      'other-group',
-      false,
-      deps,
-    );
-    expect(getTaskById('task-main')!.status).toBe('active');
-  });
-});
-
-// --- resume_task authorization ---
-
-describe('resume_task authorization', () => {
-  beforeEach(() => {
-    createTask({
-      id: 'task-paused',
-      group_folder: 'other-group',
-      chat_jid: 'other@g.us',
-      prompt: 'paused task',
-      schedule_type: 'once',
-      schedule_value: '2025-06-01T00:00:00',
-      context_mode: 'isolated',
-      next_run: '2025-06-01T00:00:00.000Z',
-      status: 'paused',
-      created_at: '2024-01-01T00:00:00.000Z',
-    });
-  });
-
-  it('main group can resume any task', async () => {
-    await processTaskIpc(
-      { type: 'resume_task', taskId: 'task-paused' },
-      'whatsapp_main',
-      true,
-      deps,
-    );
-    expect(getTaskById('task-paused')!.status).toBe('active');
-  });
-
-  it('non-main group can resume its own task', async () => {
-    await processTaskIpc(
-      { type: 'resume_task', taskId: 'task-paused' },
-      'other-group',
-      false,
-      deps,
-    );
-    expect(getTaskById('task-paused')!.status).toBe('active');
-  });
-
-  it('non-main group cannot resume another groups task', async () => {
-    await processTaskIpc(
-      { type: 'resume_task', taskId: 'task-paused' },
-      'third-group',
-      false,
-      deps,
-    );
-    expect(getTaskById('task-paused')!.status).toBe('paused');
-  });
-});
-
-// --- cancel_task authorization ---
-
-describe('cancel_task authorization', () => {
-  it('main group can cancel any task', async () => {
-    createTask({
-      id: 'task-to-cancel',
-      group_folder: 'other-group',
-      chat_jid: 'other@g.us',
-      prompt: 'cancel me',
-      schedule_type: 'once',
-      schedule_value: '2025-06-01T00:00:00',
-      context_mode: 'isolated',
-      next_run: null,
-      status: 'active',
-      created_at: '2024-01-01T00:00:00.000Z',
-    });
-
-    await processTaskIpc(
-      { type: 'cancel_task', taskId: 'task-to-cancel' },
-      'whatsapp_main',
-      true,
-      deps,
-    );
-    expect(getTaskById('task-to-cancel')).toBeUndefined();
-  });
-
-  it('non-main group can cancel its own task', async () => {
-    createTask({
-      id: 'task-own',
-      group_folder: 'other-group',
-      chat_jid: 'other@g.us',
-      prompt: 'my task',
-      schedule_type: 'once',
-      schedule_value: '2025-06-01T00:00:00',
-      context_mode: 'isolated',
-      next_run: null,
-      status: 'active',
-      created_at: '2024-01-01T00:00:00.000Z',
-    });
-
-    await processTaskIpc(
-      { type: 'cancel_task', taskId: 'task-own' },
-      'other-group',
-      false,
-      deps,
-    );
-    expect(getTaskById('task-own')).toBeUndefined();
-  });
-
-  it('non-main group cannot cancel another groups task', async () => {
-    createTask({
-      id: 'task-foreign',
-      group_folder: 'whatsapp_main',
-      chat_jid: 'main@g.us',
-      prompt: 'not yours',
-      schedule_type: 'once',
-      schedule_value: '2025-06-01T00:00:00',
-      context_mode: 'isolated',
-      next_run: null,
-      status: 'active',
-      created_at: '2024-01-01T00:00:00.000Z',
-    });
-
-    await processTaskIpc(
-      { type: 'cancel_task', taskId: 'task-foreign' },
-      'other-group',
-      false,
-      deps,
-    );
-    expect(getTaskById('task-foreign')).toBeDefined();
-  });
-});
-
-// --- register_group authorization ---
-
-describe('register_group authorization', () => {
-  it('non-main group cannot register a group', async () => {
-    await processTaskIpc(
-      {
-        type: 'register_group',
-        jid: 'new@g.us',
-        name: 'New Group',
-        folder: 'new-group',
-        trigger: '@Alef',
-      },
-      'other-group',
-      false,
-      deps,
-    );
-
-    // registeredGroups should not have changed
-    expect(groups['new@g.us']).toBeUndefined();
-  });
-
-  it('main group cannot register with unsafe folder path', async () => {
-    await processTaskIpc(
-      {
-        type: 'register_group',
-        jid: 'new@g.us',
-        name: 'New Group',
-        folder: '../../outside',
-        trigger: '@Alef',
-      },
-      'whatsapp_main',
-      true,
-      deps,
-    );
-
-    expect(groups['new@g.us']).toBeUndefined();
-  });
-});
-
-// --- refresh_groups authorization ---
-
-describe('refresh_groups authorization', () => {
-  it('non-main group cannot trigger refresh', async () => {
-    // This should be silently blocked (no crash, no effect)
-    await processTaskIpc(
-      { type: 'refresh_groups' },
-      'other-group',
-      false,
-      deps,
-    );
-    // If we got here without error, the auth gate worked
-  });
-});
-
-// --- IPC message authorization ---
-// Tests the authorization pattern from startIpcWatcher (ipc.ts).
-// The logic: isMain || (targetGroup && targetGroup.folder === sourceGroup)
-
-describe('IPC message authorization', () => {
-  // Replicate the exact check from the IPC watcher
-  function isMessageAuthorized(
-    sourceGroup: string,
-    isMain: boolean,
-    targetChatJid: string,
-    registeredGroups: Record<string, RegisteredGroup>,
-  ): boolean {
-    const targetGroup = registeredGroups[targetChatJid];
-    return isMain || (!!targetGroup && targetGroup.folder === sourceGroup);
-  }
-
-  it('main group can send to any group', () => {
-    expect(
-      isMessageAuthorized('whatsapp_main', true, 'other@g.us', groups),
-    ).toBe(true);
-    expect(
-      isMessageAuthorized('whatsapp_main', true, 'third@g.us', groups),
-    ).toBe(true);
-  });
-
-  it('non-main group can send to its own chat', () => {
-    expect(
-      isMessageAuthorized('other-group', false, 'other@g.us', groups),
-    ).toBe(true);
-  });
-
-  it('non-main group cannot send to another groups chat', () => {
-    expect(isMessageAuthorized('other-group', false, 'main@g.us', groups)).toBe(
-      false,
-    );
-    expect(
-      isMessageAuthorized('other-group', false, 'third@g.us', groups),
-    ).toBe(false);
-  });
-
-  it('non-main group cannot send to unregistered JID', () => {
-    expect(
-      isMessageAuthorized('other-group', false, 'unknown@g.us', groups),
-    ).toBe(false);
-  });
-
-  it('main group can send to unregistered JID', () => {
-    // Main is always authorized regardless of target
-    expect(
-      isMessageAuthorized('whatsapp_main', true, 'unknown@g.us', groups),
-    ).toBe(true);
-  });
-});
-
-// --- schedule_task with cron and interval types ---
-
-describe('schedule_task schedule types', () => {
-  it('creates task with cron schedule and computes next_run', async () => {
+  it('rejects schedule_task with missing required fields', async () => {
     await processTaskIpc(
       {
         type: 'schedule_task',
-        prompt: 'cron task',
-        schedule_type: 'cron',
-        schedule_value: '0 9 * * *', // every day at 9am
-        targetJid: 'other@g.us',
+        // missing prompt, schedule_type, schedule_value, targetJid
       },
-      'whatsapp_main',
+      'main-group',
+      true,
+      deps,
+    );
+
+    expect(getAllTasks()).toHaveLength(0);
+  });
+
+  it('rejects schedule_value longer than 200 characters', async () => {
+    await processTaskIpc(
+      {
+        type: 'schedule_task',
+        prompt: 'overflow',
+        schedule_type: 'once',
+        schedule_value: '2027-01-01T00:00:00.000Z' + 'x'.repeat(200),
+        targetJid: 'a@g.us',
+      },
+      'main-group',
+      true,
+      deps,
+    );
+
+    expect(getAllTasks()).toHaveLength(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// schedule_task — schedule types
+// ---------------------------------------------------------------------------
+
+describe('schedule_task schedule types', () => {
+  it('creates a cron task with computed next_run', async () => {
+    await processTaskIpc(
+      {
+        type: 'schedule_task',
+        prompt: 'daily',
+        schedule_type: 'cron',
+        schedule_value: '0 9 * * *',
+        targetJid: 'a@g.us',
+      },
+      'main-group',
       true,
       deps,
     );
@@ -457,22 +199,19 @@ describe('schedule_task schedule types', () => {
     expect(tasks).toHaveLength(1);
     expect(tasks[0].schedule_type).toBe('cron');
     expect(tasks[0].next_run).toBeTruthy();
-    // next_run should be a valid ISO date in the future
-    expect(new Date(tasks[0].next_run!).getTime()).toBeGreaterThan(
-      Date.now() - 60000,
-    );
+    expect(new Date(tasks[0].next_run!).getTime()).toBeGreaterThan(Date.now() - 60_000);
   });
 
-  it('rejects invalid cron expression', async () => {
+  it('rejects an invalid cron expression', async () => {
     await processTaskIpc(
       {
         type: 'schedule_task',
         prompt: 'bad cron',
         schedule_type: 'cron',
-        schedule_value: 'not a cron',
-        targetJid: 'other@g.us',
+        schedule_value: 'not-a-cron',
+        targetJid: 'a@g.us',
       },
-      'whatsapp_main',
+      'main-group',
       true,
       deps,
     );
@@ -480,18 +219,37 @@ describe('schedule_task schedule types', () => {
     expect(getAllTasks()).toHaveLength(0);
   });
 
-  it('creates task with interval schedule', async () => {
+  it('rejects a cron expression with interval under 5 minutes', async () => {
+    // Every minute — too frequent
+    await processTaskIpc(
+      {
+        type: 'schedule_task',
+        prompt: 'too frequent',
+        schedule_type: 'cron',
+        schedule_value: '* * * * *',
+        targetJid: 'a@g.us',
+      },
+      'main-group',
+      true,
+      deps,
+    );
+
+    expect(getAllTasks()).toHaveLength(0);
+  });
+
+  it('creates an interval task with next_run ~interval ms from now', async () => {
+    const intervalMs = 3_600_000; // 1 hour
     const before = Date.now();
 
     await processTaskIpc(
       {
         type: 'schedule_task',
-        prompt: 'interval task',
+        prompt: 'hourly',
         schedule_type: 'interval',
-        schedule_value: '3600000', // 1 hour
-        targetJid: 'other@g.us',
+        schedule_value: String(intervalMs),
+        targetJid: 'a@g.us',
       },
-      'whatsapp_main',
+      'main-group',
       true,
       deps,
     );
@@ -499,22 +257,38 @@ describe('schedule_task schedule types', () => {
     const tasks = getAllTasks();
     expect(tasks).toHaveLength(1);
     expect(tasks[0].schedule_type).toBe('interval');
-    // next_run should be ~1 hour from now
     const nextRun = new Date(tasks[0].next_run!).getTime();
-    expect(nextRun).toBeGreaterThanOrEqual(before + 3600000 - 1000);
-    expect(nextRun).toBeLessThanOrEqual(Date.now() + 3600000 + 1000);
+    expect(nextRun).toBeGreaterThanOrEqual(before + intervalMs - 1000);
+    expect(nextRun).toBeLessThanOrEqual(Date.now() + intervalMs + 1000);
   });
 
-  it('rejects invalid interval (non-numeric)', async () => {
+  it('rejects interval below 5 minutes (300000 ms)', async () => {
+    await processTaskIpc(
+      {
+        type: 'schedule_task',
+        prompt: 'too short interval',
+        schedule_type: 'interval',
+        schedule_value: '60000', // 1 min — below minimum
+        targetJid: 'a@g.us',
+      },
+      'main-group',
+      true,
+      deps,
+    );
+
+    expect(getAllTasks()).toHaveLength(0);
+  });
+
+  it('rejects non-numeric interval value', async () => {
     await processTaskIpc(
       {
         type: 'schedule_task',
         prompt: 'bad interval',
         schedule_type: 'interval',
         schedule_value: 'abc',
-        targetJid: 'other@g.us',
+        targetJid: 'a@g.us',
       },
-      'whatsapp_main',
+      'main-group',
       true,
       deps,
     );
@@ -522,33 +296,38 @@ describe('schedule_task schedule types', () => {
     expect(getAllTasks()).toHaveLength(0);
   });
 
-  it('rejects invalid interval (zero)', async () => {
+  it('creates a once task with the provided timestamp', async () => {
+    const isoTime = '2027-06-01T12:00:00.000Z';
+
     await processTaskIpc(
       {
         type: 'schedule_task',
-        prompt: 'zero interval',
-        schedule_type: 'interval',
-        schedule_value: '0',
-        targetJid: 'other@g.us',
+        prompt: 'run once',
+        schedule_type: 'once',
+        schedule_value: isoTime,
+        targetJid: 'a@g.us',
       },
-      'whatsapp_main',
+      'main-group',
       true,
       deps,
     );
 
-    expect(getAllTasks()).toHaveLength(0);
+    const tasks = getAllTasks();
+    expect(tasks).toHaveLength(1);
+    expect(tasks[0].schedule_type).toBe('once');
+    expect(tasks[0].next_run).toBe(new Date(isoTime).toISOString());
   });
 
-  it('rejects invalid once timestamp', async () => {
+  it('rejects an invalid once timestamp', async () => {
     await processTaskIpc(
       {
         type: 'schedule_task',
-        prompt: 'bad once',
+        prompt: 'bad date',
         schedule_type: 'once',
         schedule_value: 'not-a-date',
-        targetJid: 'other@g.us',
+        targetJid: 'a@g.us',
       },
-      'whatsapp_main',
+      'main-group',
       true,
       deps,
     );
@@ -557,88 +336,263 @@ describe('schedule_task schedule types', () => {
   });
 });
 
-// --- context_mode defaulting ---
+// ---------------------------------------------------------------------------
+// schedule_task — context_mode
+// ---------------------------------------------------------------------------
 
 describe('schedule_task context_mode', () => {
-  it('accepts context_mode=group', async () => {
+  it('stores context_mode=group when explicitly set', async () => {
     await processTaskIpc(
       {
         type: 'schedule_task',
-        prompt: 'group context',
+        prompt: 'group mode',
         schedule_type: 'once',
-        schedule_value: '2025-06-01T00:00:00',
+        schedule_value: '2027-01-01T00:00:00.000Z',
         context_mode: 'group',
-        targetJid: 'other@g.us',
+        targetJid: 'a@g.us',
       },
-      'whatsapp_main',
+      'main-group',
       true,
       deps,
     );
 
-    const tasks = getAllTasks();
-    expect(tasks[0].context_mode).toBe('group');
+    expect(getAllTasks()[0].context_mode).toBe('group');
   });
 
-  it('accepts context_mode=isolated', async () => {
+  it('defaults context_mode to isolated when value is invalid', async () => {
     await processTaskIpc(
       {
         type: 'schedule_task',
-        prompt: 'isolated context',
+        prompt: 'unknown mode',
         schedule_type: 'once',
-        schedule_value: '2025-06-01T00:00:00',
-        context_mode: 'isolated',
-        targetJid: 'other@g.us',
+        schedule_value: '2027-01-01T00:00:00.000Z',
+        context_mode: 'bogus',
+        targetJid: 'a@g.us',
       },
-      'whatsapp_main',
+      'main-group',
       true,
       deps,
     );
 
-    const tasks = getAllTasks();
-    expect(tasks[0].context_mode).toBe('isolated');
+    expect(getAllTasks()[0].context_mode).toBe('isolated');
   });
 
-  it('defaults invalid context_mode to isolated', async () => {
+  it('defaults context_mode to isolated when omitted', async () => {
     await processTaskIpc(
       {
         type: 'schedule_task',
-        prompt: 'bad context',
+        prompt: 'no mode',
         schedule_type: 'once',
-        schedule_value: '2025-06-01T00:00:00',
-        context_mode: 'bogus' as any,
-        targetJid: 'other@g.us',
+        schedule_value: '2027-01-01T00:00:00.000Z',
+        targetJid: 'a@g.us',
       },
-      'whatsapp_main',
+      'main-group',
       true,
       deps,
     );
 
-    const tasks = getAllTasks();
-    expect(tasks[0].context_mode).toBe('isolated');
-  });
-
-  it('defaults missing context_mode to isolated', async () => {
-    await processTaskIpc(
-      {
-        type: 'schedule_task',
-        prompt: 'no context mode',
-        schedule_type: 'once',
-        schedule_value: '2025-06-01T00:00:00',
-        targetJid: 'other@g.us',
-      },
-      'whatsapp_main',
-      true,
-      deps,
-    );
-
-    const tasks = getAllTasks();
-    expect(tasks[0].context_mode).toBe('isolated');
+    expect(getAllTasks()[0].context_mode).toBe('isolated');
   });
 });
 
-// --- register_group success path ---
+// ---------------------------------------------------------------------------
+// pause_task / resume_task / cancel_task authorization
+// ---------------------------------------------------------------------------
 
-describe('register_group success', () => {
+describe('pause_task authorization', () => {
+  beforeEach(() => {
+    createTask({
+      id: 'main-task',
+      group_folder: 'main-group',
+      chat_jid: 'main@g.us',
+      prompt: 'main',
+      schedule_type: 'once',
+      schedule_value: '2027-01-01T00:00:00.000Z',
+      context_mode: 'isolated',
+      next_run: '2027-01-01T00:00:00.000Z',
+      status: 'active',
+      created_at: '2026-01-01T00:00:00.000Z',
+    });
+    createTask({
+      id: 'a-task',
+      group_folder: 'group-a',
+      chat_jid: 'a@g.us',
+      prompt: 'a',
+      schedule_type: 'once',
+      schedule_value: '2027-01-01T00:00:00.000Z',
+      context_mode: 'isolated',
+      next_run: '2027-01-01T00:00:00.000Z',
+      status: 'active',
+      created_at: '2026-01-01T00:00:00.000Z',
+    });
+  });
+
+  it('main group can pause any task', async () => {
+    await processTaskIpc(
+      { type: 'pause_task', taskId: 'a-task' },
+      'main-group',
+      true,
+      deps,
+    );
+    expect(getTaskById('a-task')!.status).toBe('paused');
+  });
+
+  it('non-main group can pause its own task', async () => {
+    await processTaskIpc(
+      { type: 'pause_task', taskId: 'a-task' },
+      'group-a',
+      false,
+      deps,
+    );
+    expect(getTaskById('a-task')!.status).toBe('paused');
+  });
+
+  it('non-main group cannot pause another group\'s task', async () => {
+    await processTaskIpc(
+      { type: 'pause_task', taskId: 'main-task' },
+      'group-a',
+      false,
+      deps,
+    );
+    expect(getTaskById('main-task')!.status).toBe('active');
+  });
+});
+
+describe('resume_task authorization', () => {
+  beforeEach(() => {
+    createTask({
+      id: 'paused-task',
+      group_folder: 'group-a',
+      chat_jid: 'a@g.us',
+      prompt: 'paused',
+      schedule_type: 'once',
+      schedule_value: '2027-01-01T00:00:00.000Z',
+      context_mode: 'isolated',
+      next_run: '2027-01-01T00:00:00.000Z',
+      status: 'paused',
+      created_at: '2026-01-01T00:00:00.000Z',
+    });
+    createTask({
+      id: 'other-paused',
+      group_folder: 'group-b',
+      chat_jid: 'b@g.us',
+      prompt: 'other',
+      schedule_type: 'once',
+      schedule_value: '2027-01-01T00:00:00.000Z',
+      context_mode: 'isolated',
+      next_run: '2027-01-01T00:00:00.000Z',
+      status: 'paused',
+      created_at: '2026-01-01T00:00:00.000Z',
+    });
+  });
+
+  it('main group can resume any task', async () => {
+    await processTaskIpc(
+      { type: 'resume_task', taskId: 'paused-task' },
+      'main-group',
+      true,
+      deps,
+    );
+    expect(getTaskById('paused-task')!.status).toBe('active');
+  });
+
+  it('non-main group can resume its own task', async () => {
+    await processTaskIpc(
+      { type: 'resume_task', taskId: 'paused-task' },
+      'group-a',
+      false,
+      deps,
+    );
+    expect(getTaskById('paused-task')!.status).toBe('active');
+  });
+
+  it('non-main group cannot resume another group\'s task', async () => {
+    await processTaskIpc(
+      { type: 'resume_task', taskId: 'other-paused' },
+      'group-a',
+      false,
+      deps,
+    );
+    expect(getTaskById('other-paused')!.status).toBe('paused');
+  });
+});
+
+describe('cancel_task authorization', () => {
+  it('main group can cancel any task', async () => {
+    createTask({
+      id: 'cancel-me',
+      group_folder: 'group-a',
+      chat_jid: 'a@g.us',
+      prompt: 'delete',
+      schedule_type: 'once',
+      schedule_value: '2027-01-01T00:00:00.000Z',
+      context_mode: 'isolated',
+      next_run: null,
+      status: 'active',
+      created_at: '2026-01-01T00:00:00.000Z',
+    });
+
+    await processTaskIpc(
+      { type: 'cancel_task', taskId: 'cancel-me' },
+      'main-group',
+      true,
+      deps,
+    );
+    expect(getTaskById('cancel-me')).toBeUndefined();
+  });
+
+  it('non-main group can cancel its own task', async () => {
+    createTask({
+      id: 'own-cancel',
+      group_folder: 'group-a',
+      chat_jid: 'a@g.us',
+      prompt: 'mine',
+      schedule_type: 'once',
+      schedule_value: '2027-01-01T00:00:00.000Z',
+      context_mode: 'isolated',
+      next_run: null,
+      status: 'active',
+      created_at: '2026-01-01T00:00:00.000Z',
+    });
+
+    await processTaskIpc(
+      { type: 'cancel_task', taskId: 'own-cancel' },
+      'group-a',
+      false,
+      deps,
+    );
+    expect(getTaskById('own-cancel')).toBeUndefined();
+  });
+
+  it('non-main group cannot cancel another group\'s task', async () => {
+    createTask({
+      id: 'foreign-task',
+      group_folder: 'main-group',
+      chat_jid: 'main@g.us',
+      prompt: 'not yours',
+      schedule_type: 'once',
+      schedule_value: '2027-01-01T00:00:00.000Z',
+      context_mode: 'isolated',
+      next_run: null,
+      status: 'active',
+      created_at: '2026-01-01T00:00:00.000Z',
+    });
+
+    await processTaskIpc(
+      { type: 'cancel_task', taskId: 'foreign-task' },
+      'group-a',
+      false,
+      deps,
+    );
+    expect(getTaskById('foreign-task')).toBeDefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// register_group authorization
+// ---------------------------------------------------------------------------
+
+describe('register_group authorization', () => {
   it('main group can register a new group', async () => {
     await processTaskIpc(
       {
@@ -648,32 +602,175 @@ describe('register_group success', () => {
         folder: 'new-group',
         trigger: '@Alef',
       },
-      'whatsapp_main',
+      'main-group',
       true,
       deps,
     );
 
-    // Verify group was registered in DB
-    const group = getRegisteredGroup('new@g.us');
-    expect(group).toBeDefined();
-    expect(group!.name).toBe('New Group');
-    expect(group!.folder).toBe('new-group');
-    expect(group!.trigger).toBe('@Alef');
+    const stored = getRegisteredGroup('new@g.us');
+    expect(stored).toBeDefined();
+    expect(stored!.name).toBe('New Group');
+    expect(stored!.folder).toBe('new-group');
   });
 
-  it('register_group rejects request with missing fields', async () => {
+  it('non-main group cannot register a group', async () => {
+    await processTaskIpc(
+      {
+        type: 'register_group',
+        jid: 'sneaky@g.us',
+        name: 'Sneaky',
+        folder: 'sneaky',
+        trigger: '@Alef',
+      },
+      'group-a',
+      false,
+      deps,
+    );
+
+    expect(getRegisteredGroup('sneaky@g.us')).toBeUndefined();
+  });
+
+  it('main group cannot register with an unsafe folder path', async () => {
+    await processTaskIpc(
+      {
+        type: 'register_group',
+        jid: 'bad@g.us',
+        name: 'Bad',
+        folder: '../../etc',
+        trigger: '@Alef',
+      },
+      'main-group',
+      true,
+      deps,
+    );
+
+    expect(getRegisteredGroup('bad@g.us')).toBeUndefined();
+  });
+
+  it('register_group rejects when required fields are missing', async () => {
     await processTaskIpc(
       {
         type: 'register_group',
         jid: 'partial@g.us',
         name: 'Partial',
-        // missing folder and trigger
+        // folder and trigger missing
       },
-      'whatsapp_main',
+      'main-group',
       true,
       deps,
     );
 
     expect(getRegisteredGroup('partial@g.us')).toBeUndefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// refresh_groups authorization
+// ---------------------------------------------------------------------------
+
+describe('refresh_groups authorization', () => {
+  it('non-main group is silently blocked', async () => {
+    // Should not throw, syncGroups should not be called
+    await processTaskIpc(
+      { type: 'refresh_groups' },
+      'group-a',
+      false,
+      deps,
+    );
+
+    expect(deps.syncGroups).not.toHaveBeenCalled();
+  });
+
+  it('main group triggers syncGroups', async () => {
+    await processTaskIpc(
+      { type: 'refresh_groups' },
+      'main-group',
+      true,
+      deps,
+    );
+
+    expect(deps.syncGroups).toHaveBeenCalledWith(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// IPC message authorization model (white-box unit test of the rule)
+// ---------------------------------------------------------------------------
+
+describe('IPC message authorization rule', () => {
+  // Inline the same rule from ipc.ts for focused unit testing
+  function isAuthorized(
+    sourceGroup: string,
+    isMain: boolean,
+    targetJid: string,
+    registered: Record<string, RegisteredGroup>,
+  ): boolean {
+    const target = registered[targetJid];
+    return isMain || (!!target && target.folder === sourceGroup);
+  }
+
+  it('main group is always authorized', () => {
+    expect(isAuthorized('main-group', true, 'a@g.us', groups)).toBe(true);
+    expect(isAuthorized('main-group', true, 'unknown@g.us', groups)).toBe(true);
+  });
+
+  it('non-main group is authorized for its own JID', () => {
+    expect(isAuthorized('group-a', false, 'a@g.us', groups)).toBe(true);
+  });
+
+  it('non-main group is rejected for another group\'s JID', () => {
+    expect(isAuthorized('group-a', false, 'b@g.us', groups)).toBe(false);
+    expect(isAuthorized('group-a', false, 'main@g.us', groups)).toBe(false);
+  });
+
+  it('non-main group is rejected for an unregistered JID', () => {
+    expect(isAuthorized('group-a', false, 'unknown@g.us', groups)).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// onTasksChanged is called after mutations
+// ---------------------------------------------------------------------------
+
+describe('onTasksChanged callback', () => {
+  it('is called after schedule_task', async () => {
+    await processTaskIpc(
+      {
+        type: 'schedule_task',
+        prompt: 'callback test',
+        schedule_type: 'once',
+        schedule_value: '2027-01-01T00:00:00.000Z',
+        targetJid: 'a@g.us',
+      },
+      'main-group',
+      true,
+      deps,
+    );
+
+    expect(deps.onTasksChanged).toHaveBeenCalledTimes(1);
+  });
+
+  it('is called after pause_task', async () => {
+    createTask({
+      id: 'cb-task',
+      group_folder: 'group-a',
+      chat_jid: 'a@g.us',
+      prompt: 'cb',
+      schedule_type: 'once',
+      schedule_value: '2027-01-01T00:00:00.000Z',
+      context_mode: 'isolated',
+      next_run: null,
+      status: 'active',
+      created_at: '2026-01-01T00:00:00.000Z',
+    });
+
+    await processTaskIpc(
+      { type: 'pause_task', taskId: 'cb-task' },
+      'main-group',
+      true,
+      deps,
+    );
+
+    expect(deps.onTasksChanged).toHaveBeenCalledTimes(1);
   });
 });
