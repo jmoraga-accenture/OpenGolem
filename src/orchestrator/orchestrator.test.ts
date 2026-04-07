@@ -382,17 +382,10 @@ class FakeChannel {
 // fresh instances and correct mock injection.
 
 vi.mock('../container-runner.js', () => ({
-  runContainer: vi.fn().mockResolvedValue({
-    stdout: [
-      '---OPENGOLEM_OUTPUT_START---',
-      JSON.stringify({
-        status: 'success',
-        result: 'done',
-        newSessionId: 'sess-001',
-      }),
-      '---OPENGOLEM_OUTPUT_END---',
-    ].join('\n'),
-    exitCode: 0,
+  runContainerAgent: vi.fn().mockResolvedValue({
+    status: 'success',
+    result: 'done',
+    newSessionId: 'sess-001',
   }),
 }));
 
@@ -707,8 +700,8 @@ describe('Unit — revokeToken lifecycle (spec §3.4, §3.5, §3.3, AC-6)', () =
     });
 
     // Hang the container runner so TTL fires
-    const { runContainer } = await import('../container-runner.js');
-    (runContainer as ReturnType<typeof vi.fn>).mockImplementationOnce(
+    const { runContainerAgent } = await import('../container-runner.js');
+    (runContainerAgent as ReturnType<typeof vi.fn>).mockImplementationOnce(
       () =>
         new Promise((_res) => {
           /* never resolves */
@@ -1120,11 +1113,12 @@ describe('Contract — Sentinel parse error: token revoked, no crash (spec §2.5
     const cato = startFakeCato(env.catoSock);
     const audit = new AuditCapture();
 
-    // Make container output missing the start marker
-    const { runContainer } = await import('../container-runner.js');
-    (runContainer as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
-      stdout: 'no markers here\n---OPENGOLEM_OUTPUT_END---\n',
-      exitCode: 0,
+    // Simulate container returning an error (runContainerAgent has already parsed output)
+    const { runContainerAgent } = await import('../container-runner.js');
+    (runContainerAgent as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+      status: 'error',
+      result: null,
+      error: 'missing sentinel markers',
     });
 
     const groupDir = path.join(env.groupsDir, 'bad-sentinel-group');
@@ -1152,11 +1146,11 @@ describe('Contract — Sentinel parse error: token revoked, no crash (spec §2.5
     const cato = startFakeCato(env.catoSock);
     const audit = new AuditCapture();
 
-    const { runContainer } = await import('../container-runner.js');
-    (runContainer as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
-      stdout:
-        '---OPENGOLEM_OUTPUT_START---\n{ bad json\n---OPENGOLEM_OUTPUT_END---\n',
-      exitCode: 0,
+    const { runContainerAgent } = await import('../container-runner.js');
+    (runContainerAgent as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+      status: 'error',
+      result: null,
+      error: 'malformed JSON in output',
     });
 
     const groupDir = path.join(env.groupsDir, 'malformed-json-group');
@@ -1182,10 +1176,11 @@ describe('Contract — Sentinel parse error: token revoked, no crash (spec §2.5
     const cato = startFakeCato(env.catoSock);
     const audit = new AuditCapture();
 
-    const { runContainer } = await import('../container-runner.js');
-    (runContainer as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
-      stdout: 'nothing useful here at all',
-      exitCode: 0,
+    const { runContainerAgent } = await import('../container-runner.js');
+    (runContainerAgent as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+      status: 'error',
+      result: null,
+      error: 'no output',
     });
 
     const groupDir = path.join(env.groupsDir, 'no-markers-group');
@@ -1271,7 +1266,7 @@ describe('Contract — catoEscalate relay (spec §3.6, Decision 23)', () => {
 
     // Response returned to broker caller
     expect(response.result).toBeDefined();
-    expect(typeof response.result.allow).toBe('boolean');
+    expect(typeof (response.result as { allow?: boolean }).allow).toBe('boolean');
 
     // Audit entry written
     expect(audit.hasType('cato_check_relayed')).toBe(true);
@@ -1314,7 +1309,7 @@ describe('Contract — catoEscalate relay (spec §3.6, Decision 23)', () => {
       43,
     );
 
-    expect(response.result.allow).toBe(false);
+    expect((response.result as { allow?: boolean }).allow).toBe(false);
     expect(audit.hasType('cato_check_relayed')).toBe(true);
     const entry = audit.ofType('cato_check_relayed')[0];
     expect(entry.outcome).toBe('blocked');
@@ -1390,18 +1385,11 @@ describe('Integration — Full task lifecycle (spec §3.2–§3.4)', () => {
     const audit = new AuditCapture();
     const channel = new FakeChannel();
 
-    const { runContainer } = await import('../container-runner.js');
-    (runContainer as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
-      stdout: [
-        '---OPENGOLEM_OUTPUT_START---',
-        JSON.stringify({
-          status: 'success',
-          result: 'Task complete!',
-          newSessionId: 'sess-xyz',
-        }),
-        '---OPENGOLEM_OUTPUT_END---',
-      ].join('\n'),
-      exitCode: 0,
+    const { runContainerAgent } = await import('../container-runner.js');
+    (runContainerAgent as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+      status: 'success',
+      result: 'Task complete!',
+      newSessionId: 'sess-xyz',
     });
 
     const groupDir = path.join(env.groupsDir, 'lifecycle-group');
@@ -1423,7 +1411,7 @@ describe('Integration — Full task lifecycle (spec §3.2–§3.4)', () => {
     expect(audit.hasType('token_request')).toBe(true);
 
     // 2. Container spawned
-    expect(runContainer).toHaveBeenCalled();
+    expect(runContainerAgent).toHaveBeenCalled();
     expect(audit.hasType('container_spawn')).toBe(true);
 
     // 3. Sentinel parsed — task_complete logged
@@ -1614,8 +1602,8 @@ describe('Integration — Cato block halts task dispatch, token revoked, [BLOCKE
     const audit = new AuditCapture();
     const channel = new FakeChannel();
 
-    const { runContainer } = await import('../container-runner.js');
-    (runContainer as ReturnType<typeof vi.fn>).mockClear();
+    const { runContainerAgent } = await import('../container-runner.js');
+    (runContainerAgent as ReturnType<typeof vi.fn>).mockClear();
 
     const groupDir = path.join(env.groupsDir, 'cato-block-group');
     fs.mkdirSync(groupDir, { recursive: true });
@@ -1631,7 +1619,7 @@ describe('Integration — Cato block halts task dispatch, token revoked, [BLOCKE
     await orch.deliver(makeMessage({ groupId: 'cato-block-group' }));
 
     // Container must NOT be spawned
-    expect(runContainer).not.toHaveBeenCalled();
+    expect(runContainerAgent).not.toHaveBeenCalled();
 
     // Token must be revoked
     expect(broker.revoked).toContain('tid-001');
@@ -1657,8 +1645,8 @@ describe('Integration — Cato block halts task dispatch, token revoked, [BLOCKE
     const audit = new AuditCapture();
     const channel = new FakeChannel();
 
-    const { runContainer } = await import('../container-runner.js');
-    (runContainer as ReturnType<typeof vi.fn>).mockClear();
+    const { runContainerAgent } = await import('../container-runner.js');
+    (runContainerAgent as ReturnType<typeof vi.fn>).mockClear();
 
     const groupDir = path.join(env.groupsDir, 'cato-unreachable-group');
     fs.mkdirSync(groupDir, { recursive: true });
@@ -1673,7 +1661,7 @@ describe('Integration — Cato block halts task dispatch, token revoked, [BLOCKE
 
     await orch.deliver(makeMessage({ groupId: 'cato-unreachable-group' }));
 
-    expect(runContainer).not.toHaveBeenCalled();
+    expect(runContainerAgent).not.toHaveBeenCalled();
     expect(broker.revoked).toContain('tid-001');
     expect(channel.sent.length).toBeGreaterThan(0);
 
@@ -1695,17 +1683,17 @@ describe('Stub detection — Cato block actually stops container spawn (INV-3)',
     env.cleanup();
   });
 
-  it('FAILS if Cato block does not prevent container spawn (runContainer must not be called)', async () => {
+  it('FAILS if Cato block does not prevent container spawn (runContainerAgent must not be called)', async () => {
     // This test is designed to FAIL if the implementation has a stub that always spawns.
-    // It sets Cato to block, then asserts runContainer was never called.
+    // It sets Cato to block, then asserts runContainerAgent was never called.
     // A stub implementation that ignores Cato and always spawns will cause this test to fail.
     const { Orchestrator } = await import('./index.js');
     const broker = startFakeBroker(env.brokerSock);
     const cato = startFakeCato(env.catoSock);
     cato.blockAll(); // Cato will block every AGENT_PROMPT check
 
-    const { runContainer } = await import('../container-runner.js');
-    const callCount = (runContainer as ReturnType<typeof vi.fn>).mock.calls
+    const { runContainerAgent } = await import('../container-runner.js');
+    const callCount = (runContainerAgent as ReturnType<typeof vi.fn>).mock.calls
       .length;
 
     const groupDir = path.join(env.groupsDir, 'stub-detect-cato');
@@ -1720,8 +1708,8 @@ describe('Stub detection — Cato block actually stops container spawn (INV-3)',
 
     await orch.deliver(makeMessage({ groupId: 'stub-detect-cato' }));
 
-    // Assert: runContainer was NOT called after the Cato block
-    const newCallCount = (runContainer as ReturnType<typeof vi.fn>).mock.calls
+    // Assert: runContainerAgent was NOT called after the Cato block
+    const newCallCount = (runContainerAgent as ReturnType<typeof vi.fn>).mock.calls
       .length;
     expect(newCallCount).toBe(callCount); // no new spawns
 
@@ -1737,8 +1725,8 @@ describe('Stub detection — Cato block actually stops container spawn (INV-3)',
     const cato = startFakeCato(env.catoSock);
     cato.allowAll(); // Cato will allow everything
 
-    const { runContainer } = await import('../container-runner.js');
-    const callCount = (runContainer as ReturnType<typeof vi.fn>).mock.calls
+    const { runContainerAgent } = await import('../container-runner.js');
+    const callCount = (runContainerAgent as ReturnType<typeof vi.fn>).mock.calls
       .length;
 
     const groupDir = path.join(env.groupsDir, 'stub-detect-allow');
@@ -1753,7 +1741,7 @@ describe('Stub detection — Cato block actually stops container spawn (INV-3)',
 
     await orch.deliver(makeMessage({ groupId: 'stub-detect-allow' }));
 
-    const newCallCount = (runContainer as ReturnType<typeof vi.fn>).mock.calls
+    const newCallCount = (runContainerAgent as ReturnType<typeof vi.fn>).mock.calls
       .length;
     expect(newCallCount).toBeGreaterThan(callCount); // at least one spawn
 
@@ -1777,8 +1765,8 @@ describe('Stub detection — Missing broker socket queues messages, does not dis
     // A stub that ignores broker unavailability and spawns anyway will cause this test to fail.
     const { Orchestrator } = await import('./index.js');
     // No broker server started — broker.sock does not exist
-    const { runContainer } = await import('../container-runner.js');
-    const callCount = (runContainer as ReturnType<typeof vi.fn>).mock.calls
+    const { runContainerAgent } = await import('../container-runner.js');
+    const callCount = (runContainerAgent as ReturnType<typeof vi.fn>).mock.calls
       .length;
 
     const audit = new AuditCapture();
@@ -1798,7 +1786,7 @@ describe('Stub detection — Missing broker socket queues messages, does not dis
     await orch.deliver(makeMessage({ groupId: 'no-broker-group' }));
 
     // Container must NOT have been spawned
-    const newCallCount = (runContainer as ReturnType<typeof vi.fn>).mock.calls
+    const newCallCount = (runContainerAgent as ReturnType<typeof vi.fn>).mock.calls
       .length;
     expect(newCallCount).toBe(callCount);
 
@@ -1815,8 +1803,8 @@ describe('Stub detection — Missing broker socket queues messages, does not dis
       error: { code: -32603, message: 'token_store_full' },
     });
 
-    const { runContainer } = await import('../container-runner.js');
-    const callCount = (runContainer as ReturnType<typeof vi.fn>).mock.calls
+    const { runContainerAgent } = await import('../container-runner.js');
+    const callCount = (runContainerAgent as ReturnType<typeof vi.fn>).mock.calls
       .length;
 
     const channel = new FakeChannel();
@@ -1833,7 +1821,7 @@ describe('Stub detection — Missing broker socket queues messages, does not dis
 
     await orch.deliver(makeMessage({ groupId: 'store-full-group' }));
 
-    const newCallCount = (runContainer as ReturnType<typeof vi.fn>).mock.calls
+    const newCallCount = (runContainerAgent as ReturnType<typeof vi.fn>).mock.calls
       .length;
     expect(newCallCount).toBe(callCount); // no new spawn
 
@@ -2005,8 +1993,12 @@ describe('Invariants — contentExcerpt presence matches action type (INV-12, De
     expect(written).toBe(delta);
 
     // Audit event must use the spec name
-    expect(audit.entries.some((e) => e.eventType === 'memory_write_approved')).toBe(true);
-    expect(audit.entries.some((e) => e.eventType === 'memory_write_allowed')).toBe(false);
+    expect(
+      audit.entries.some((e) => e.eventType === 'memory_write_approved'),
+    ).toBe(true);
+    expect(
+      audit.entries.some((e) => e.eventType === 'memory_write_allowed'),
+    ).toBe(false);
 
     await broker.close();
     await cato.close();
@@ -2044,8 +2036,12 @@ describe('Invariants — contentExcerpt presence matches action type (INV-12, De
     expect(content).toBe(originalContent);
 
     // Audit event must use the spec name
-    expect(audit.entries.some((e) => e.eventType === 'memory_write_blocked')).toBe(true);
-    expect(audit.entries.some((e) => e.eventType === 'memory_write_allowed')).toBe(false);
+    expect(
+      audit.entries.some((e) => e.eventType === 'memory_write_blocked'),
+    ).toBe(true);
+    expect(
+      audit.entries.some((e) => e.eventType === 'memory_write_allowed'),
+    ).toBe(false);
 
     await broker.close();
     await cato.close();

@@ -16,6 +16,7 @@
  * Decisions: 13, 20, 21, 22, 23, 24, 25, 26
  */
 
+import type { ChildProcess } from 'child_process';
 import crypto from 'crypto';
 import fs from 'fs';
 import net from 'net';
@@ -774,7 +775,12 @@ export class Orchestrator {
     }
 
     // Write approved delta to CLAUDE.md (spec §6.1, Decision 22)
-    const claudePath = path.join(this.rootDir, 'groups', proposal.groupId, 'CLAUDE.md');
+    const claudePath = path.join(
+      this.rootDir,
+      'groups',
+      proposal.groupId,
+      'CLAUDE.md',
+    );
     fs.writeFileSync(claudePath, proposal.proposedDelta, 'utf8');
 
     this.audit.append({
@@ -997,13 +1003,27 @@ export class Orchestrator {
         ts: Date.now(),
       });
 
-      const { runContainer } = await import('../container-runner.js');
-      const containerResultPromise = runContainer({
-        prompt: msg.text,
-        groupFolder: groupId,
-        chatJid: msg.channelId,
-        isMain: false,
-      } as Parameters<typeof runContainer>[0]);
+      const { runContainerAgent } = await import('../container-runner.js');
+      let _containerProcess: ChildProcess | null = null;
+      const containerResultPromise = runContainerAgent(
+        {
+          name: groupId,
+          folder: groupId,
+          trigger: '',
+          added_at: new Date().toISOString(),
+          isMain: false,
+          assertivenessLevel: cfg.assertiveness_level,
+        },
+        {
+          prompt: msg.text,
+          groupFolder: groupId,
+          chatJid: msg.channelId,
+          isMain: false,
+        },
+        (proc) => {
+          _containerProcess = proc;
+        },
+      );
 
       // Race container against TTL abort
       const containerResult = await Promise.race([
@@ -1019,34 +1039,19 @@ export class Orchestrator {
         return;
       }
 
-      // Parse sentinel output (spec §2.5)
-      const parsed = parseSentinelOutput(containerResult.stdout, {
-        onError: (e) => {
-          this.audit.append({
-            eventType: 'sentinel_parse_error',
-            groupId,
-            taskId,
-            tokenId,
-            error: e,
-            ts: Date.now(),
-          });
-        },
+      // runContainerAgent returns ContainerOutput (already parsed from sentinel)
+      this.audit.append({
+        eventType: 'task_complete',
+        groupId,
+        taskId,
+        tokenId,
+        status: containerResult.status,
+        newSessionId: containerResult.newSessionId,
+        ts: Date.now(),
       });
 
-      if (parsed) {
-        this.audit.append({
-          eventType: 'task_complete',
-          groupId,
-          taskId,
-          tokenId,
-          status: parsed.status,
-          newSessionId: parsed.newSessionId,
-          ts: Date.now(),
-        });
-
-        if (parsed.result) {
-          this._notifyChannel(groupId, parsed.result);
-        }
+      if (containerResult.result) {
+        this._notifyChannel(groupId, containerResult.result);
       }
     } catch (_err) {
       // TTL abort or other error — clean up if TTL didn't already

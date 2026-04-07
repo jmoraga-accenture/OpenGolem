@@ -736,7 +736,9 @@ export async function startBrokerV2(
       });
     });
   } catch (err) {
-    throw new Error(`Broker: failed to start escalation socket: ${err}`, { cause: err });
+    throw new Error(`Broker: failed to start escalation socket: ${err}`, {
+      cause: err,
+    });
   }
 
   return {
@@ -776,7 +778,12 @@ async function dispatchBrokerMethod(
   switch (method) {
     case 'issueToken': {
       const r = handleIssueToken(params, store, audit);
-      conn.write('error' in r ? err(id, r.code, r.error, r.data) : ok(id, r));
+      if ('error' in r) {
+        const e = r as IssueErr;
+        conn.write(err(id, e.code, e.error, e.data));
+      } else {
+        conn.write(ok(id, r));
+      }
       break;
     }
 
