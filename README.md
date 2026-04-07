@@ -2,7 +2,7 @@
 
 Security-first personal AI assistant: self-hosted, auditable, and designed so agents run in isolated containers with mediated credentials — not raw API keys in the sandbox.
 
-The host orchestrator is TypeScript/Node.js. Agents run the Claude Agent SDK inside Linux containers. Every outbound Anthropic API call passes through the Token Broker and Call Inspector before it reaches the network. Phase 2 is a clean-room TypeScript rewrite from first principles; a Rust decision point is deferred until after v2 stabilises. See [docs/SPECS.md](docs/SPECS.md) for the full architecture and [docs/PLAN.md](docs/PLAN.md) for milestone status.
+The host orchestrator is TypeScript/Node.js. Agents run the Claude Agent SDK inside Linux containers. Every outbound Anthropic API call passes through the Token Broker and Call Inspector before it reaches the network. Phase 2 is a clean-room TypeScript rewrite from first principles; a Rust decision point is deferred until after v2 stabilises. See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the full architecture and [docs/PLAN_V1.md](docs/PLAN_V1.md) for milestone status.
 
 ## What you get today (M1–M9)
 
@@ -29,7 +29,7 @@ cp .env.example .env          # then add your Anthropic credential
 npm install
 npm run build
 ./container/build.sh          # build the agent container image (once)
-npm test                      # 505 tests, all green
+npm test                      # 867 tests, all green
 npm run dev                   # opengolem> prompt
 ```
 
@@ -65,7 +65,7 @@ For OneCLI backend: `ONECLI_GATEWAY_URL`, `ONECLI_GATEWAY_TOKEN`.
 
 **WhatsApp:** Merge-able skill (`skill/add-whatsapp` branch). Requires phone pairing.
 
-**Microsoft Teams:** Not a packaged skill — the Azure Bot / webhook model is incompatible with self-hosted zero-infra deployment. Two bridging approaches (Power Automate flow, Graph API polling) are documented in [docs/PLAN.md](docs/PLAN.md).
+**Microsoft Teams:** Not a packaged skill — the Azure Bot / webhook model is incompatible with self-hosted zero-infra deployment. Two bridging approaches (Power Automate flow, Graph API polling) are documented in [docs/PLAN_V1.md](docs/PLAN_V1.md).
 
 ## Shared context (`data/extra/`)
 
@@ -91,16 +91,15 @@ Container  →  Credential Proxy  →  Call Inspector  →  Anthropic API
 - The Call Inspector blocks prompt injection attempts, out-of-scope endpoints, and excessive call rates before they reach the network
 - `.env` is bind-mounted as `/dev/null` inside every container; agents cannot read host secrets
 
-See [docs/INTERNALS.md](docs/INTERNALS.md) for the full architecture walkthrough.
+See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the full architecture walkthrough.
 
 ## Documentation
 
 | Document | Purpose |
 |---|---|
-| [docs/INTERNALS.md](docs/INTERNALS.md) | Startup sequence, message flow, security layers, channel setup |
-| [docs/SPECS.md](docs/SPECS.md) | Architecture and security model specification (v0.4) |
-| [docs/PLAN.md](docs/PLAN.md) | Milestone status and roadmap |
-| [docs/SECURITY_AUDIT.md](docs/SECURITY_AUDIT.md) | Security audit findings and fixes |
+| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Architecture specification, security model, ADRs |
+| [docs/PLAN_V1.md](docs/PLAN_V1.md) | Milestone status and roadmap |
+| [docs/SECURITY_STRENGTHENING.md](docs/SECURITY_STRENGTHENING.md) | Security findings F-1–F-10 and closure status |
 | [docs/DECISIONS.md](docs/DECISIONS.md) | Architecture decision records |
 | [CLAUDE.md](CLAUDE.md) | Developer quick reference for this repo |
 
@@ -112,4 +111,4 @@ MIT — see [LICENSE](LICENSE).
 
 ---
 
-*Last updated: 3 April 2026 — M9 complete; 505 tests green.*
+*Last updated: 7 April 2026 — v0.3; M28 complete; 867 tests green.*

@@ -91,12 +91,12 @@ describe('seedTelegramDmGroups', () => {
 
   it('registers a single user correctly', () => {
     const deps = makeDeps({
-      getTelegramValidUserSet: () => new Set(['7448431705']),
+      getTelegramValidUserSet: () => new Set(['123456789']),
     });
     seedTelegramDmGroups(deps);
     expect(deps.calls).toHaveLength(1);
-    expect(deps.calls[0].jid).toBe('tg:7448431705');
-    expect(deps.calls[0].group.name).toBe('Telegram DM 7448431705');
-    expect(deps.calls[0].group.folder).toBe('tg-7448431705');
+    expect(deps.calls[0].jid).toBe('tg:123456789');
+    expect(deps.calls[0].group.name).toBe('Telegram DM 123456789');
+    expect(deps.calls[0].group.folder).toBe('tg-123456789');
   });
 });

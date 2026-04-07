@@ -81,6 +81,7 @@ vi.mock('grammy', () => ({
 }));
 
 import fs from 'fs';
+import path from 'path';
 import {
   isTelegramPrivateChatId,
   shouldPrependAssistantTriggerForBotMention,
@@ -1425,6 +1426,924 @@ describe('TelegramChannel', () => {
       expect(isTelegramPrivateChatId('0')).toBe(false);
       expect(isTelegramPrivateChatId('')).toBe(false);
       expect(isTelegramPrivateChatId('abc')).toBe(false);
+    });
+  });
+});
+
+// =============================================================================
+// M26 — Telegram Channel Adapter Test Suite
+//
+// Spec: docs/specs/channel-adapters-spec.md
+// UX decisions: docs/ux/ux-review-tui-cli.md (groups are per-channel)
+// Written against the spec acceptance criteria (AC-1 through AC-18).
+// All tests in this suite are INITIALLY FAILING — implementation does not yet
+// satisfy all requirements below. The Developer implements against these tests.
+//
+// Four tiers:
+//   Tier 1 — Unit
+//   Tier 2 — Contract
+//   Tier 3 — Integration
+//   Tier 4 — Stub detection
+// =============================================================================
+
+describe('M26 — Telegram channel adapter (spec-compliance)', () => {
+  // ---------------------------------------------------------------------------
+  // Tier 1: Unit
+  // AC-3: Inbound message normalized to InboundMessage format
+  // AC-4: Language metadata preserved
+  // AC-5: Adapter does not filter messages by sender identity
+  // AC-17 / AC-18: senderId hashed; raw not logged
+  // ---------------------------------------------------------------------------
+
+  describe('Tier 1 — Unit', () => {
+    // -------------------------------------------------------------------------
+    // AC-3 / Unit-1: Telegram update event normalized to canonical InboundMessage
+    //
+    // The spec (§ External Interface — Inbound) defines InboundMessage with:
+    //   channel, contextId, senderId, text, receivedAt, raw
+    // The current implementation calls onMessage with a legacy shape
+    // {id, chat_jid, sender, content, timestamp}. These tests verify the spec
+    // shape, which will initially fail until the adapter is updated.
+    // -------------------------------------------------------------------------
+
+    it('[AC-3 / Unit-1a] delivered object has required field: channel = "telegram"', async () => {
+      const deliveredMessages: unknown[] = [];
+      const opts = createTestOpts({
+        onMessage: vi.fn((_jid: string, msg: unknown) => {
+          deliveredMessages.push(msg);
+        }),
+      });
+      const channel = new TelegramChannel('test-token', opts);
+      await channel.connect();
+
+      const ctx = createTextCtx({ text: 'Hello spec' });
+      await triggerTextMessage(ctx);
+
+      expect(deliveredMessages).toHaveLength(1);
+      expect(deliveredMessages[0]).toMatchObject({ channel: 'telegram' });
+    });
+
+    it('[AC-3 / Unit-1b] delivered object has required field: contextId (non-empty string)', async () => {
+      const deliveredMessages: unknown[] = [];
+      const opts = createTestOpts({
+        onMessage: vi.fn((_jid: string, msg: unknown) => {
+          deliveredMessages.push(msg);
+        }),
+      });
+      const channel = new TelegramChannel('test-token', opts);
+      await channel.connect();
+
+      const ctx = createTextCtx({ text: 'Hello spec', chatId: 100200300 });
+      await triggerTextMessage(ctx);
+
+      expect(deliveredMessages).toHaveLength(1);
+      const msg = deliveredMessages[0] as Record<string, unknown>;
+      expect(typeof msg.contextId).toBe('string');
+      expect((msg.contextId as string).length).toBeGreaterThan(0);
+    });
+
+    it('[AC-3 / Unit-1c] delivered object has required field: text (equals message text)', async () => {
+      const deliveredMessages: unknown[] = [];
+      const opts = createTestOpts({
+        onMessage: vi.fn((_jid: string, msg: unknown) => {
+          deliveredMessages.push(msg);
+        }),
+      });
+      const channel = new TelegramChannel('test-token', opts);
+      await channel.connect();
+
+      const ctx = createTextCtx({ text: 'The canonical text field' });
+      await triggerTextMessage(ctx);
+
+      expect(deliveredMessages).toHaveLength(1);
+      expect(deliveredMessages[0]).toMatchObject({
+        text: 'The canonical text field',
+      });
+    });
+
+    it('[AC-3 / Unit-1d] delivered object has required field: receivedAt (ISO-8601 string)', async () => {
+      const deliveredMessages: unknown[] = [];
+      const opts = createTestOpts({
+        onMessage: vi.fn((_jid: string, msg: unknown) => {
+          deliveredMessages.push(msg);
+        }),
+      });
+      const channel = new TelegramChannel('test-token', opts);
+      await channel.connect();
+
+      const unixTime = 1704067200; // 2024-01-01T00:00:00.000Z
+      const ctx = createTextCtx({ text: 'timestamp test', date: unixTime });
+      await triggerTextMessage(ctx);
+
+      expect(deliveredMessages).toHaveLength(1);
+      const msg = deliveredMessages[0] as Record<string, unknown>;
+      expect(typeof msg.receivedAt).toBe('string');
+      // Must parse as a valid date
+      expect(new Date(msg.receivedAt as string).toISOString()).toBe(
+        '2024-01-01T00:00:00.000Z',
+      );
+    });
+
+    it('[AC-3 / Unit-1e] delivered object has required field: raw (unmodified event payload)', async () => {
+      const deliveredMessages: unknown[] = [];
+      const opts = createTestOpts({
+        onMessage: vi.fn((_jid: string, msg: unknown) => {
+          deliveredMessages.push(msg);
+        }),
+      });
+      const channel = new TelegramChannel('test-token', opts);
+      await channel.connect();
+
+      const ctx = createTextCtx({ text: 'raw field test' });
+      await triggerTextMessage(ctx);
+
+      expect(deliveredMessages).toHaveLength(1);
+      const msg = deliveredMessages[0] as Record<string, unknown>;
+      // raw must be present (the unmodified Telegram event payload)
+      expect(msg).toHaveProperty('raw');
+      expect(msg.raw).not.toBeUndefined();
+    });
+
+    // -------------------------------------------------------------------------
+    // AC-17 / Unit-2: senderId hashed to opaque internal ID
+    //
+    // The spec states the audit log must store a sender identity hash, not the
+    // raw Telegram user ID. The adapter's delivered message should present an
+    // opaque (hashed) senderId, not the plain numeric Telegram user ID.
+    // -------------------------------------------------------------------------
+
+    it('[AC-17 / Unit-2a] senderId in delivered message is not the raw Telegram numeric user ID', async () => {
+      const deliveredMessages: unknown[] = [];
+      const opts = createTestOpts({
+        onMessage: vi.fn((_jid: string, msg: unknown) => {
+          deliveredMessages.push(msg);
+        }),
+      });
+      const channel = new TelegramChannel('test-token', opts);
+      await channel.connect();
+
+      const rawUserId = 99001;
+      const ctx = createTextCtx({ text: 'hash test', fromId: rawUserId });
+      await triggerTextMessage(ctx);
+
+      expect(deliveredMessages).toHaveLength(1);
+      const msg = deliveredMessages[0] as Record<string, unknown>;
+      // senderId must NOT be the plain numeric ID string
+      expect(msg.senderId).not.toBe(String(rawUserId));
+      expect(msg.senderId).not.toBe(rawUserId);
+    });
+
+    it('[AC-17 / Unit-2b] senderId is a non-empty string (opaque token or hash)', async () => {
+      const deliveredMessages: unknown[] = [];
+      const opts = createTestOpts({
+        onMessage: vi.fn((_jid: string, msg: unknown) => {
+          deliveredMessages.push(msg);
+        }),
+      });
+      const channel = new TelegramChannel('test-token', opts);
+      await channel.connect();
+
+      const ctx = createTextCtx({ text: 'hash test 2', fromId: 12345 });
+      await triggerTextMessage(ctx);
+
+      expect(deliveredMessages).toHaveLength(1);
+      const msg = deliveredMessages[0] as Record<string, unknown>;
+      expect(typeof msg.senderId).toBe('string');
+      expect((msg.senderId as string).length).toBeGreaterThan(0);
+    });
+
+    it('[AC-17 / Unit-2c] same sender always produces the same senderId (deterministic hash)', async () => {
+      const deliveredMessages: unknown[] = [];
+      const opts = createTestOpts({
+        onMessage: vi.fn((_jid: string, msg: unknown) => {
+          deliveredMessages.push(msg);
+        }),
+      });
+      const channel = new TelegramChannel('test-token', opts);
+      await channel.connect();
+
+      const ctx1 = createTextCtx({ text: 'first', fromId: 55555 });
+      const ctx2 = createTextCtx({ text: 'second', fromId: 55555 });
+      await triggerTextMessage(ctx1);
+      await triggerTextMessage(ctx2);
+
+      expect(deliveredMessages).toHaveLength(2);
+      const id1 = (deliveredMessages[0] as Record<string, unknown>).senderId;
+      const id2 = (deliveredMessages[1] as Record<string, unknown>).senderId;
+      expect(id1).toBe(id2);
+    });
+
+    // -------------------------------------------------------------------------
+    // AC-4 / Unit-3: Language metadata preserved from message
+    //
+    // The spec requires detectedLanguage and languageSwitchDetected to be
+    // included when available. Telegram's User object carries language_code.
+    // -------------------------------------------------------------------------
+
+    it('[AC-4 / Unit-3a] detectedLanguage set from Telegram user language_code when present', async () => {
+      const deliveredMessages: unknown[] = [];
+      const opts = createTestOpts({
+        onMessage: vi.fn((_jid: string, msg: unknown) => {
+          deliveredMessages.push(msg);
+        }),
+      });
+      const channel = new TelegramChannel('test-token', opts);
+      await channel.connect();
+
+      // Create context with a language_code on from
+      const ctx = createTextCtx({ text: 'Bonjour', fromId: 77001 });
+      (ctx.from as Record<string, unknown>).language_code = 'fr';
+      await triggerTextMessage(ctx);
+
+      expect(deliveredMessages).toHaveLength(1);
+      const msg = deliveredMessages[0] as Record<string, unknown>;
+      expect(msg.detectedLanguage).toBe('fr');
+    });
+
+    it('[AC-4 / Unit-3b] detectedLanguage absent when user has no language_code', async () => {
+      const deliveredMessages: unknown[] = [];
+      const opts = createTestOpts({
+        onMessage: vi.fn((_jid: string, msg: unknown) => {
+          deliveredMessages.push(msg);
+        }),
+      });
+      const channel = new TelegramChannel('test-token', opts);
+      await channel.connect();
+
+      const ctx = createTextCtx({ text: 'Hello', fromId: 77002 });
+      // Ensure no language_code
+      delete (ctx.from as Record<string, unknown>).language_code;
+      await triggerTextMessage(ctx);
+
+      expect(deliveredMessages).toHaveLength(1);
+      const msg = deliveredMessages[0] as Record<string, unknown>;
+      // detectedLanguage should be absent or undefined when no language_code
+      expect(msg.detectedLanguage).toBeUndefined();
+    });
+
+    it('[AC-4 / Unit-3c] languageSwitchDetected is true when consecutive messages from same sender switch language', async () => {
+      const deliveredMessages: unknown[] = [];
+      const opts = createTestOpts({
+        onMessage: vi.fn((_jid: string, msg: unknown) => {
+          deliveredMessages.push(msg);
+        }),
+      });
+      const channel = new TelegramChannel('test-token', opts);
+      await channel.connect();
+
+      const userId = 88001;
+      const chatId = 100200300;
+
+      const ctx1 = createTextCtx({ text: 'Hello', fromId: userId, chatId });
+      (ctx1.from as Record<string, unknown>).language_code = 'en';
+      await triggerTextMessage(ctx1);
+
+      const ctx2 = createTextCtx({ text: 'Bonjour', fromId: userId, chatId });
+      (ctx2.from as Record<string, unknown>).language_code = 'fr';
+      await triggerTextMessage(ctx2);
+
+      expect(deliveredMessages).toHaveLength(2);
+      const second = deliveredMessages[1] as Record<string, unknown>;
+      // The second message switches language → languageSwitchDetected must be true
+      expect(second.languageSwitchDetected).toBe(true);
+    });
+
+    it('[AC-4 / Unit-3d] languageSwitchDetected is absent or false when language does not switch', async () => {
+      const deliveredMessages: unknown[] = [];
+      const opts = createTestOpts({
+        onMessage: vi.fn((_jid: string, msg: unknown) => {
+          deliveredMessages.push(msg);
+        }),
+      });
+      const channel = new TelegramChannel('test-token', opts);
+      await channel.connect();
+
+      const userId = 88002;
+      const chatId = 100200300;
+
+      const ctx1 = createTextCtx({ text: 'Hello', fromId: userId, chatId });
+      (ctx1.from as Record<string, unknown>).language_code = 'en';
+      await triggerTextMessage(ctx1);
+
+      const ctx2 = createTextCtx({ text: 'Hi again', fromId: userId, chatId });
+      (ctx2.from as Record<string, unknown>).language_code = 'en';
+      await triggerTextMessage(ctx2);
+
+      expect(deliveredMessages).toHaveLength(2);
+      const second = deliveredMessages[1] as Record<string, unknown>;
+      expect(second.languageSwitchDetected).toBeFalsy();
+    });
+
+    // -------------------------------------------------------------------------
+    // AC-5 / Unit-4: Sender allowlist enforcement is orchestrator-level
+    //
+    // The adapter must pass every parseable inbound message to onMessage,
+    // regardless of whether the sender is on TELEGRAM_VALID_USERS. The
+    // orchestrator (index.ts) applies allowlist gating after delivery.
+    // -------------------------------------------------------------------------
+
+    it('[AC-5 / Unit-4a] adapter delivers message even when sender is not in TELEGRAM_VALID_USERS', async () => {
+      // Simulate an env where TELEGRAM_VALID_USERS is set to a specific user
+      // and the inbound message is from a different user. The adapter must still
+      // call onMessage — the orchestrator gates it, not the adapter.
+      const opts = createTestOpts();
+      const channel = new TelegramChannel('test-token', opts);
+      await channel.connect();
+
+      const nonAllowlistedUserId = 99999; // not in any allowlist
+      const ctx = createTextCtx({
+        text: 'I should reach onMessage',
+        fromId: nonAllowlistedUserId,
+      });
+      await triggerTextMessage(ctx);
+
+      // Adapter must NOT drop the message — it must call onMessage
+      expect(opts.onMessage).toHaveBeenCalledTimes(1);
+      expect(opts.onMessage).toHaveBeenCalledWith(
+        expect.any(String),
+        expect.objectContaining({ text: 'I should reach onMessage' }),
+      );
+    });
+
+    it('[AC-5 / Unit-4b] adapter delivers messages from ALL senders without filtering (invariant INV-1)', async () => {
+      // The spec invariant: "No adapter gates, filters, or drops messages based
+      // on sender identity." Deliver three messages from three different senders;
+      // all three must reach onMessage.
+      const opts = createTestOpts();
+      const channel = new TelegramChannel('test-token', opts);
+      await channel.connect();
+
+      const senders = [11111, 22222, 33333];
+      for (const fromId of senders) {
+        const ctx = createTextCtx({ text: `Message from ${fromId}`, fromId });
+        await triggerTextMessage(ctx);
+      }
+
+      expect(opts.onMessage).toHaveBeenCalledTimes(3);
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // Tier 2: Contract
+  // AC-15 / AC-16: .intent.md validated against skill-schema-spec.md rules
+  // network.endpoints declares https://api.telegram.org/*
+  // apply_permission is admin
+  // InboundMessage schema compliance
+  // ---------------------------------------------------------------------------
+
+  describe('Tier 2 — Contract', () => {
+    // -------------------------------------------------------------------------
+    // AC-3 / Contract-1: InboundMessage schema compliance
+    //
+    // Every field the spec defines on InboundMessage must be present and typed
+    // correctly when the adapter delivers a message.
+    // -------------------------------------------------------------------------
+
+    it('[AC-3 / Contract-1a] InboundMessage schema: all required fields present simultaneously', async () => {
+      const deliveredMessages: unknown[] = [];
+      const opts = createTestOpts({
+        onMessage: vi.fn((_jid: string, msg: unknown) => {
+          deliveredMessages.push(msg);
+        }),
+      });
+      const channel = new TelegramChannel('test-token', opts);
+      await channel.connect();
+
+      const ctx = createTextCtx({
+        text: 'Schema check',
+        chatId: 100200300,
+        fromId: 42001,
+      });
+      await triggerTextMessage(ctx);
+
+      expect(deliveredMessages).toHaveLength(1);
+      const msg = deliveredMessages[0] as Record<string, unknown>;
+
+      // Required fields per spec §External Interface — Inbound
+      expect(msg).toHaveProperty('channel');
+      expect(msg).toHaveProperty('contextId');
+      expect(msg).toHaveProperty('senderId');
+      expect(msg).toHaveProperty('text');
+      expect(msg).toHaveProperty('receivedAt');
+      expect(msg).toHaveProperty('raw');
+
+      // Type checks
+      expect(typeof msg.channel).toBe('string');
+      expect(typeof msg.contextId).toBe('string');
+      expect(typeof msg.senderId).toBe('string');
+      expect(typeof msg.text).toBe('string');
+      expect(typeof msg.receivedAt).toBe('string');
+
+      // Values non-empty
+      expect((msg.channel as string).length).toBeGreaterThan(0);
+      expect((msg.contextId as string).length).toBeGreaterThan(0);
+      expect((msg.senderId as string).length).toBeGreaterThan(0);
+      expect((msg.text as string).length).toBeGreaterThan(0);
+      expect((msg.receivedAt as string).length).toBeGreaterThan(0);
+    });
+
+    it('[AC-3 / Contract-1b] InboundMessage schema: channel field is exactly "telegram"', async () => {
+      const deliveredMessages: unknown[] = [];
+      const opts = createTestOpts({
+        onMessage: vi.fn((_jid: string, msg: unknown) => {
+          deliveredMessages.push(msg);
+        }),
+      });
+      const channel = new TelegramChannel('test-token', opts);
+      await channel.connect();
+
+      const ctx = createTextCtx({ text: 'channel field' });
+      await triggerTextMessage(ctx);
+
+      const msg = deliveredMessages[0] as Record<string, unknown>;
+      expect(msg.channel).toBe('telegram');
+    });
+
+    it('[AC-3 / Contract-1c] InboundMessage schema: contextId reflects the chat (tg: prefix)', async () => {
+      const deliveredMessages: unknown[] = [];
+      const opts = createTestOpts({
+        onMessage: vi.fn((_jid: string, msg: unknown) => {
+          deliveredMessages.push(msg);
+        }),
+      });
+      const channel = new TelegramChannel('test-token', opts);
+      await channel.connect();
+
+      const ctx = createTextCtx({ text: 'contextId test', chatId: 100200300 });
+      await triggerTextMessage(ctx);
+
+      const msg = deliveredMessages[0] as Record<string, unknown>;
+      // contextId must identify the Telegram chat — tg:100200300
+      expect(msg.contextId).toBe('tg:100200300');
+    });
+
+    it('[AC-3 / Contract-1d] InboundMessage schema: receivedAt is valid ISO-8601', async () => {
+      const deliveredMessages: unknown[] = [];
+      const opts = createTestOpts({
+        onMessage: vi.fn((_jid: string, msg: unknown) => {
+          deliveredMessages.push(msg);
+        }),
+      });
+      const channel = new TelegramChannel('test-token', opts);
+      await channel.connect();
+
+      const ctx = createTextCtx({ text: 'iso test', date: 1704067200 });
+      await triggerTextMessage(ctx);
+
+      const msg = deliveredMessages[0] as Record<string, unknown>;
+      const parsed = new Date(msg.receivedAt as string);
+      expect(Number.isNaN(parsed.getTime())).toBe(false);
+      // Must round-trip through ISO-8601
+      expect(parsed.toISOString()).toBe(msg.receivedAt);
+    });
+
+    // -------------------------------------------------------------------------
+    // AC-15 / Contract-2: .intent.md validates against skill-schema-spec.md rules
+    //
+    // The Telegram channel adapter is a Feature skill. Its .intent.md must:
+    //   - exist at src/channels/telegram.intent.md (or skills/telegram.intent.md)
+    //   - be valid YAML frontmatter
+    //   - declare type: feature
+    //   - declare apply_permission: admin  (AC-16)
+    //   - declare network.endpoints with https://api.telegram.org/*  (spec)
+    //   - declare providers.compatible non-empty
+    //   - declare token_scopes.skills including "telegram"
+    // These tests read the file — they fail until the file is created.
+    // -------------------------------------------------------------------------
+
+    const INTENT_MD_CANDIDATES = [
+      path.resolve(process.cwd(), 'src/channels/telegram.intent.md'),
+      path.resolve(process.cwd(), 'skills/telegram/telegram.intent.md'),
+      path.resolve(process.cwd(), 'skills/telegram.intent.md'),
+    ];
+
+    function findIntentMd(): string | null {
+      for (const candidate of INTENT_MD_CANDIDATES) {
+        if (fs.existsSync(candidate)) return candidate;
+      }
+      return null;
+    }
+
+    it('[AC-15 / Contract-2a] telegram.intent.md file exists', () => {
+      const found = findIntentMd();
+      expect(found).not.toBeNull();
+    });
+
+    it('[AC-15 / Contract-2b] telegram.intent.md declares type: feature', () => {
+      const found = findIntentMd();
+      if (!found) {
+        // File missing — fail with helpful message
+        throw new Error(
+          'telegram.intent.md not found. Expected at: ' +
+            INTENT_MD_CANDIDATES.join(', '),
+        );
+      }
+      const content = fs.readFileSync(found, 'utf8');
+      expect(content).toMatch(/^\s*type:\s*feature\s*$/m);
+    });
+
+    it('[AC-16 / Contract-2c] telegram.intent.md declares apply_permission: admin', () => {
+      const found = findIntentMd();
+      if (!found) {
+        throw new Error(
+          'telegram.intent.md not found. Expected at: ' +
+            INTENT_MD_CANDIDATES.join(', '),
+        );
+      }
+      const content = fs.readFileSync(found, 'utf8');
+      expect(content).toMatch(/^\s*apply_permission:\s*admin\s*$/m);
+    });
+
+    it('[Contract-2d] telegram.intent.md declares network.endpoints with https://api.telegram.org/*', () => {
+      const found = findIntentMd();
+      if (!found) {
+        throw new Error(
+          'telegram.intent.md not found. Expected at: ' +
+            INTENT_MD_CANDIDATES.join(', '),
+        );
+      }
+      const content = fs.readFileSync(found, 'utf8');
+      // The endpoint pattern must appear in the file
+      expect(content).toContain('https://api.telegram.org/*');
+    });
+
+    it('[Contract-2e] telegram.intent.md declares providers.compatible as non-empty list', () => {
+      const found = findIntentMd();
+      if (!found) {
+        throw new Error(
+          'telegram.intent.md not found. Expected at: ' +
+            INTENT_MD_CANDIDATES.join(', '),
+        );
+      }
+      const content = fs.readFileSync(found, 'utf8');
+      // providers: block with compatible: list must be present
+      expect(content).toMatch(/providers:/);
+      expect(content).toMatch(/compatible:/);
+      // At least one entry ("any" or a specific provider)
+      expect(content).toMatch(/- (any|anthropic|openrouter|ollama)/);
+    });
+
+    it('[Contract-2f] telegram.intent.md declares token_scopes.skills including "telegram"', () => {
+      const found = findIntentMd();
+      if (!found) {
+        throw new Error(
+          'telegram.intent.md not found. Expected at: ' +
+            INTENT_MD_CANDIDATES.join(', '),
+        );
+      }
+      const content = fs.readFileSync(found, 'utf8');
+      expect(content).toMatch(/token_scopes:/);
+      expect(content).toMatch(/skills:/);
+      expect(content).toMatch(/- telegram/);
+    });
+
+    it('[Contract-2g] network.endpoints entry declares protocol: https and direction: outbound', () => {
+      const found = findIntentMd();
+      if (!found) {
+        throw new Error(
+          'telegram.intent.md not found. Expected at: ' +
+            INTENT_MD_CANDIDATES.join(', '),
+        );
+      }
+      const content = fs.readFileSync(found, 'utf8');
+      // Both protocol: https and direction: outbound must appear in the endpoints block
+      expect(content).toMatch(/protocol:\s*https/);
+      expect(content).toMatch(/direction:\s*outbound/);
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // Tier 3: Integration
+  // AC-1: Self-registers with channel registry at startup
+  // AC-7: Outbound message formats to Telegram Markdown and routes
+  // ---------------------------------------------------------------------------
+
+  describe('Tier 3 — Integration', () => {
+    // -------------------------------------------------------------------------
+    // AC-1 / Integration-1: Adapter self-registers with channel registry at startup
+    //
+    // When telegram.ts is imported (it runs registerChannel at module load),
+    // the registry must contain a factory for "telegram". The factory must return
+    // a Channel instance (not null) when TELEGRAM_BOT_TOKEN is set.
+    //
+    // Note: the mock at the top of this file intercepts registerChannel. We test
+    // through a fresh module import with a real registry mock that captures calls.
+    // -------------------------------------------------------------------------
+
+    it('[AC-1 / Integration-1a] importing telegram.ts calls registerChannel("telegram", ...)', async () => {
+      // The vi.mock at the top of this file captures registerChannel calls.
+      // Importing telegram.ts triggers the module-level registerChannel call.
+      // We verify the mock was called with "telegram" as the first argument.
+      const { registerChannel } = await import('./registry.js');
+      expect(vi.mocked(registerChannel)).toHaveBeenCalledWith(
+        'telegram',
+        expect.any(Function),
+      );
+    });
+
+    it('[AC-1 / Integration-1b] registered factory returns a Channel instance when token is set', async () => {
+      // Re-import registry and obtain the factory registered for "telegram"
+      const { registerChannel } = await import('./registry.js');
+      const calls = vi.mocked(registerChannel).mock.calls;
+      const telegramEntry = calls.find(([name]) => name === 'telegram');
+      expect(telegramEntry).toBeDefined();
+
+      const factory = telegramEntry![1];
+      // Factory is called with ChannelOpts — provide minimal stubs
+      const opts = createTestOpts();
+      // Set env token so factory does not return null for missing token
+      const originalToken = process.env.TELEGRAM_BOT_TOKEN;
+      process.env.TELEGRAM_BOT_TOKEN = 'integration-test-token';
+      try {
+        const instance = factory(opts);
+        // With a token set, factory must return a Channel (not null)
+        expect(instance).not.toBeNull();
+        expect(instance).toHaveProperty('name', 'telegram');
+      } finally {
+        if (originalToken === undefined) {
+          delete process.env.TELEGRAM_BOT_TOKEN;
+        } else {
+          process.env.TELEGRAM_BOT_TOKEN = originalToken;
+        }
+      }
+    });
+
+    it('[AC-11 / Integration-1c] registered factory returns null when TELEGRAM_BOT_TOKEN is absent', async () => {
+      const { registerChannel } = await import('./registry.js');
+      const calls = vi.mocked(registerChannel).mock.calls;
+      const telegramEntry = calls.find(([name]) => name === 'telegram');
+      expect(telegramEntry).toBeDefined();
+
+      const factory = telegramEntry![1];
+      const opts = createTestOpts();
+
+      // Ensure token is absent
+      const originalToken = process.env.TELEGRAM_BOT_TOKEN;
+      delete process.env.TELEGRAM_BOT_TOKEN;
+      try {
+        const instance = factory(opts);
+        // Missing credential → factory returns null (adapter does not register)
+        expect(instance).toBeNull();
+      } finally {
+        if (originalToken !== undefined) {
+          process.env.TELEGRAM_BOT_TOKEN = originalToken;
+        }
+      }
+    });
+
+    // -------------------------------------------------------------------------
+    // AC-7 / Integration-2: Outbound message formats to Telegram Markdown
+    //
+    // sendMessage must use Telegram Markdown parse mode (Markdown or MarkdownV2).
+    // The spec: "convert Markdown to Telegram MarkdownV2 or HTML (per deployment config)"
+    // -------------------------------------------------------------------------
+
+    it('[AC-7 / Integration-2a] sendMessage sends with a Telegram Markdown parse mode', async () => {
+      const opts = createTestOpts();
+      const channel = new TelegramChannel('test-token', opts);
+      await channel.connect();
+
+      await channel.sendMessage('tg:100200300', '**Bold text**');
+
+      expect(currentBot().api.sendMessage).toHaveBeenCalledWith(
+        '100200300',
+        expect.any(String),
+        expect.objectContaining({
+          parse_mode: expect.stringMatching(/^(Markdown|MarkdownV2|HTML)$/),
+        }),
+      );
+    });
+
+    it('[AC-7 / Integration-2b] sendMessage returns a success indicator (no throw) on successful delivery', async () => {
+      const opts = createTestOpts();
+      const channel = new TelegramChannel('test-token', opts);
+      await channel.connect();
+
+      // Should resolve without throwing
+      await expect(
+        channel.sendMessage('tg:100200300', 'Hello'),
+      ).resolves.not.toThrow();
+    });
+
+    it('[AC-8 / Integration-2c] sendMessage propagates delivery failure as a distinguishable error', async () => {
+      const opts = createTestOpts();
+      const channel = new TelegramChannel('test-token', opts);
+      await channel.connect();
+
+      // Make sendMessage fail permanently (both primary and fallback)
+      currentBot().api.sendMessage.mockRejectedValue(
+        new Error('API unavailable'),
+      );
+
+      // The spec: "the adapter throws or returns an error value with a human-readable reason"
+      // The current implementation catches and logs — but spec requires the error be
+      // distinguishable (returned or thrown). This test will fail if the adapter silently
+      // swallows the error without surfacing it to the orchestrator.
+      const result = channel.sendMessage('tg:100200300', 'Will fail');
+      // Either: the promise rejects (throws) or it resolves to an error-type value.
+      // The spec says "throws or returns an error value". Current implementation returns
+      // undefined silently — this test enforces the spec contract.
+      await expect(result).rejects.toThrow();
+    });
+
+    it('[AC-9 / Integration-2d] adapter reports health status via isConnected()', async () => {
+      // The spec defines AdapterHealthStatus {channel, status, since}.
+      // The current implementation exposes isConnected() but not a full health
+      // status object. This test verifies a getHealthStatus() method exists and
+      // returns the spec-required shape.
+      const opts = createTestOpts();
+      const channel = new TelegramChannel('test-token', opts);
+      await channel.connect();
+
+      // Spec-required: adapter exposes a health status function returning
+      // { channel, status, since } after connection.
+      const channelAsAny = channel as unknown as Record<string, unknown>;
+      // getHealthStatus must exist and return spec-shaped object
+      expect(typeof channelAsAny.getHealthStatus).toBe('function');
+      const health = (channelAsAny.getHealthStatus as () => unknown)();
+      expect(health).toMatchObject({
+        channel: 'telegram',
+        status: expect.stringMatching(
+          /^(connected|connecting|disconnected|error)$/,
+        ),
+        since: expect.any(String),
+      });
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // Tier 4: Stub detection
+  // AC-5 / Invariant INV-1: Verify sender NOT on allowlist results in message
+  // being dropped at ORCHESTRATOR level — adapter still delivers.
+  //
+  // This tier catches a stubbed or over-eager adapter that drops messages on its
+  // own without forwarding to the orchestrator.
+  // ---------------------------------------------------------------------------
+
+  describe('Tier 4 — Stub detection', () => {
+    // -------------------------------------------------------------------------
+    // AC-5 / Stub-1: Adapter must NOT implement sender filtering itself
+    //
+    // The spec invariant INV-1: "No adapter gates, filters, or drops messages
+    // based on sender identity." A stubbed adapter that always delivers would
+    // pass Tier 1 Unit-4. A stubbed adapter that always drops would fail here.
+    //
+    // We verify the adapter delivers to onMessage even when the orchestrator
+    // would subsequently drop it — proving the adapter is doing pass-through.
+    // -------------------------------------------------------------------------
+
+    it('[AC-5 / Stub-1a] message from unknown sender reaches onMessage (adapter passes through)', async () => {
+      // This test would fail if the adapter implemented its own allowlist check.
+      // A stub that always delivers would pass this too — see Stub-1b for the
+      // complement.
+      const receivedBySink: unknown[] = [];
+      const opts = createTestOpts({
+        onMessage: vi.fn((_jid: string, msg: unknown) => {
+          receivedBySink.push(msg);
+        }),
+      });
+      const channel = new TelegramChannel('test-token', opts);
+      await channel.connect();
+
+      // Sender with no known allowlist entry
+      const ctx = createTextCtx({
+        text: 'unlisted sender message',
+        fromId: 777888999,
+      });
+      await triggerTextMessage(ctx);
+
+      // The ADAPTER must call onMessage. The ORCHESTRATOR would gate it.
+      expect(receivedBySink).toHaveLength(1);
+      expect(opts.onMessage).toHaveBeenCalledTimes(1);
+    });
+
+    it('[AC-5 / Stub-1b] message from listed sender also reaches onMessage (adapter is not the gate)', async () => {
+      // Complement of Stub-1a: an adapter that selectively passes only allowlisted
+      // senders would fail Stub-1a but might pass Stub-1b. Both together confirm
+      // the adapter delivers all messages unconditionally.
+      const receivedBySink: unknown[] = [];
+      const opts = createTestOpts({
+        onMessage: vi.fn((_jid: string, msg: unknown) => {
+          receivedBySink.push(msg);
+        }),
+      });
+      const channel = new TelegramChannel('test-token', opts);
+      await channel.connect();
+
+      // "Known" sender ID (same as the mock default)
+      const ctx = createTextCtx({
+        text: 'listed sender message',
+        fromId: 99001,
+      });
+      await triggerTextMessage(ctx);
+
+      expect(receivedBySink).toHaveLength(1);
+      expect(opts.onMessage).toHaveBeenCalledTimes(1);
+    });
+
+    it('[AC-5 / Stub-1c] both allowlisted and non-allowlisted senders reach onMessage in same session', async () => {
+      // Definitive stub-detection: if the adapter filters by sender, one of these
+      // two messages will not arrive. Both must arrive.
+      const receivedBySink: unknown[] = [];
+      const opts = createTestOpts({
+        onMessage: vi.fn((_jid: string, msg: unknown) => {
+          receivedBySink.push(msg);
+        }),
+      });
+      const channel = new TelegramChannel('test-token', opts);
+      await channel.connect();
+
+      // Sender 1 — "known" (same as default test fixtures use)
+      const ctx1 = createTextCtx({ text: 'from known', fromId: 99001 });
+      // Sender 2 — completely unknown
+      const ctx2 = createTextCtx({ text: 'from unknown', fromId: 123456789 });
+
+      await triggerTextMessage(ctx1);
+      await triggerTextMessage(ctx2);
+
+      // Both must arrive at onMessage — the adapter does not gate
+      expect(receivedBySink).toHaveLength(2);
+      const texts = receivedBySink.map(
+        (m) =>
+          (m as Record<string, unknown>).text ??
+          (m as Record<string, unknown>).content,
+      );
+      expect(texts).toContain('from known');
+      expect(texts).toContain('from unknown');
+    });
+
+    it('[Stub-1d] [stub-detection] orchestrator-level gating can drop a message that adapter delivered', async () => {
+      // This test verifies the ORCHESTRATOR can gate messages after adapter
+      // delivery. We simulate this by wrapping onMessage in an orchestrator-like
+      // allowlist check and confirming a non-listed sender is dropped by the
+      // wrapper while the adapter still called onMessage.
+      //
+      // This proves: adapter = pass-through, orchestrator = policy enforcer.
+
+      const orchestratorSink: unknown[] = [];
+      const adapterDelivered: unknown[] = [];
+
+      // Simulate orchestrator-level allowlist: only userId 99001 is allowed
+      const VALID_USERS = new Set(['99001']);
+
+      const opts = createTestOpts({
+        onMessage: vi.fn((_jid: string, msg: unknown) => {
+          // Record that the ADAPTER delivered the message
+          adapterDelivered.push(msg);
+
+          // Orchestrator-level gating (simulate what index.ts does)
+          const senderId =
+            ((msg as Record<string, unknown>).sender as string) ?? '';
+          if (!VALID_USERS.has(senderId)) {
+            // Orchestrator drops it — does not add to orchestratorSink
+            return;
+          }
+          orchestratorSink.push(msg);
+        }),
+      });
+      const channel = new TelegramChannel('test-token', opts);
+      await channel.connect();
+
+      // Non-allowlisted sender
+      const ctx = createTextCtx({
+        text: 'drop me at orchestrator',
+        fromId: 888888,
+      });
+      await triggerTextMessage(ctx);
+
+      // Adapter delivered to onMessage (pass-through)
+      expect(adapterDelivered).toHaveLength(1);
+      // Orchestrator dropped it (not in orchestratorSink)
+      expect(orchestratorSink).toHaveLength(0);
+    });
+
+    it('[Stub-1e] [stub-detection] adapter does not inspect or act on TELEGRAM_VALID_USERS env var', async () => {
+      // If the adapter reads TELEGRAM_VALID_USERS itself and filters — it is
+      // violating the spec. Set TELEGRAM_VALID_USERS to exclude all senders
+      // and verify the adapter STILL delivers to onMessage.
+      const originalValidUsers = process.env.TELEGRAM_VALID_USERS;
+      process.env.TELEGRAM_VALID_USERS = '00000'; // an ID that no test sender uses
+
+      try {
+        const opts = createTestOpts();
+        const channel = new TelegramChannel('test-token', opts);
+        await channel.connect();
+
+        const ctx = createTextCtx({
+          text: 'should still arrive',
+          fromId: 99001,
+        });
+        await triggerTextMessage(ctx);
+
+        // Adapter must not have read TELEGRAM_VALID_USERS to gate this message
+        expect(opts.onMessage).toHaveBeenCalledTimes(1);
+      } finally {
+        if (originalValidUsers === undefined) {
+          delete process.env.TELEGRAM_VALID_USERS;
+        } else {
+          process.env.TELEGRAM_VALID_USERS = originalValidUsers;
+        }
+      }
     });
   });
 });

@@ -3,6 +3,7 @@
 **Date:** 2026-04-07
 **Milestone:** M5 — UX Review: Report Dashboard Skill
 **Author:** UX/Interaction Designer
+**Status:** Approved by Jim 2026-04-07
 **Inputs:** ARCHITECTURE.md §5.4, ADR-3, ADR-4, ADR-9; cato-spec.md §2.2; audit-log-spec.md §3.2; DECISIONS.md Decision 3, Decision 29
 
 ---
@@ -312,6 +313,10 @@ The mandatory rationale field for calibration decisions is a substantive safegua
 **R-1: Display absolute call counts alongside KPI rates.**
 `data_leaks_per_call = 0.003 (2 events in 667 calls)` communicates meaningfully. `data_leaks_per_call = 0.003` does not. Implement this for all three KPIs in both the summary panel and the detail view.
 
+
+**From Jim:** Agree 100% (you see what I did there?), that's why I enforced that hanseis and reports must include number of calls... even better, Cato sends counts per period, interfaces do the cumulative calculations
+
+
 **R-2: Provide plain-language descriptions for all criterion IDs.**
 Every PSY-nn criterion referenced in the dashboard must be displayed with its plain-language description from PSYCHE.md. Do not require the administrator to consult PSYCHE.md separately during a review session. Cache criterion descriptions at dashboard startup.
 
@@ -321,11 +326,18 @@ Do not silently omit payload content. Display a note at the block detail level: 
 **R-4: Never pre-populate a suggested threshold value in the calibration decision form.**
 The administrator must reason to a value. Pre-population implies the system has a recommendation. If the administrator cannot arrive at a value, the correct action is `defer`, not accepting a system-suggested number.
 
+**From Jim:** Fair, but we need some default values or at least recommended targets
+
+
 **R-5: Make the rationale field mandatory and set a minimum quality floor.**
 Minimum 20 characters, with a prompt ("What evidence supports this decision?") rather than a generic "Add notes" placeholder. Surface the rationale in the threshold change log to make the quality of past decisions visible.
 
 **R-6: Surface the age of the oldest unread hansei report in the system health banner.**
 This should be a persistent one-line indicator visible without opening the dashboard. Example: "1 hansei report unread — oldest: 3d ago". After 7 days, escalate to a warning.
+
+
+**From Jim:** Agreed, admin needs to respond and act.
+
 
 **R-7: Surface open threshold_adjust decisions not yet applied to PSYCHE.md.**
 Compare recorded decisions to the running configuration. If a `threshold_adjust` decision was recorded more than N days ago (default: 3 days) and the corresponding PSYCHE.md value has not changed, surface this as an open item: "Calibration decision from 2026-04-03 has not been applied to PSYCHE.md."

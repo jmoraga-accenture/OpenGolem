@@ -198,6 +198,9 @@ describe('saveDaoScore / getLatestDaoScore', () => {
       security_failures_per_call: 0.03,
       data_leaks_per_call: 0.005,
       behavioral_change_rate: 0.8,
+      totalCalls: 200,
+      blockCount: 6,
+      memoryLeakCount: 1,
     };
     saveDaoScore(score, dbPath);
     const latest = getLatestDaoScore(dbPath);
@@ -205,6 +208,9 @@ describe('saveDaoScore / getLatestDaoScore', () => {
     expect(latest!.security_failures_per_call).toBeCloseTo(0.03);
     expect(latest!.data_leaks_per_call).toBeCloseTo(0.005);
     expect(latest!.behavioral_change_rate).toBeCloseTo(0.8);
+    expect(latest!.totalCalls).toBe(200);
+    expect(latest!.blockCount).toBe(6);
+    expect(latest!.memoryLeakCount).toBe(1);
   });
 
   it('returns null when dao_score.db does not exist', () => {
@@ -219,6 +225,9 @@ describe('saveDaoScore / getLatestDaoScore', () => {
         security_failures_per_call: 0.1,
         data_leaks_per_call: 0,
         behavioral_change_rate: 1,
+        totalCalls: 10,
+        blockCount: 1,
+        memoryLeakCount: 0,
       },
       dbPath,
     );
@@ -229,6 +238,9 @@ describe('saveDaoScore / getLatestDaoScore', () => {
         security_failures_per_call: 0.2,
         data_leaks_per_call: 0,
         behavioral_change_rate: 1,
+        totalCalls: 10,
+        blockCount: 2,
+        memoryLeakCount: 0,
       },
       dbPath,
     );
@@ -246,5 +258,48 @@ describe('KPI field name contract', () => {
     expect('security_failures_per_call' in score).toBe(true);
     expect('data_leaks_per_call' in score).toBe(true);
     expect('behavioral_change_rate' in score).toBe(true);
+  });
+});
+
+describe('computeDaoScore — raw count fields', () => {
+  it('returns zeros when audit log is empty', () => {
+    const db = makeAuditDb();
+    const score = computeDaoScore(db);
+    expect(score.totalCalls).toBe(0);
+    expect(score.blockCount).toBe(0);
+    expect(score.memoryLeakCount).toBe(0);
+  });
+
+  it('returns correct totalCalls, blockCount, memoryLeakCount', () => {
+    const db = makeAuditDb();
+    insertCall(db, { outcome: 'pass' });
+    insertCall(db, { outcome: 'pass' });
+    insertCall(db, { outcome: 'hard_block', block_rule: 'checkSkillWhitelist' });
+    insertCall(db, { outcome: 'soft_block', block_rule: 'rateLimit' });
+    insertCall(db, { outcome: 'hard_block', block_rule: 'checkMemoryScope' });
+    const score = computeDaoScore(db);
+    expect(score.totalCalls).toBe(5);
+    expect(score.blockCount).toBe(3); // hard + soft blocks
+    expect(score.memoryLeakCount).toBe(1); // only checkMemoryScope
+  });
+
+  it('counts blockCount independently of memoryLeakCount', () => {
+    const db = makeAuditDb();
+    insertCall(db, { outcome: 'hard_block', block_rule: 'checkMemoryScope' });
+    insertCall(db, { outcome: 'hard_block', block_rule: 'checkMemoryScope' });
+    insertCall(db, { outcome: 'pass' });
+    const score = computeDaoScore(db);
+    expect(score.totalCalls).toBe(3);
+    expect(score.blockCount).toBe(2);
+    expect(score.memoryLeakCount).toBe(2);
+  });
+
+  it('returns counts even when no blocks occurred (zero-block path)', () => {
+    const db = makeAuditDb();
+    for (let i = 0; i < 4; i++) insertCall(db, { outcome: 'pass' });
+    const score = computeDaoScore(db);
+    expect(score.totalCalls).toBe(4);
+    expect(score.blockCount).toBe(0);
+    expect(score.memoryLeakCount).toBe(0);
   });
 });

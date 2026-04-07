@@ -373,6 +373,7 @@ Milestones are numbered sequentially (M1, M2, …). Phase 2 milestones cover all
 | Field | Value |
 |-------|-------|
 | **ID** | M25 |
+| **Status** | **[x]** — complete (Jim approved) |
 | **Stream** | F |
 | **Component / Work** | Test suite for the TUI channel adapter, written against channel-adapters-spec.md |
 | **Assigned role** | Tester |
@@ -387,6 +388,7 @@ Milestones are numbered sequentially (M1, M2, …). Phase 2 milestones cover all
 | Field | Value |
 |-------|-------|
 | **ID** | M26 |
+| **Status** | **[x]** — complete (Jim approved) |
 | **Stream** | F |
 | **Component / Work** | Test suite for the Telegram channel adapter, written against channel-adapters-spec.md |
 | **Assigned role** | Tester |
@@ -401,6 +403,7 @@ Milestones are numbered sequentially (M1, M2, …). Phase 2 milestones cover all
 | Field | Value |
 |-------|-------|
 | **ID** | M27 |
+| **Status** | **[x]** — complete (Jim approved) |
 | **Stream** | F |
 | **Component / Work** | Implement TUI and Telegram channel adapters per channel-adapters-spec.md, incorporating M4 UX recommendations |
 | **Assigned role** | Developer |
@@ -415,6 +418,7 @@ Milestones are numbered sequentially (M1, M2, …). Phase 2 milestones cover all
 | Field | Value |
 |-------|-------|
 | **ID** | M28 |
+| **Status** | **[x]** — complete (Jim approved) |
 | **Stream** | F |
 | **Component / Work** | Security review and QA/QC of TUI and Telegram channel adapters |
 | **Assigned role** | Security Reviewer, then QA/QC |
@@ -432,8 +436,8 @@ Milestones are numbered sequentially (M1, M2, …). Phase 2 milestones cover all
 | **Stream** | C |
 | **Component / Work** | Behavioral specification for the dashboard skill |
 | **Assigned role** | Spec Writer (preceded by Voice of Customer review) |
-| **Sequencing constraints** | M5 (UX Review: Report Dashboard) Jim-approved. Inputs: M5 UX recommendations, cato-spec.md §2.2 (hansei report schema), audit-log-spec.md (event types and dao_score queries), `ARCHITECTURE.md` §5.4. |
-| **Definition of Done** | `docs/specs/dashboard-skill-spec.md` produced covering: Responsibilities, External Interface (what data is surfaced and how), Behavioral Contract (KPI trend display, block history view, hansei report inbox, calibration decision flow, false-positive signal capture), Failure Modes, Invariants, Acceptance Criteria. Spec incorporates M5 UX recommendations. Does not declare MCP servers (Decision 29: MCP-declaring skills restricted to admin groups; dashboard does not require MCP). |
+| **Sequencing constraints** | M5 (UX Review: Report Dashboard) Jim-approved. Inputs: M5 UX recommendations, cato-spec.md §2.2 (hansei report schema), audit-log-spec.md (event types and dao_score queries), `ARCHITECTURE.md` §5.4. **Schema gap (prerequisite):** `src/cato/dao-score.ts` stores only computed rates in `kpi_snapshots` (`security_failures_per_call`, `data_leaks_per_call`, `behavioral_change_rate`). Raw counts (`total_calls`, `block_count`, `memory_leak_count`) are not persisted. The dashboard needs raw counts to display absolute numbers alongside rates. The spec must define a `kpi_snapshots` schema extension adding these columns and flag it as a prerequisite for M31 (Dashboard Skill: Developer Implementation). |
+| **Definition of Done** | `docs/specs/dashboard-skill-spec.md` produced covering: Responsibilities, External Interface (what data is surfaced and how), Behavioral Contract (KPI trend display, block history view, hansei report inbox, calibration decision flow, false-positive signal capture), Failure Modes, Invariants, Acceptance Criteria. Spec incorporates M5 UX recommendations. Does not declare MCP servers (Decision 29: MCP-declaring skills restricted to admin groups; dashboard does not require MCP). **Required:** spec must include a §"Schema Extension Prerequisite" section defining the additional raw count columns for `kpi_snapshots` (`total_calls INTEGER NOT NULL`, `block_count INTEGER NOT NULL`, `memory_leak_count INTEGER NOT NULL`) and state that `dao-score.ts` must be updated to persist these before the dashboard implementation (M31) begins. |
 | **Jim's gate** | Jim approves the spec before Tester writes tests. |
 
 ---
@@ -570,6 +574,34 @@ These milestones run after all Phase 2 component streams have passed QA and Secu
 
 ---
 
+### M40 — Model Selection and Configuration
+
+| Field | Value |
+|-------|-------|
+| **ID** | M40 |
+| **Stream** | N (Runtime Configuration) |
+| **Component / Work** | Per-group and global model selection for agent containers |
+| **Assigned role** | Developer |
+| **Sequencing constraints** | M34 (End-to-End Integration) complete — model param must be threaded through the integrated stack. |
+| **Definition of Done** | 1. `GOLEM_MODEL` env var (default: unset — SDK chooses) read from `.env` and passed through `container-runner.ts` → `ContainerInput` → `agent-runner/src/index.ts` → `query()` `model` parameter. 2. Per-group override: `assertiveness_level`-style field `model` added to `RegisteredGroup`; if set it takes precedence over `GOLEM_MODEL`. 3. `.env.example` documents `GOLEM_MODEL` with supported model IDs listed as comments. 4. `docs/specs/orchestrator-spec.md` updated with model selection behaviour and precedence order (per-group > env > SDK default). 5. Unit tests cover: env var propagation, per-group override, and fallback to SDK default when neither is set. 6. `npm run lint` and `npx tsc --noEmit` clean. |
+| **Jim's gate** | Jim approves model IDs listed in `.env.example` and the precedence rules before implementation begins. |
+
+---
+
+### M41 — Onboarding Improvement
+
+| Field | Value |
+|-------|-------|
+| **ID** | M41 |
+| **Stream** | N (Runtime Configuration) |
+| **Component / Work** | Guided first-run setup that detects missing configuration and walks the operator through it interactively |
+| **Assigned role** | Developer |
+| **Sequencing constraints** | M34 (End-to-End Integration) complete — onboarding must validate the fully-wired stack, not individual components. M3 UX Review (Setup/Onboarding) Jim-approved recommendations incorporated. |
+| **Definition of Done** | 1. `npm run setup` (or `node dist/setup.js`) runs a setup wizard that detects and validates: credential backend selection and credential presence, channel selection (TUI/Telegram) with per-channel token validation, Docker/container runtime availability, agent container image presence (offers to build if missing). 2. Wizard produces a valid `.env` file; never overwrites existing values without confirmation. 3. Post-setup smoke test: sends a single test prompt through the full stack (credential proxy → container → Anthropic API) and reports pass/fail with actionable error messages — no internal stack traces exposed. 4. Error messages distinguish: missing credential, wrong credential type, expired OAuth token, unreachable upstream, container image missing, Docker not running. 5. `README.md` quick-start updated to point to `npm run setup` as the primary onboarding path. 6. `npm run lint` and `npx tsc --noEmit` clean. |
+| **Jim's gate** | Jim reviews the wizard UX flow and the smoke-test error messages before implementation begins. |
+
+---
+
 ### M39 — Final Security Reviewer Sign-Off
 
 | Field | Value |
@@ -672,7 +704,9 @@ PHASE 3 — after M13, M15, M17, M19, M21, M24, M28, M32 all merged:
   M36 Cato Fail-Closed Test               (after M34)
   M37 Audit Log Concurrent Writer Test    (after M34)
   M38 VoC: Real Conversation Review       (after M35 + M36)
-  M39 Final Security Reviewer Sign-Off    (after M34–M38 + M1 + M11 + M2 all complete)
+  M40 Model Selection and Configuration   (after M34; Jim gate on model IDs before dev starts)
+  M41 Onboarding Improvement              (after M34 + M3 Jim-approved)
+  M39 Final Security Reviewer Sign-Off    (after M34–M38 + M40 + M41 + M1 + M11 + M2 all complete)
 ```
 
 ---

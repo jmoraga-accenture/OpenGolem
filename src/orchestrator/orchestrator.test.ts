@@ -1266,7 +1266,9 @@ describe('Contract — catoEscalate relay (spec §3.6, Decision 23)', () => {
 
     // Response returned to broker caller
     expect(response.result).toBeDefined();
-    expect(typeof (response.result as { allow?: boolean }).allow).toBe('boolean');
+    expect(typeof (response.result as { allow?: boolean }).allow).toBe(
+      'boolean',
+    );
 
     // Audit entry written
     expect(audit.hasType('cato_check_relayed')).toBe(true);
@@ -1709,8 +1711,8 @@ describe('Stub detection — Cato block actually stops container spawn (INV-3)',
     await orch.deliver(makeMessage({ groupId: 'stub-detect-cato' }));
 
     // Assert: runContainerAgent was NOT called after the Cato block
-    const newCallCount = (runContainerAgent as ReturnType<typeof vi.fn>).mock.calls
-      .length;
+    const newCallCount = (runContainerAgent as ReturnType<typeof vi.fn>).mock
+      .calls.length;
     expect(newCallCount).toBe(callCount); // no new spawns
 
     await broker.close();
@@ -1741,8 +1743,8 @@ describe('Stub detection — Cato block actually stops container spawn (INV-3)',
 
     await orch.deliver(makeMessage({ groupId: 'stub-detect-allow' }));
 
-    const newCallCount = (runContainerAgent as ReturnType<typeof vi.fn>).mock.calls
-      .length;
+    const newCallCount = (runContainerAgent as ReturnType<typeof vi.fn>).mock
+      .calls.length;
     expect(newCallCount).toBeGreaterThan(callCount); // at least one spawn
 
     await broker.close();
@@ -1786,8 +1788,8 @@ describe('Stub detection — Missing broker socket queues messages, does not dis
     await orch.deliver(makeMessage({ groupId: 'no-broker-group' }));
 
     // Container must NOT have been spawned
-    const newCallCount = (runContainerAgent as ReturnType<typeof vi.fn>).mock.calls
-      .length;
+    const newCallCount = (runContainerAgent as ReturnType<typeof vi.fn>).mock
+      .calls.length;
     expect(newCallCount).toBe(callCount);
 
     // Message should be queued (queue depth 1) or at least not dispatched
@@ -1821,8 +1823,8 @@ describe('Stub detection — Missing broker socket queues messages, does not dis
 
     await orch.deliver(makeMessage({ groupId: 'store-full-group' }));
 
-    const newCallCount = (runContainerAgent as ReturnType<typeof vi.fn>).mock.calls
-      .length;
+    const newCallCount = (runContainerAgent as ReturnType<typeof vi.fn>).mock
+      .calls.length;
     expect(newCallCount).toBe(callCount); // no new spawn
 
     // User notified

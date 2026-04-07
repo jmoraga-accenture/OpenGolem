@@ -30,6 +30,12 @@ export interface DaoScore {
    * 1.0 when no blocks occurred (perfect).
    */
   behavioral_change_rate: number;
+  /** Total calls in the period. */
+  totalCalls: number;
+  /** hard_blocks + soft_blocks in the period. */
+  blockCount: number;
+  /** checkMemoryScope blocks in the period. */
+  memoryLeakCount: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -50,9 +56,27 @@ export function initDaoScoreDb(dbPath?: string): Database.Database {
       period_end                  INTEGER NOT NULL,
       security_failures_per_call  REAL    NOT NULL,
       data_leaks_per_call         REAL    NOT NULL,
-      behavioral_change_rate      REAL    NOT NULL
+      behavioral_change_rate      REAL    NOT NULL,
+      total_calls                 INTEGER NOT NULL DEFAULT 0,
+      block_count                 INTEGER NOT NULL DEFAULT 0,
+      memory_leak_count           INTEGER NOT NULL DEFAULT 0
     );
   `);
+  // Migration: add raw count columns for existing deployments that have the
+  // table without them (ALTER TABLE … ADD COLUMN is safe to run repeatedly
+  // because better-sqlite3 will throw; we swallow the error if the column
+  // already exists).
+  for (const ddl of [
+    'ALTER TABLE kpi_snapshots ADD COLUMN total_calls INTEGER NOT NULL DEFAULT 0',
+    'ALTER TABLE kpi_snapshots ADD COLUMN block_count INTEGER NOT NULL DEFAULT 0',
+    'ALTER TABLE kpi_snapshots ADD COLUMN memory_leak_count INTEGER NOT NULL DEFAULT 0',
+  ]) {
+    try {
+      db.exec(ddl);
+    } catch {
+      // Column already exists — ignore.
+    }
+  }
   return db;
 }
 
@@ -105,6 +129,9 @@ export function computeDaoScore(
       security_failures_per_call: 0,
       data_leaks_per_call: 0,
       behavioral_change_rate: 1.0,
+      totalCalls: 0,
+      blockCount: 0,
+      memoryLeakCount: 0,
     };
   }
 
@@ -136,6 +163,9 @@ export function computeDaoScore(
       security_failures_per_call,
       data_leaks_per_call,
       behavioral_change_rate: 1.0,
+      totalCalls: total,
+      blockCount,
+      memoryLeakCount,
     };
   }
 
@@ -185,6 +215,9 @@ export function computeDaoScore(
     security_failures_per_call,
     data_leaks_per_call,
     behavioral_change_rate,
+    totalCalls: total,
+    blockCount,
+    memoryLeakCount,
   };
 }
 
@@ -197,8 +230,9 @@ export function saveDaoScore(score: DaoScore, dbPath?: string): void {
   db.prepare(
     `INSERT INTO kpi_snapshots
        (computed_at, period_start, period_end,
-        security_failures_per_call, data_leaks_per_call, behavioral_change_rate)
-     VALUES (?, ?, ?, ?, ?, ?)`,
+        security_failures_per_call, data_leaks_per_call, behavioral_change_rate,
+        total_calls, block_count, memory_leak_count)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     Date.now(),
     score.period_start,
@@ -206,6 +240,9 @@ export function saveDaoScore(score: DaoScore, dbPath?: string): void {
     score.security_failures_per_call,
     score.data_leaks_per_call,
     score.behavioral_change_rate,
+    score.totalCalls,
+    score.blockCount,
+    score.memoryLeakCount,
   );
 }
 
@@ -222,6 +259,9 @@ export function getLatestDaoScore(dbPath?: string): DaoScore | null {
         security_failures_per_call: number;
         data_leaks_per_call: number;
         behavioral_change_rate: number;
+        total_calls: number;
+        block_count: number;
+        memory_leak_count: number;
       }
     | undefined;
   if (!row) return null;
@@ -231,5 +271,8 @@ export function getLatestDaoScore(dbPath?: string): DaoScore | null {
     security_failures_per_call: row.security_failures_per_call,
     data_leaks_per_call: row.data_leaks_per_call,
     behavioral_change_rate: row.behavioral_change_rate,
+    totalCalls: row.total_calls,
+    blockCount: row.block_count,
+    memoryLeakCount: row.memory_leak_count,
   };
 }

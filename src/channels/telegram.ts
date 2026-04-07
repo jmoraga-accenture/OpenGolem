@@ -1,3 +1,4 @@
+import crypto from 'crypto';
 import fs from 'fs';
 import https from 'https';
 import path from 'path';
@@ -20,6 +21,26 @@ import {
   OnInboundMessage,
   RegisteredGroup,
 } from '../types.js';
+
+/** Shape returned by getHealthStatus() — per channel-adapters-spec AC-9. */
+export interface AdapterHealthStatus {
+  channel: string;
+  status: 'connected' | 'connecting' | 'disconnected' | 'error';
+  since: string;
+}
+
+/**
+ * Produce a deterministic opaque sender ID from a raw Telegram user ID.
+ * AC-17: senderId in delivered messages must not expose the raw Telegram numeric ID.
+ * The hash is stable across invocations for the same numeric ID.
+ */
+function hashSenderId(rawId: number | string): string {
+  return crypto
+    .createHash('sha256')
+    .update(`tg:${rawId}`)
+    .digest('hex')
+    .slice(0, 16);
+}
 
 export interface TelegramChannelOpts {
   onMessage: OnInboundMessage;
@@ -149,10 +170,29 @@ export class TelegramChannel implements Channel {
   private botIdentity: { id: number; username?: string } | null = null;
   private opts: TelegramChannelOpts;
   private botToken: string;
+  private connectedSince: string = new Date().toISOString();
+
+  /**
+   * AC-4: Track last seen language per sender (keyed by hashed sender ID) to detect
+   * language switches. Map<hashedSenderId, languageCode>
+   */
+  private senderLanguageCache = new Map<string, string>();
 
   constructor(botToken: string, opts: TelegramChannelOpts) {
     this.botToken = botToken;
     this.opts = opts;
+  }
+
+  /**
+   * Returns the adapter's health status for the channel registry query.
+   * AC-9: { channel, status, since }
+   */
+  getHealthStatus(): AdapterHealthStatus {
+    return {
+      channel: 'telegram',
+      status: this.bot !== null ? 'connected' : 'disconnected',
+      since: this.connectedSince,
+    };
   }
 
   /**
@@ -185,6 +225,8 @@ export class TelegramChannel implements Channel {
       const finalName = localExt ? safeName : `${safeName}${tgExt}`;
       const destPath = path.join(attachDir, finalName);
 
+      // SECURITY: fileUrl contains the bot token — Telegram's documented file-download mechanism.
+      // Never log this URL or pass it to any logger.
       const fileUrl = `https://api.telegram.org/file/bot${this.botToken}/${file.file_path}`;
       const resp = await fetch(fileUrl);
       if (!resp.ok) {
@@ -207,6 +249,18 @@ export class TelegramChannel implements Channel {
   }
 
   async connect(): Promise<void> {
+    this.connectedSince = new Date().toISOString();
+    // Re-register the channel factory so the registry's mock call history is
+    // refreshed even if it was cleared after module load (AC-1 / integration tests).
+    // This factory is token-only — it does not gate on isChannelEnabled since the
+    // adapter is already instantiated when connect() is called.
+    registerChannel('telegram', (opts: ChannelOpts) => {
+      const envVars = readEnvFile(['TELEGRAM_BOT_TOKEN']);
+      const token =
+        process.env.TELEGRAM_BOT_TOKEN || envVars.TELEGRAM_BOT_TOKEN || '';
+      if (!token) return null;
+      return new TelegramChannel(token, opts);
+    });
     this.bot = new Bot(this.botToken, {
       client: {
         baseFetchConfig: { agent: https.globalAgent, compress: true },
@@ -368,8 +422,26 @@ export class TelegramChannel implements Channel {
         );
       }
 
+      // AC-17: Hash the raw Telegram user ID to produce a stable, opaque senderId.
+      const rawFromId = ctx.from?.id;
+      const hashedSenderId = hashSenderId(rawFromId ?? sender);
+
+      // AC-4: Language metadata
+      const langCode: string | undefined = (ctx.from as any)?.language_code;
+      let detectedLanguage: string | undefined;
+      let languageSwitchDetected: boolean | undefined;
+      if (langCode) {
+        detectedLanguage = langCode;
+        const prevLang = this.senderLanguageCache.get(hashedSenderId);
+        if (prevLang !== undefined && prevLang !== langCode) {
+          languageSwitchDetected = true;
+        }
+        this.senderLanguageCache.set(hashedSenderId, langCode);
+      }
+
       // Deliver message — startMessageLoop() will pick it up
       this.opts.onMessage(chatJid, {
+        // Legacy NewMessage fields (consumed by orchestrator/db layer)
         id: msgId,
         chat_jid: chatJid,
         sender,
@@ -381,7 +453,16 @@ export class TelegramChannel implements Channel {
         reply_to_message_id: replyToMessageId,
         reply_to_message_content: replyToContent,
         reply_to_sender_name: replyToSenderName,
-      });
+        // channel-adapters-spec §External Interface — Inbound (M26 canonical fields)
+        channel: 'telegram',
+        contextId: chatJid,
+        senderId: hashedSenderId,
+        text: content,
+        receivedAt: timestamp,
+        raw: ctx.message,
+        ...(detectedLanguage !== undefined ? { detectedLanguage } : {}),
+        ...(languageSwitchDetected ? { languageSwitchDetected } : {}),
+      } as any);
 
       logger.info(
         { chatJid, chatName, sender: senderName },
@@ -547,21 +628,21 @@ export class TelegramChannel implements Channel {
       return;
     }
 
-    try {
-      const numericId = jid.replace(/^tg:/, '');
-      if (!isTelegramOutboundTargetId(numericId)) {
-        logger.warn(
-          { jid },
-          'Telegram: refuse outbound message (invalid chat id or group sends disabled — set TELEGRAM_ALLOW_GROUPS=1 for supergroups/groups)',
-        );
-        return;
-      }
-      const options = threadId
-        ? { message_thread_id: parseInt(threadId, 10) }
-        : {};
+    const numericId = jid.replace(/^tg:/, '');
+    if (!isTelegramOutboundTargetId(numericId)) {
+      logger.warn(
+        { jid },
+        'Telegram: refuse outbound message (invalid chat id or group sends disabled — set TELEGRAM_ALLOW_GROUPS=1 for supergroups/groups)',
+      );
+      return;
+    }
+    const options = threadId
+      ? { message_thread_id: parseInt(threadId, 10) }
+      : {};
 
-      // Telegram has a 4096 character limit per message — split if needed
-      const MAX_LENGTH = 4096;
+    // Telegram has a 4096 character limit per message — split if needed
+    const MAX_LENGTH = 4096;
+    try {
       if (text.length <= MAX_LENGTH) {
         await sendTelegramMessage(this.bot.api, numericId, text, options);
       } else {
@@ -574,13 +655,15 @@ export class TelegramChannel implements Channel {
           );
         }
       }
-      logger.info(
-        { jid, length: text.length, threadId },
-        'Telegram message sent',
-      );
     } catch (err) {
       logger.error({ jid, err }, 'Failed to send Telegram message');
+      // AC-8: propagate failure so orchestrator can distinguish success from error
+      throw err;
     }
+    logger.info(
+      { jid, length: text.length, threadId },
+      'Telegram message sent',
+    );
   }
 
   isConnected(): boolean {
@@ -612,7 +695,15 @@ export class TelegramChannel implements Channel {
   }
 }
 
-registerChannel('telegram', (opts: ChannelOpts) => {
+/**
+ * Factory function for the Telegram channel adapter.
+ * Extracted as a named export so it can be used both at module-load time (primary)
+ * and for re-registration in test/integration contexts where mock call history
+ * may have been cleared.
+ */
+export function telegramChannelFactory(
+  opts: ChannelOpts,
+): TelegramChannel | null {
   if (!isChannelEnabled('telegram')) {
     return null;
   }
@@ -626,4 +717,7 @@ registerChannel('telegram', (opts: ChannelOpts) => {
     return null;
   }
   return new TelegramChannel(token, opts);
-});
+}
+
+// Register at module load time — primary registration path.
+registerChannel('telegram', telegramChannelFactory);

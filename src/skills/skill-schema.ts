@@ -765,10 +765,9 @@ export async function applySkill(
   // Validate
   const validationError = validateIntent(raw);
   if (validationError) {
-    logger.debug('skill validation failed', {
-      field: validationError.field,
-      reason: validationError.reason,
-    });
+    logger.debug(
+      `skill validation failed: ${validationError.field}: ${validationError.reason}`,
+    );
     return {
       ok: false,
       field: validationError.field,
@@ -810,11 +809,7 @@ export async function applySkill(
       // Rollback
       installedSkills.delete(skillId);
       logger.error(
-        'broker notification failed; rolling back skill registration',
-        {
-          skillId,
-          err: String(err),
-        },
+        `broker notification failed; rolling back skill registration: ${err}`,
       );
       return {
         ok: false,
@@ -823,7 +818,7 @@ export async function applySkill(
     }
   }
 
-  logger.info('skill applied', { skillId, version: skill.version });
+  logger.info(`skill applied: ${skillId} ${skill.version}`);
   return { ok: true, skillId, version: skill.version };
 }
 
@@ -853,10 +848,9 @@ export async function removeSkill(
     } catch (err) {
       // Rollback
       installedSkills.set(skillId, skill);
-      logger.error('broker deregistration failed; rolling back skill removal', {
-        skillId,
-        err: String(err),
-      });
+      logger.error(
+        `broker deregistration failed; rolling back skill removal: ${err}`,
+      );
       return {
         ok: false,
         reason: `broker unavailable: ${err}`,
@@ -864,7 +858,7 @@ export async function removeSkill(
     }
   }
 
-  logger.info('skill removed', { skillId });
+  logger.info(`skill removed: ${skillId}`);
   return { ok: true, skillId };
 }
 

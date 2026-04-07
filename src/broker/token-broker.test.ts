@@ -25,14 +25,7 @@ import http from 'http';
 import net from 'net';
 import os from 'os';
 import path from 'path';
-import {
-  afterEach,
-  beforeAll,
-  beforeEach,
-  describe,
-  expect,
-  it,
-} from 'vitest';
+import { afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 // ─── Socket paths ────────────────────────────────────────────────────────────
 // Spec Decision 15: two distinct paths under data/sockets/.

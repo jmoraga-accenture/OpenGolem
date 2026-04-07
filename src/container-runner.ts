@@ -226,6 +226,14 @@ function mountGroupFiles(groupDir: string, mounts: PreparedMount[]): void {
     containerPath: '/workspace/group/logs',
     readonly: false,
   });
+
+  const attachDir = path.join(groupDir, 'attachments');
+  fs.mkdirSync(attachDir, { recursive: true });
+  mounts.push({
+    hostPath: attachDir,
+    containerPath: '/workspace/group/attachments',
+    readonly: true,
+  });
 }
 
 function buildMounts(

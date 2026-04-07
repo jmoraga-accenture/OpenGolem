@@ -79,6 +79,14 @@ export const MAX_CONCURRENT_CONTAINERS = Math.max(
   1,
   parseInt(process.env.MAX_CONCURRENT_CONTAINERS || '5', 10) || 5,
 );
+export const INBOUND_RATE_LIMIT_PER_SENDER = Math.max(
+  1,
+  parseInt(process.env.INBOUND_RATE_LIMIT_PER_SENDER || '10', 10) || 10,
+);
+export const INBOUND_QUEUE_MAX_DEPTH = Math.max(
+  1,
+  parseInt(process.env.INBOUND_QUEUE_MAX_DEPTH || '100', 10) || 100,
+);
 
 function escapeRegex(str: string): string {
   return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');

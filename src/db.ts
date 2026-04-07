@@ -551,6 +551,21 @@ export function getMessagesSince(
   return rows.map(rowToNewMessage);
 }
 
+export function countMessagesSince(
+  chatJid: string,
+  sinceTimestamp: string,
+): number {
+  const d = requireDb();
+  const row = d
+    .prepare(
+      `SELECT COUNT(*) as cnt FROM messages
+       WHERE chat_jid = ? AND timestamp > ? AND is_bot_message = 0
+         AND content != '' AND content IS NOT NULL`,
+    )
+    .get(chatJid, sinceTimestamp) as { cnt: number } | undefined;
+  return row?.cnt ?? 0;
+}
+
 export function getLastBotMessageTimestamp(
   chatJid: string,
   botPrefix: string,

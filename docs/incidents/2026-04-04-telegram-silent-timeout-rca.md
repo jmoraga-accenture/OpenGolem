@@ -2,7 +2,7 @@
 
 **Date:** 2026-04-04  
 **Status:** Closed (analysis) — follow-up actions tracked below  
-**Scope:** Telegram group chats `tg:-5192058114`, `tg:-5029230580`; collateral: Cato audit, Telegram DM, credential proxy  
+**Scope:** Telegram group chats `tg:-GROUP_1`, `tg:-GROUP_2`; collateral: Cato audit, Telegram DM, credential proxy  
 
 ---
 
@@ -22,9 +22,9 @@ The **credential proxy** logged **upstream HTTP timeouts (30s)** during the same
 
 | Chat / system | JID / folder | What happened |
 |---------------|--------------|----------------|
-| Jim, George and Alef-mark-01 | `tg:-5192058114` / `tg-g-5192058114` | First run: **~30 min**, **no streamed stdout markers** → **timeout**, **retry** with **3** batched user messages → **94-char** Telegram send (consistent with `/status` “main chat only” copy). Later run **completed** (~30 min, streaming mode). |
-| Jim and Alef-mark-01 | `tg:-5029230580` / `tg-g-5029230580` | DB last user text: **“are you there?”** (not `/status`). **One 20-char** Telegram message, **~30 min silence**, then **successful** host completion. |
-| Telegram DM | `tg:7448431705` | **Healthy**: large reply in ~seconds; separate long run **completed** (shows stack *can* work under load). |
+| Jim, User-B and Alef-mark-01 | `tg:-GROUP_1` / `tg-g-GROUP_1` | First run: **~30 min**, **no streamed stdout markers** → **timeout**, **retry** with **3** batched user messages → **94-char** Telegram send (consistent with `/status` “main chat only” copy). Later run **completed** (~30 min, streaming mode). |
+| Jim and Alef-mark-01 | `tg:-GROUP_2` / `tg-g-GROUP_2` | DB last user text: **“are you there?”** (not `/status`). **One 20-char** Telegram message, **~30 min silence**, then **successful** host completion. |
+| Telegram DM | `tg:USER_1` | **Healthy**: large reply in ~seconds; separate long run **completed** (shows stack *can* work under load). |
 | Cato (scheduled audit) | `Cato` | **Same pattern**: **~30 min**, timeout, **no output**—suggests **systemic** “no marker” risk, not Telegram-only. |
 
 ---
@@ -34,8 +34,8 @@ The **credential proxy** logged **upstream HTTP timeouts (30s)** during the same
 | Source | Use |
 |--------|-----|
 | `logs/opengolem.error.log` | Timestamps, spawn/timeout/retry, agent output lengths, Telegram send lengths, proxy timeout error |
-| `groups/tg-g-5192058114/logs/container-2026-04-04T04-32-38-342Z.log` | Timeout artifact: `Had Streaming Output: false`, exit **137**, duration **~1 831 277 ms** |
-| `store/messages.db` | User message text per `chat_jid` (confirms **`/status`** on `tg:-5192058114` only, not `tg:-5029230580`) |
+| `groups/tg-g-GROUP_1/logs/container-2026-04-04T04-32-38-342Z.log` | Timeout artifact: `Had Streaming Output: false`, exit **137**, duration **~1 831 277 ms** |
+| `store/messages.db` | User message text per `chat_jid` (confirms **`/status`** on `tg:-GROUP_1` only, not `tg:-GROUP_2`) |
 | `src/container-runner.ts` | Timeout **only** resets on parsed stdout marker JSON; stderr ignored for timeout |
 | `src/config.ts` | `CONTAINER_TIMEOUT` / `IDLE_TIMEOUT` default **1 800 000 ms** (30 min) |
 | `src/credential-proxy.ts` | Upstream request **30s** timeout |
@@ -52,19 +52,19 @@ Log timestamps below match `opengolem.error.log` on the incident host. Container
 | 06:10 | Cato audit: container spawned |
 | 06:40 | Cato: **timeout**, **no output**, **~30.5 min**, code **137** |
 | 07:01 | Telegram DM: processed; **~1735 chars** sent ~18 s later (healthy) |
-| 07:02:07 | `tg:-5192058114`: **1** message, container `…5192058114-1775275327069` spawned |
-| 07:04:09 | `tg:-5029230580`: **1** message, container `…5029230580-1775275449153` spawned |
-| 07:04:13 | `tg:-5029230580`: **Agent output 20 chars** → Telegram length **20** |
-| 07:04:23 | `tg:-5192058114`: further user message **stored** (queued; container already active) |
-| 07:05:06 | `tg:-5192058114`: **New messages count 1** |
+| 07:02:07 | `tg:-GROUP_1`: **1** message, container `…GROUP_1-1775275327069` spawned |
+| 07:04:09 | `tg:-GROUP_2`: **1** message, container `…GROUP_2-1775275449153` spawned |
+| 07:04:13 | `tg:-GROUP_2`: **Agent output 20 chars** → Telegram length **20** |
+| 07:04:23 | `tg:-GROUP_1`: further user message **stored** (queued; container already active) |
+| 07:05:06 | `tg:-GROUP_1`: **New messages count 1** |
 | 07:06:45 | **ERROR**: credential proxy **upstream timed out after 30s** |
 | 07:31:30 | Telegram DM long run **completed** (streaming) |
-| 07:32:37–38 | `tg:-5192058114`: **Container timeout**, **no output**, **~1 831 277 ms**, **137**; `Had Streaming Output: **false**` |
+| 07:32:37–38 | `tg:-GROUP_1`: **Container timeout**, **no output**, **~1 831 277 ms**, **137**; `Had Streaming Output: **false**` |
 | 07:32:38 | Message cursor **rolled back**; retry **5 s** backoff |
 | 07:32:43 | Retry: **`messageCount: 3`** (batched backlog) |
-| 07:32:54 | **94 chars** agent output → Telegram `tg:-5192058114` length **94** |
-| 07:34:14 | `tg:-5029230580`: **Container completed** (streaming), **~1 804 953 ms** |
-| 08:02:55 | `tg:-5192058114`: **second** long run **completed** (~30 min) |
+| 07:32:54 | **94 chars** agent output → Telegram `tg:-GROUP_1` length **94** |
+| 07:34:14 | `tg:-GROUP_2`: **Container completed** (streaming), **~1 804 953 ms** |
+| 08:02:55 | `tg:-GROUP_1`: **second** long run **completed** (~30 min) |
 
 ---
 
@@ -84,8 +84,8 @@ Log timestamps below match `opengolem.error.log` on the incident host. Container
 
 ### 6.1 Direct mechanism (established)
 
-- **`tg:-5192058114` first run:** The agent process did **not** emit **any** complete OpenGolem stdout marker JSON for **~30 minutes** → host **stopped** the container (**137**, “timed out with no output”). **Retry** reprocessed **three** user messages together; the **94-character** reply matches the **status** skill length for the “main chat only” message.
-- **`tg:-5029230580`:** At least **one** early marker (20-char user-visible send) **reset** the hard timeout; **no further** user-visible streamed results until **~30 minutes** later, when the run **completed successfully** on the host.
+- **`tg:-GROUP_1` first run:** The agent process did **not** emit **any** complete OpenGolem stdout marker JSON for **~30 minutes** → host **stopped** the container (**137**, “timed out with no output”). **Retry** reprocessed **three** user messages together; the **94-character** reply matches the **status** skill length for the “main chat only” message.
+- **`tg:-GROUP_2`:** At least **one** early marker (20-char user-visible send) **reset** the hard timeout; **no further** user-visible streamed results until **~30 minutes** later, when the run **completed successfully** on the host.
 
 Reference (timeout reset only on markers):
 

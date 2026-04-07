@@ -10,6 +10,8 @@ import {
   DATA_DIR,
   DEFAULT_TRIGGER,
   GROUPS_DIR,
+  INBOUND_QUEUE_MAX_DEPTH,
+  INBOUND_RATE_LIMIT_PER_SENDER,
   MAX_MESSAGES_PER_PROMPT,
   messageSatisfiesGroupTrigger,
   POLL_INTERVAL,
@@ -43,6 +45,7 @@ import {
   stopCatoScheduledAudit,
 } from './cato/scheduled-audit.js';
 import {
+  countMessagesSince,
   deleteSession,
   getAllChats,
   getAllRegisteredGroups,
@@ -94,6 +97,16 @@ export { escapeXml, formatMessages } from './router.js';
 
 const STALE_SESSION_RE =
   /no conversation found|ENOENT.*\.jsonl|session.*not found/i;
+
+// Patterns from the Claude Code CLI that indicate a credential/auth problem
+// in the container. These must never reach the end user verbatim — they expose
+// internal tooling details and the suggested action (run /login) is impossible
+// from a Telegram DM or any external channel.
+const CREDENTIAL_ERROR_RE =
+  /not logged in|please run \/login|invalid api key|unauthorized|authentication failed/i;
+const CREDENTIAL_ERROR_USER_MSG =
+  "I'm unable to respond right now — my credentials need attention. " +
+  'Please ask an administrator to check the API key configuration.';
 
 let lastTimestamp = '';
 let lastAgentTimestamp: Record<string, string> = {};
@@ -147,6 +160,11 @@ export function getAvailableGroups(): AvailableGroup[] {
       isRegistered: c.jid in registeredGroups,
     }));
 }
+
+// Per-sender sliding-window timestamps for rate limiting (F-1, M28).
+// Key: senderId (hashed). Value: array of arrival timestamps (ms).
+const senderRateWindows = new Map<string, number[]>();
+const RATE_WINDOW_MS = 60_000;
 
 function getOrRecoverCursor(chatJid: string): string {
   const existing = lastAgentTimestamp[chatJid];
@@ -379,6 +397,37 @@ function buildChannelOpts() {
         }
       }
 
+      // F-1 (M28): per-sender sliding-window rate limit
+      if (!msg.is_from_me && !msg.is_bot_message) {
+        const senderId = msg.sender ?? 'unknown';
+        const now = Date.now();
+        const window = (senderRateWindows.get(senderId) ?? []).filter(
+          (t) => now - t < RATE_WINDOW_MS,
+        );
+        if (window.length >= INBOUND_RATE_LIMIT_PER_SENDER) {
+          logger.warn(
+            { senderId: senderId.slice(0, 16), chatJid },
+            'inbound rate limit exceeded — message dropped',
+          );
+          return;
+        }
+        window.push(now);
+        senderRateWindows.set(senderId, window);
+      }
+
+      // F-1 (M28): per-group queue depth cap
+      if (!msg.is_from_me && !msg.is_bot_message && registeredGroups[chatJid]) {
+        const cursor = getOrRecoverCursor(chatJid);
+        const pending = countMessagesSince(chatJid, cursor);
+        if (pending >= INBOUND_QUEUE_MAX_DEPTH) {
+          logger.warn(
+            { chatJid, pending, limit: INBOUND_QUEUE_MAX_DEPTH },
+            'queue depth limit exceeded — message dropped',
+          );
+          return;
+        }
+      }
+
       storeMessage(msg);
     },
     onChatMetadata: (
@@ -461,7 +510,15 @@ async function runAgent(
           saveState();
         }
         if (out.result) {
-          const t = formatOutbound(out.result);
+          const raw = formatOutbound(out.result);
+          const isCredentialError = CREDENTIAL_ERROR_RE.test(raw);
+          if (isCredentialError) {
+            logger.error(
+              { chatJid, groupFolder: group.folder },
+              'Container returned credential error — check ANTHROPIC_API_KEY / CLAUDE_CODE_OAUTH_TOKEN in .env',
+            );
+          }
+          const t = isCredentialError ? CREDENTIAL_ERROR_USER_MSG : raw;
           if (t.trimStart().startsWith('[FLAG]')) {
             logFlagEvent({
               groupJid: chatJid,
