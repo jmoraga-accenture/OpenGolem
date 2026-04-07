@@ -1,20 +1,9 @@
-import {
-  Channel,
-  OnInboundMessage,
-  OnChatMetadata,
-  RegisteredGroup,
-} from '../types.js';
+import { Channel, OnInboundMessage, OnChatMetadata, RegisteredGroup } from '../types.js';
 
 export interface ChannelOpts {
   onMessage: OnInboundMessage;
   onChatMetadata: OnChatMetadata;
   registeredGroups: () => Record<string, RegisteredGroup>;
-  /**
-   * Auto-register a chat the first time it is seen. Channel calls this when an
-   * inbound message arrives from a chat that passes all acceptance checks but
-   * is not yet in registeredGroups(). The orchestrator registers it and updates
-   * the in-memory map so the same message can be delivered immediately.
-   */
   onAutoRegisterGroup: (jid: string, name: string, isGroup: boolean) => void;
 }
 

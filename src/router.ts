@@ -10,25 +10,27 @@ export function escapeXml(s: string): string {
     .replace(/"/g, '&quot;');
 }
 
-export function formatMessages(
-  messages: NewMessage[],
-  timezone: string,
-): string {
-  const lines = messages.map((m) => {
-    const displayTime = formatLocalTime(m.timestamp, timezone);
+export function formatMessages(messages: NewMessage[], timezone: string): string {
+  const lines: string[] = [];
+  lines.push(`<context timezone="${escapeXml(timezone)}" />`);
+  lines.push('<messages>');
+  for (const m of messages) {
+    const time = formatLocalTime(m.timestamp, timezone);
     const replyAttr = m.reply_to_message_id
       ? ` reply_to="${escapeXml(m.reply_to_message_id)}"`
       : '';
-    const replySnippet =
-      m.reply_to_message_content && m.reply_to_sender_name
-        ? `\n  <quoted_message from="${escapeXml(m.reply_to_sender_name)}">${escapeXml(m.reply_to_message_content)}</quoted_message>`
-        : '';
-    return `<message sender="${escapeXml(m.sender_name)}" time="${escapeXml(displayTime)}"${replyAttr}>${replySnippet}${escapeXml(m.content)}</message>`;
-  });
-
-  const header = `<context timezone="${escapeXml(timezone)}" />\n`;
-
-  return `${header}<messages>\n${lines.join('\n')}\n</messages>`;
+    const openTag = `<message sender="${escapeXml(m.sender_name)}" time="${escapeXml(time)}"${replyAttr}>`;
+    if (m.reply_to_message_content != null && m.reply_to_sender_name != null) {
+      lines.push(openTag);
+      lines.push(
+        `<quoted_message from="${escapeXml(m.reply_to_sender_name)}">${escapeXml(m.reply_to_message_content)}</quoted_message>${escapeXml(m.content)}</message>`,
+      );
+    } else {
+      lines.push(`${openTag}${escapeXml(m.content)}</message>`);
+    }
+  }
+  lines.push('</messages>');
+  return lines.join('\n');
 }
 
 export function stripInternalTags(text: string): string {
@@ -36,14 +38,10 @@ export function stripInternalTags(text: string): string {
 }
 
 export function formatOutbound(rawText: string): string {
-  const text = stripInternalTags(rawText);
-  if (!text) return '';
-  return text;
+  const result = stripInternalTags(rawText);
+  return result === '' ? '' : result;
 }
 
-export function findChannel(
-  channels: Channel[],
-  jid: string,
-): Channel | undefined {
-  return channels.find((c) => c.ownsJid(jid));
+export function findChannel(channels: Channel[], jid: string): Channel | undefined {
+  return channels.find((channel) => channel.ownsJid(jid));
 }
