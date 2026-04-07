@@ -104,6 +104,7 @@ PSYCHE.md is a Markdown file with structured subsections. Unlike SOUL.md, PSYCHE
 | `dao_score KPI Definitions` | Yes | The three KPI formulas; must match the names produced by the dao_score computation module |
 | `Alert Thresholds` | Yes | Threshold values and their status classifications |
 | `What Cato Is Not` | No (free text) | Explicit prohibitions on Cato's behavior |
+| `Self-Hosted Provider Posture` | No (free text) | Required when any group uses an `ollama` or `custom` provider; specifies recommended audit interval and block threshold verification. See ADR-36 / Decision 36. |
 
 A PSYCHE.md missing any required section fails Cato startup validation.
 
@@ -231,7 +232,7 @@ The orchestrator validates SOUL.md at startup. Cato validates PSYCHE.md at start
 **PSYCHE.md validation checks (Cato, at startup):**
 1. File exists at `<deployment-root>/PSYCHE.md`
 2. File is valid UTF-8
-3. All six required sections are present
+3. All seven required sections are present
 4. Each `LLM Escalation Criteria` entry has all five required fields in the correct format
 5. All `Applicable actions` values in criteria entries are from the fixed enumeration
 6. All `Authorized context fields` values are from the permitted set
