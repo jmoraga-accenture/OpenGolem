@@ -233,6 +233,7 @@ Milestones are numbered sequentially (M1, M2, …). Phase 2 milestones cover all
 | Field | Value |
 |-------|-------|
 | **ID** | M15 |
+| **Status** | **[x]** — complete (security review delivered; Jim review pending) |
 | **Stream** | B |
 | **Component / Work** | Security review and QA/QC of the Cato implementation |
 | **Assigned role** | Security Reviewer, then QA/QC |
@@ -247,6 +248,7 @@ Milestones are numbered sequentially (M1, M2, …). Phase 2 milestones cover all
 | Field | Value |
 |-------|-------|
 | **ID** | M16 |
+| **Status** | **[x]** — complete |
 | **Stream** | Cross-cutting |
 | **Component / Work** | Implement unified audit log per audit-log-spec.md; wire all three writers |
 | **Assigned role** | Developer |
@@ -261,6 +263,7 @@ Milestones are numbered sequentially (M1, M2, …). Phase 2 milestones cover all
 | Field | Value |
 |-------|-------|
 | **ID** | M17 |
+| **Status** | **[x]** — complete (security review delivered; Jim review pending) |
 | **Stream** | Cross-cutting |
 | **Component / Work** | Security review and QA/QC of the unified audit log |
 | **Assigned role** | Security Reviewer, then QA/QC |
@@ -433,6 +436,7 @@ Milestones are numbered sequentially (M1, M2, …). Phase 2 milestones cover all
 | Field | Value |
 |-------|-------|
 | **ID** | M29 |
+| **Status** | **[x]** — complete (Jim approved) |
 | **Stream** | C |
 | **Component / Work** | Behavioral specification for the dashboard skill |
 | **Assigned role** | Spec Writer (preceded by Voice of Customer review) |
@@ -447,6 +451,7 @@ Milestones are numbered sequentially (M1, M2, …). Phase 2 milestones cover all
 | Field | Value |
 |-------|-------|
 | **ID** | M30 |
+| **Status** | **[ ]** — in progress |
 | **Stream** | C |
 | **Component / Work** | Test suite for the dashboard skill, written against dashboard-skill-spec.md |
 | **Assigned role** | Tester |
@@ -489,6 +494,7 @@ Milestones are numbered sequentially (M1, M2, …). Phase 2 milestones cover all
 | Field | Value |
 |-------|-------|
 | **ID** | M33 |
+| **Status** | **[ ]** — in progress |
 | **Stream** | M |
 | **Component / Work** | Supply-Chain Audit Phase 2 — prepare for Phase 2 Rust crate structure |
 | **Assigned role** | Supply-Chain Auditor |
@@ -509,6 +515,7 @@ These milestones run after all Phase 2 component streams have passed QA and Secu
 | Field | Value |
 |-------|-------|
 | **ID** | M34 |
+| **Status** | **[x]** — complete (Jim review pending) |
 | **Stream** | Integration |
 | **Component / Work** | Wire the three long-lived processes together on a real host; validate startup order and health checks |
 | **Assigned role** | Developer, QA/QC |
@@ -523,6 +530,7 @@ These milestones run after all Phase 2 component streams have passed QA and Secu
 | Field | Value |
 |-------|-------|
 | **ID** | M35 |
+| **Status** | **[ ]** — in progress |
 | **Stream** | Integration |
 | **Component / Work** | End-to-end sentinel protocol validation: container output parsing, error cases, malformed output handling |
 | **Assigned role** | QA/QC |
@@ -537,6 +545,7 @@ These milestones run after all Phase 2 component streams have passed QA and Secu
 | Field | Value |
 |-------|-------|
 | **ID** | M36 |
+| **Status** | **[ ]** — in progress |
 | **Stream** | Integration |
 | **Component / Work** | Verify Cato fail-closed behavior: all actions blocked when Cato socket is unreachable |
 | **Assigned role** | QA/QC |
@@ -551,6 +560,7 @@ These milestones run after all Phase 2 component streams have passed QA and Secu
 | Field | Value |
 |-------|-------|
 | **ID** | M37 |
+| **Status** | **[ ]** — in progress |
 | **Stream** | Integration |
 | **Component / Work** | Verify audit log integrity under concurrent writers (all three processes writing simultaneously) |
 | **Assigned role** | QA/QC |
