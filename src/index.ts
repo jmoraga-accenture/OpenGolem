@@ -805,7 +805,10 @@ async function schedulerSendMessage(jid: string, raw: string): Promise<void> {
 async function main(): Promise<void> {
   ensureContainerSystemRunning();
   initDatabase();
-  orchestratorAuditLog = openAuditLog(path.join(DATA_DIR, 'audit.db'), 'orchestrator');
+  orchestratorAuditLog = openAuditLog(
+    path.join(DATA_DIR, 'audit.db'),
+    'orchestrator',
+  );
   loadState();
   seedTuiGroupIfNeeded();
   seedTelegramDmGroupsIfNeeded();

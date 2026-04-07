@@ -734,9 +734,9 @@ describe('M37 — Concurrent Writer Integrity', () => {
     }
 
     // No partial rows — details column must be valid JSON for every row
-    const allRows = db
-      .prepare('SELECT details FROM events')
-      .all() as { details: string }[];
+    const allRows = db.prepare('SELECT details FROM events').all() as {
+      details: string;
+    }[];
     for (const row of allRows) {
       expect(() => JSON.parse(row.details)).not.toThrow();
     }
@@ -806,9 +806,9 @@ describe('M37 — Concurrent Writer Integrity', () => {
     const afterSec = Math.floor(Date.now() / 1000) + 1; // +1 for rounding
 
     const db = new Database(dbPath, { readonly: true });
-    const rows = db
-      .prepare('SELECT occurred_at FROM events')
-      .all() as { occurred_at: number }[];
+    const rows = db.prepare('SELECT occurred_at FROM events').all() as {
+      occurred_at: number;
+    }[];
     db.close();
 
     for (const row of rows) {
