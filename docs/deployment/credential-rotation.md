@@ -29,9 +29,26 @@ When you rotate the credential:
 
 ---
 
+## Time-to-rotation targets
+
+| Scenario | Backend | Target time | Notes |
+|----------|---------|-------------|-------|
+| Planned rotation | `.env` | Under 2 minutes | Edit file → call `rotateCredential` |
+| Planned rotation | Bitwarden | Under 5 minutes | Update vault → call `rotateCredential` (or wait up to `CREDENTIAL_RELOAD_INTERVAL`, default 5 min) |
+| Planned rotation | OneCLI | Under 5 minutes | Update vault → call `rotateCredential` |
+| Emergency rotation | `.env` | Under 2 minutes | Revoke at provider → edit file → call `rotateCredential` with `revokeInFlight: true` |
+| Emergency rotation | Bitwarden | Under 5 minutes | Revoke at provider → update vault → call `rotateCredential` with `revokeInFlight: true` |
+| Emergency rotation | OneCLI | Under 5 minutes | Revoke at provider → update vault → call `rotateCredential` with `revokeInFlight: true` |
+
+**What governs these targets:** The broker's polling interval (`CREDENTIAL_RELOAD_INTERVAL`, default 300000ms / 5 minutes) defines how long a rotated credential takes effect without an explicit `rotateCredential` call. The `rotateCredential` RPC bypasses the poll and takes effect within seconds. Emergency rotation should always use the explicit RPC — do not rely on the polling interval during an active incident.
+
+The container TTL (`CONTAINER_TIMEOUT`, default 1800s) and idle timeout (`IDLE_TIMEOUT`, default 1800s) define the longest-lived derivative tokens. Even if a container's token cannot be actively revoked (e.g., during a broker crash), it will expire at most 30 minutes after issuance. Emergency rotation with `revokeInFlight: true` makes revocation immediate — do not wait for TTL expiry during an active compromise.
+
+---
+
 ## How to invoke `rotateCredential` from the terminal
 
-All three backend types use the same command to trigger the broker reload. The only variable is `revokeInFlight`.
+All three backend types use the same command to trigger the broker reload. The only variable is `revokeInFlight`. Run these commands from the OpenGolem project root directory (where `data/` lives).
 
 **Planned rotation (non-disruptive):**
 
@@ -55,7 +72,7 @@ echo '{"jsonrpc":"2.0","method":"rotateCredential","params":{"revokeInFlight":tr
 
 `revokedCount` tells you how many in-flight derivative tokens were revoked. In a planned rotation this will be `0`. In an emergency rotation it will be the number of agent sessions that were torn down.
 
-If the socket is not reachable, run the command from the OpenGolem project root directory (where `data/` lives).
+If the command hangs, the broker socket is not responding. See `broker-recovery.md` to restore the broker before retrying rotation.
 
 ---
 
@@ -90,13 +107,13 @@ Target time: under 2 minutes.
 
 5. Confirm the response shows `"reloaded": true`.
 
-6. Run the post-rotation verification checklist (§4 below).
+6. Run the post-rotation verification checklist (§5 below).
 
 ### Emergency rotation (suspected compromise)
 
 Target time: under 2 minutes.
 
-1. **Revoke the key at the provider first.** Go to [console.anthropic.com](https://console.anthropic.com) → API Keys → revoke the compromised key. Generate a new key.
+1. **Revoke the key at the provider first.** Go to [console.anthropic.com](https://console.anthropic.com) → API Keys → revoke the compromised key. Generate a new key. This step must happen first — it stops the leaked credential from working at the provider, regardless of what OpenGolem does.
 
 2. Update `.env` with the new key value (step 2 of planned rotation above).
 
@@ -121,7 +138,7 @@ Target time: under 2 minutes.
 
    Expected: one row with a `revokedCount` matching the `revokedCount` in the socket response.
 
-6. Run the post-rotation verification checklist (§4 below).
+6. Run the post-rotation verification checklist (§5 below).
 
 ---
 
@@ -156,7 +173,7 @@ Target time: under 5 minutes.
       ORDER BY timestamp DESC LIMIT 3;"
    ```
 
-7. Run the post-rotation verification checklist (§4 below).
+7. Run the post-rotation verification checklist (§5 below).
 
 ### Emergency rotation (suspected compromise)
 
@@ -193,7 +210,7 @@ Target time: under 5 minutes.
       ORDER BY timestamp DESC LIMIT 10;"
    ```
 
-6. Run the post-rotation verification checklist (§4 below).
+6. Run the post-rotation verification checklist (§5 below).
 
 ---
 
@@ -232,7 +249,7 @@ Target time: under 5 minutes.
       ORDER BY timestamp DESC LIMIT 3;"
    ```
 
-5. Run the post-rotation verification checklist (§4 below).
+5. Run the post-rotation verification checklist (§5 below).
 
 ### Emergency rotation (suspected compromise)
 
@@ -263,7 +280,7 @@ Target time: under 5 minutes.
       ORDER BY timestamp DESC LIMIT 5;"
    ```
 
-5. Run the post-rotation verification checklist (§4 below).
+5. Run the post-rotation verification checklist (§5 below).
 
 ---
 
@@ -280,7 +297,7 @@ Users whose sessions were interrupted will need to re-send their request after y
 
 ---
 
-## 4. Post-Rotation Verification Checklist
+## 5. Post-Rotation Verification Checklist
 
 Run all of these steps after any rotation — planned or emergency.
 
@@ -316,7 +333,7 @@ Send a simple test message via your normal channel (TUI or Telegram). If the age
 
 ### Step 4 — Old credential is fully invalidated (emergency only)
 
-If you performed an emergency rotation, confirm the old key is no longer accepted by the provider (log in to console.anthropic.com and verify the old key is in a Revoked or Deleted state).
+If you performed an emergency rotation, confirm the old key is no longer accepted by the provider. Log in to console.anthropic.com and verify the old key is in a Revoked or Deleted state.
 
 ### Step 5 — No orphaned teardown events
 
@@ -331,3 +348,9 @@ sqlite3 data/audit.db \
 ```
 
 Entries with `"reason": "broker_unavailable"` may indicate a separate broker crash — see `broker-recovery.md` if those appear unexpectedly.
+
+### Step 6 — Confirm verification without exposing the new credential
+
+The verification steps above confirm rotation succeeded without ever displaying the credential value in a terminal or log. The audit log events (`credential_reloaded`, `credential_emergency_rotation`) confirm the broker accepted the new credential from its backend — they do not record the credential value. The health check confirms the broker is operational. The test message confirms end-to-end API connectivity. None of these steps require reading or displaying the new API key.
+
+Do not log, print, or `echo` credential values for verification. The broker's health status and the audit log event are sufficient confirmation.

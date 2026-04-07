@@ -54,25 +54,24 @@ If you get a response, the broker is running (it may have already recovered). If
 **On systemd (Linux):**
 
 ```bash
-# View recent broker logs (substitute the correct service name if different)
+# View recent broker logs
 journalctl -u opengolem-broker --since "30 minutes ago" --no-pager
 
-# If the broker runs as part of a single combined service
+# If running as a combined single service
 journalctl -u opengolem --since "30 minutes ago" --no-pager
 ```
 
 **On launchd (macOS):**
 
 ```bash
-# Check the log files you configured in the plist
-tail -100 /tmp/opengolem-error.log
-tail -100 /tmp/opengolem.log
+# Check the log files configured in the plist
+tail -100 /tmp/opengolem-broker-error.log
+tail -100 /tmp/opengolem-broker.log
 ```
 
 **On WSL / manual start:**
 
 ```bash
-# Check whichever log file your startup script writes to
 tail -100 logs/opengolem.log 2>/dev/null || tail -100 /tmp/opengolem.log 2>/dev/null
 ```
 
@@ -106,18 +105,30 @@ npm run build
 
 ### Step 4 — Restart the broker
 
-**Systemd (Linux):**
+**Systemd (Linux) — separate service units (recommended):**
+
+```bash
+# Start broker first (it has no dependencies on Cato or Orchestrator)
+sudo systemctl restart opengolem-broker
+
+# Wait for broker to bind its socket (usually 2–5 seconds)
+sleep 5
+
+# The orchestrator's reconnect loop will detect the broker automatically
+# Only restart the orchestrator if it is not running
+sudo systemctl is-active opengolem-orchestrator || sudo systemctl restart opengolem-orchestrator
+```
+
+**Systemd (Linux) — combined service unit:**
 
 ```bash
 sudo systemctl restart opengolem
-# or if the broker is a separate service
-sudo systemctl restart opengolem-broker
 ```
 
 **Launchd (macOS):**
 
 ```bash
-launchctl kickstart -k gui/$(id -u)/com.opengolem
+launchctl kickstart -k gui/$(id -u)/com.opengolem.broker
 ```
 
 **WSL / manual:**
@@ -212,59 +223,355 @@ A truncated or syntactically broken file indicates the container was writing to 
 
 ---
 
-## Prevention: Recommended service configuration
+## Target restart time and SLA guidance
 
-The most effective prevention is ensuring the broker process restarts automatically if it crashes. The orchestrator's reconnect loop means that a fast broker restart (within 30–60 seconds) will be transparent to most users.
+**Default TTL values** (from `src/config.ts`):
 
-### Systemd `Restart=always` (Linux)
+| Setting | Default | What it governs |
+|---------|---------|----------------|
+| `CONTAINER_TIMEOUT` | 1800s (30 min) | Maximum container lifetime from spawn |
+| `IDLE_TIMEOUT` | 1800s (30 min) | Container lifetime after last result received |
+| `CREDENTIAL_RELOAD_INTERVAL` | 300s (5 min) | Broker backend polling interval |
 
-Add these lines to your service unit file (or confirm they are present):
+**Restart time target:** The orchestrator's reconnect loop retries every 10 seconds. A broker restart that completes within **30–60 seconds** will be transparent to most users — the orchestrator re-queues inbound messages during the outage and resumes dispatch once the broker reconnects.
 
-```ini
-[Service]
-Restart=always
-RestartSec=2
+**Acceptable restart window:** Up to 120 seconds is acceptable without operator escalation. Beyond 120 seconds, manually check the broker logs (Step 2 above) and escalate if the cause is not immediately clear.
+
+**Relationship to TTL:** A broker outage shorter than the shortest TTL (30 minutes) means no container tokens expire mid-outage due to TTL. All active containers are torn down immediately on broker loss detection — not at TTL expiry. The TTL is the worst-case bound for how long a derivative token could theoretically be active without revocation if the broker were somehow unavailable and teardown had not occurred.
+
+---
+
+## 5. Process Supervisor Configuration
+
+### 5.1 Architecture: three separate long-lived processes
+
+The three long-lived processes start in this order and must not restart each other:
+
+```
+Token Broker  →  Cato  →  Orchestrator
 ```
 
-`RestartSec=2` gives the process 2 seconds after a crash before systemd attempts a restart. This avoids rapid-restart loops if the broker is crashing immediately on startup (which indicates a configuration error that needs operator attention).
+The orchestrator contacts both the broker and Cato at boot for health checks. It must not start until both are listening on their sockets. The broker and Cato are independent — neither depends on the other at startup.
 
-Apply the change:
+### 5.2 Systemd unit files (Linux) — recommended production configuration
+
+Create three separate unit files. The paths below assume the service account is `opengolem` and the installation directory is `/opt/opengolem`. Adjust as needed.
+
+**`/etc/systemd/system/opengolem-broker.service`**
+
+```ini
+[Unit]
+Description=OpenGolem Token Broker
+Documentation=https://github.com/your-repo/OpenGolem
+After=network.target docker.service
+Wants=docker.service
+
+[Service]
+Type=simple
+User=opengolem
+Group=opengolem
+WorkingDirectory=/opt/opengolem
+EnvironmentFile=/opt/opengolem/.env
+ExecStartPre=/bin/rm -f /opt/opengolem/data/sockets/broker.sock
+ExecStartPre=/bin/rm -f /opt/opengolem/data/sockets/escalation.sock
+ExecStart=/usr/bin/node dist/broker/index.js
+Restart=always
+RestartSec=2
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=opengolem-broker
+
+# Socket permissions: broker.sock and escalation.sock must be 600
+ExecStartPost=/bin/bash -c 'sleep 1 && chmod 600 /opt/opengolem/data/sockets/broker.sock 2>/dev/null; chmod 600 /opt/opengolem/data/sockets/escalation.sock 2>/dev/null; true'
+
+[Install]
+WantedBy=multi-user.target
+```
+
+**`/etc/systemd/system/opengolem-cato.service`**
+
+```ini
+[Unit]
+Description=OpenGolem Cato Oversight Process
+Documentation=https://github.com/your-repo/OpenGolem
+After=network.target
+
+[Service]
+Type=simple
+User=opengolem
+Group=opengolem
+WorkingDirectory=/opt/opengolem
+EnvironmentFile=/opt/opengolem/.env
+ExecStartPre=/bin/rm -f /opt/opengolem/data/sockets/cato.sock
+ExecStart=/usr/bin/node dist/cato/index.js
+Restart=always
+RestartSec=2
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=opengolem-cato
+
+ExecStartPost=/bin/bash -c 'sleep 1 && chmod 600 /opt/opengolem/data/sockets/cato.sock 2>/dev/null; true'
+
+[Install]
+WantedBy=multi-user.target
+```
+
+**`/etc/systemd/system/opengolem-orchestrator.service`**
+
+```ini
+[Unit]
+Description=OpenGolem Orchestrator
+Documentation=https://github.com/your-repo/OpenGolem
+# Orchestrator must start after broker and Cato are ready
+After=opengolem-broker.service opengolem-cato.service docker.service
+Requires=opengolem-broker.service opengolem-cato.service docker.service
+
+[Service]
+Type=simple
+User=opengolem
+Group=opengolem
+WorkingDirectory=/opt/opengolem
+EnvironmentFile=/opt/opengolem/.env
+ExecStart=/usr/bin/node \
+  --experimental-permission \
+  --allow-fs-read=/opt/opengolem/groups/,/opt/opengolem/data/,/opt/opengolem/runtime/,/opt/opengolem/package.json \
+  --allow-fs-write=/opt/opengolem/groups/,/opt/opengolem/data/ \
+  --allow-child-process \
+  --allow-worker \
+  dist/index.js
+Restart=always
+RestartSec=2
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=opengolem-orchestrator
+
+[Install]
+WantedBy=multi-user.target
+```
+
+**Enable and start all three services:**
 
 ```bash
 sudo systemctl daemon-reload
-sudo systemctl restart opengolem
+sudo systemctl enable opengolem-broker opengolem-cato opengolem-orchestrator
+sudo systemctl start opengolem-broker opengolem-cato
+# Wait for broker and Cato to bind their sockets before starting the orchestrator
+sleep 5
+sudo systemctl start opengolem-orchestrator
 ```
 
-Verify the restart policy is in effect:
+**Verify all three are running:**
 
 ```bash
-systemctl show opengolem -p Restart -p RestartSec
+sudo systemctl status opengolem-broker opengolem-cato opengolem-orchestrator
 ```
 
-Expected:
+**Check restart policy is in effect:**
 
+```bash
+systemctl show opengolem-broker -p Restart -p RestartSec
+systemctl show opengolem-cato -p Restart -p RestartSec
+systemctl show opengolem-orchestrator -p Restart -p RestartSec
+```
+
+Expected for each:
 ```
 Restart=always
 RestartSec=2s
 ```
 
-### Launchd `KeepAlive` (macOS)
-
-In your launchd plist, confirm `KeepAlive` is set to `true`:
-
-```xml
-<key>KeepAlive</key>
-<true/>
-```
-
-With `KeepAlive` set, launchd will restart the process automatically after a crash. Unlike systemd, launchd does not have a configurable restart delay — it uses an exponential backoff automatically.
-
-Reload the plist to apply any changes:
+**View live logs from all three processes:**
 
 ```bash
-launchctl unload ~/Library/LaunchAgents/com.opengolem.plist
-launchctl load ~/Library/LaunchAgents/com.opengolem.plist
+journalctl -u opengolem-broker -u opengolem-cato -u opengolem-orchestrator -f
 ```
+
+### 5.3 Launchd configuration (macOS)
+
+The existing `deploy/service/com.opengolem.plist` covers a single combined process. For production macOS deployments, create three separate plist files.
+
+**`~/Library/LaunchAgents/com.opengolem.broker.plist`**
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.opengolem.broker</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/usr/local/bin/node</string>
+    <string>dist/broker/index.js</string>
+  </array>
+  <key>WorkingDirectory</key>
+  <string>/Users/yourname/assistants/OpenGolem</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>/usr/local/bin:/usr/bin:/bin</string>
+    <key>HOME</key>
+    <string>/Users/yourname</string>
+  </dict>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>StandardOutPath</key>
+  <string>/tmp/opengolem-broker.log</string>
+  <key>StandardErrorPath</key>
+  <string>/tmp/opengolem-broker-error.log</string>
+</dict>
+</plist>
+```
+
+**`~/Library/LaunchAgents/com.opengolem.cato.plist`**
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.opengolem.cato</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/usr/local/bin/node</string>
+    <string>dist/cato/index.js</string>
+  </array>
+  <key>WorkingDirectory</key>
+  <string>/Users/yourname/assistants/OpenGolem</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>/usr/local/bin:/usr/bin:/bin</string>
+    <key>HOME</key>
+    <string>/Users/yourname</string>
+  </dict>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>StandardOutPath</key>
+  <string>/tmp/opengolem-cato.log</string>
+  <key>StandardErrorPath</key>
+  <string>/tmp/opengolem-cato-error.log</string>
+</dict>
+</plist>
+```
+
+**`~/Library/LaunchAgents/com.opengolem.orchestrator.plist`**
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.opengolem.orchestrator</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/usr/local/bin/node</string>
+    <string>--experimental-permission</string>
+    <string>--allow-fs-read=/Users/yourname/assistants/OpenGolem/groups/,/Users/yourname/assistants/OpenGolem/data/,/Users/yourname/assistants/OpenGolem/runtime/,/Users/yourname/assistants/OpenGolem/package.json</string>
+    <string>--allow-fs-write=/Users/yourname/assistants/OpenGolem/groups/,/Users/yourname/assistants/OpenGolem/data/</string>
+    <string>--allow-child-process</string>
+    <string>--allow-worker</string>
+    <string>dist/index.js</string>
+  </array>
+  <key>WorkingDirectory</key>
+  <string>/Users/yourname/assistants/OpenGolem</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>/usr/local/bin:/usr/bin:/bin</string>
+    <key>HOME</key>
+    <string>/Users/yourname</string>
+    <key>ASSISTANT_NAME</key>
+    <string>Alef</string>
+  </dict>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>StandardOutPath</key>
+  <string>/tmp/opengolem-orchestrator.log</string>
+  <key>StandardErrorPath</key>
+  <string>/tmp/opengolem-orchestrator-error.log</string>
+</dict>
+</plist>
+```
+
+**Load all three agents (in order):**
+
+```bash
+# Load broker and Cato first
+launchctl load ~/Library/LaunchAgents/com.opengolem.broker.plist
+launchctl load ~/Library/LaunchAgents/com.opengolem.cato.plist
+
+# Wait for broker and Cato to bind their sockets
+sleep 5
+
+# Load the orchestrator last
+launchctl load ~/Library/LaunchAgents/com.opengolem.orchestrator.plist
+```
+
+**Verify all three are running:**
+
+```bash
+launchctl list | grep com.opengolem
+```
+
+Expected: three rows, each with a PID (not `-`) in the first column.
+
+**Restart a specific process:**
+
+```bash
+launchctl kickstart -k gui/$(id -u)/com.opengolem.broker
+launchctl kickstart -k gui/$(id -u)/com.opengolem.cato
+launchctl kickstart -k gui/$(id -u)/com.opengolem.orchestrator
+```
+
+**Unload all three (e.g. for maintenance):**
+
+```bash
+launchctl unload ~/Library/LaunchAgents/com.opengolem.orchestrator.plist
+launchctl unload ~/Library/LaunchAgents/com.opengolem.cato.plist
+launchctl unload ~/Library/LaunchAgents/com.opengolem.broker.plist
+```
+
+Note: launchd does not support explicit `After=` dependency ordering between agents. The orchestrator is started after broker and Cato because of the explicit `sleep 5` above. The orchestrator will also retry its startup health check at boot — if the broker or Cato socket is not yet available when the orchestrator starts, it will wait and retry rather than failing immediately.
+
+### 5.4 Startup order note for all platforms
+
+The startup order **Token Broker → Cato → Orchestrator** is required. The orchestrator performs a health check against both the broker socket (`data/sockets/broker.sock`) and the Cato socket (`data/sockets/cato.sock`) at boot. If either socket is not available, the orchestrator queues inbound messages and does not spawn containers until both dependencies are healthy.
+
+Starting the orchestrator before the broker or Cato is safe — it will wait — but will cause log warnings during the startup window. On systemd, the `After=` and `Requires=` directives enforce this order automatically.
+
+---
+
+## Prevention: Recommended service configuration
+
+The most effective prevention is ensuring the broker process restarts automatically if it crashes. The orchestrator's reconnect loop means that a fast broker restart (within 30–60 seconds) will be transparent to most users.
+
+### Systemd `Restart=always`
+
+The unit files in §5.2 already include `Restart=always` and `RestartSec=2`. Verify this is in effect after any unit file edit:
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl restart opengolem-broker
+systemctl show opengolem-broker -p Restart -p RestartSec
+```
+
+`RestartSec=2` gives the process 2 seconds after a crash before systemd attempts a restart. This avoids rapid-restart loops if the broker is crashing immediately on startup (which indicates a configuration error that needs operator attention). If the broker crashes more than 5 times in 10 seconds, systemd will stop restarting it — check `journalctl -u opengolem-broker -n 50` to diagnose.
+
+### Launchd `KeepAlive`
+
+In each launchd plist, `KeepAlive` is set to `true`. With `KeepAlive` set, launchd will restart the process automatically after a crash with exponential backoff.
 
 ---
 
@@ -281,7 +588,16 @@ echo '{"jsonrpc":"2.0","method":"health","params":{},"id":1}' | \
 
 Expected: `{"jsonrpc":"2.0","result":{"status":"ok"},"id":1}`
 
-### Step 2 — Broker reconnected event is in the audit log
+### Step 2 — Cato socket exists and responds
+
+```bash
+echo '{"jsonrpc":"2.0","method":"health","params":{},"id":1}' | \
+  nc -U data/sockets/cato.sock
+```
+
+Expected: `{"jsonrpc":"2.0","result":{"status":"ok"},"id":1}`
+
+### Step 3 — Broker reconnected event is in the audit log
 
 ```bash
 sqlite3 data/audit.db \
@@ -292,7 +608,7 @@ sqlite3 data/audit.db \
 
 Expected: a timestamp within the last few minutes.
 
-### Step 3 — No unexpected teardown events since recovery
+### Step 4 — No unexpected teardown events since recovery
 
 ```bash
 sqlite3 data/audit.db \
@@ -303,28 +619,32 @@ sqlite3 data/audit.db \
 
 Expected: `0` (any teardown events during recovery are accounted for; new ones indicate a recurring problem).
 
-### Step 4 — New tasks are dispatched successfully
+### Step 5 — New tasks are dispatched successfully
 
 Send a test message via your channel. Confirm the agent responds. If it does not respond within the normal response time, check the orchestrator logs for further errors.
 
-### Step 5 — Restart policy is confirmed
+### Step 6 — Restart policy is confirmed
 
 **Systemd:**
 
 ```bash
-systemctl show opengolem -p Restart -p RestartSec
+systemctl show opengolem-broker -p Restart -p RestartSec
+systemctl show opengolem-cato -p Restart -p RestartSec
+systemctl show opengolem-orchestrator -p Restart -p RestartSec
 ```
 
-Expected: `Restart=always` and `RestartSec=2s`.
+Expected: `Restart=always` and `RestartSec=2s` for each.
 
 **Launchd:**
 
 ```bash
-grep -A1 KeepAlive ~/Library/LaunchAgents/com.opengolem.plist
+grep -A1 KeepAlive ~/Library/LaunchAgents/com.opengolem.broker.plist
+grep -A1 KeepAlive ~/Library/LaunchAgents/com.opengolem.cato.plist
+grep -A1 KeepAlive ~/Library/LaunchAgents/com.opengolem.orchestrator.plist
 ```
 
-Expected: `<true/>` on the line following `<key>KeepAlive</key>`.
+Expected: `<true/>` on the line following each `<key>KeepAlive</key>`.
 
-### Step 6 — Interrupted users have been notified
+### Step 7 — Interrupted users have been notified
 
 Confirm that each `contextId` from the `broker_loss_teardown` query (Step 7 of the recovery procedure) has been either notified automatically by the orchestrator or manually informed that they should re-send their request.
