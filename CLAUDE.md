@@ -6,7 +6,7 @@ Security-first personal AI assistant. See `docs/ARCHITECTURE.md` for architectur
 
 Single Node.js process (v1.0-dev branch, Phase 2 development in progress). Channels: **TUI + Telegram** (v1.0 defaults, Decision 30). Messages route to Claude Agent SDK running in isolated Linux containers. Each group has its own filesystem, memory, and container sandbox. Credentials are mediated via Token Broker — agents never see raw API keys.
 
-**Current phase:** M12/M16/M17 complete (Token Broker, Skill Schema, Memory Tiers implemented). 563 tests passing. See `docs/PLAN_V1.md` for milestone status and `docs/PM_BRIEF.md` for open decisions.
+**Current phase:** M12/M18/M20 developer implementations complete (Token Broker, Skill Schema, Memory Tiers). 729 tests passing. Plan approved 2026-04-07. See `docs/PLAN_V1.md` for milestone status and `docs/PM_BRIEF.md` for open decisions.
 
 ## Key Files
 
