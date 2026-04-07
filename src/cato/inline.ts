@@ -269,6 +269,10 @@ export function startCatoInlineHook(): net.Server {
   });
 
   catoServer.listen(socketPath, () => {
+    // Restrict socket to owner-only access — prevents local processes
+    // running as other users from connecting to Cato (hardening, matches
+    // broker socket pattern in src/broker/server.ts).
+    fs.chmodSync(socketPath, 0o600);
     logger.info({ socketPath }, 'Cato: inline hook listening');
   });
 
