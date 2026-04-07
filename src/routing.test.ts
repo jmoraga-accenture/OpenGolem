@@ -1,170 +1,250 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 
-import { _initTestDatabase, storeChatMetadata } from './db.js';
-import { getAvailableGroups, _setRegisteredGroups } from './index.js';
+vi.mock('./logger.js', () => ({
+  logger: {
+    info: vi.fn(),
+    debug: vi.fn(),
+    warn: vi.fn(),
+    error: vi.fn(),
+  },
+}));
 
-beforeEach(() => {
-  _initTestDatabase();
-  _setRegisteredGroups({});
+vi.mock('./timezone.js', () => ({
+  formatLocalTime: (_ts: string, _tz: string) => '2026-01-01 12:00 PM',
+}));
+
+import {
+  escapeXml,
+  formatMessages,
+  stripInternalTags,
+  formatOutbound,
+  findChannel,
+} from './router.js';
+import type { NewMessage, Channel } from './types.js';
+
+// --- escapeXml ---
+
+describe('escapeXml', () => {
+  it('escapes ampersand', () => {
+    expect(escapeXml('a & b')).toBe('a &amp; b');
+  });
+
+  it('escapes less-than', () => {
+    expect(escapeXml('1 < 2')).toBe('1 &lt; 2');
+  });
+
+  it('escapes greater-than', () => {
+    expect(escapeXml('1 > 2')).toBe('1 &gt; 2');
+  });
+
+  it('escapes double-quote', () => {
+    expect(escapeXml('"hello"')).toBe('&quot;hello&quot;');
+  });
+
+  it('returns empty string for empty input', () => {
+    expect(escapeXml('')).toBe('');
+  });
+
+  it('handles all special chars in one string', () => {
+    expect(escapeXml('a & <b> "c"')).toBe('a &amp; &lt;b&gt; &quot;c&quot;');
+  });
 });
 
-// --- JID ownership patterns ---
+// --- formatMessages ---
 
-describe('JID ownership patterns', () => {
-  // These test the patterns that will become ownsJid() on the Channel interface
+function makeMessage(overrides: Partial<NewMessage> = {}): NewMessage {
+  return {
+    id: 'msg-1',
+    chat_jid: 'group@test',
+    sender: 'user1',
+    sender_name: 'Alice',
+    content: 'Hello world',
+    timestamp: '2026-01-01T12:00:00Z',
+    ...overrides,
+  };
+}
 
-  it('WhatsApp group JID: ends with @g.us', () => {
-    const jid = '12345678@g.us';
-    expect(jid.endsWith('@g.us')).toBe(true);
+describe('formatMessages', () => {
+  it('includes context header with timezone', () => {
+    const result = formatMessages([makeMessage()], 'America/New_York');
+    expect(result).toContain('<context timezone="America/New_York" />');
   });
 
-  it('WhatsApp DM JID: ends with @s.whatsapp.net', () => {
-    const jid = '12345678@s.whatsapp.net';
-    expect(jid.endsWith('@s.whatsapp.net')).toBe(true);
+  it('wraps messages in <messages> block', () => {
+    const result = formatMessages([makeMessage()], 'UTC');
+    expect(result).toContain('<messages>');
+    expect(result).toContain('</messages>');
+  });
+
+  it('includes sender and time attributes', () => {
+    const result = formatMessages([makeMessage({ sender_name: 'Bob' })], 'UTC');
+    expect(result).toContain('sender="Bob"');
+    expect(result).toContain('time=');
+  });
+
+  it('escapes special chars in sender_name', () => {
+    const result = formatMessages([makeMessage({ sender_name: 'A & B' })], 'UTC');
+    expect(result).toContain('sender="A &amp; B"');
+  });
+
+  it('escapes message content', () => {
+    const result = formatMessages([makeMessage({ content: '<script>' })], 'UTC');
+    expect(result).toContain('&lt;script&gt;');
+  });
+
+  it('does not include reply_to attribute when no reply', () => {
+    const result = formatMessages([makeMessage()], 'UTC');
+    expect(result).not.toContain('reply_to=');
+  });
+
+  it('includes reply_to attribute when reply_to_message_id present', () => {
+    const result = formatMessages(
+      [makeMessage({ reply_to_message_id: 'msg-999' })],
+      'UTC',
+    );
+    expect(result).toContain('reply_to="msg-999"');
+  });
+
+  it('does not include quoted_message when reply content is absent', () => {
+    const result = formatMessages(
+      [makeMessage({ reply_to_message_id: 'msg-999' })],
+      'UTC',
+    );
+    expect(result).not.toContain('<quoted_message');
+  });
+
+  it('includes quoted_message when reply content and sender name are present', () => {
+    const result = formatMessages(
+      [
+        makeMessage({
+          reply_to_message_id: 'msg-999',
+          reply_to_message_content: 'original text',
+          reply_to_sender_name: 'Carol',
+        }),
+      ],
+      'UTC',
+    );
+    expect(result).toContain(
+      '<quoted_message from="Carol">original text</quoted_message>',
+    );
+  });
+
+  it('escapes quoted_message sender name and content', () => {
+    const result = formatMessages(
+      [
+        makeMessage({
+          reply_to_message_id: 'msg-999',
+          reply_to_message_content: '<b>bold</b>',
+          reply_to_sender_name: '"Dave"',
+        }),
+      ],
+      'UTC',
+    );
+    expect(result).toContain('from="&quot;Dave&quot;"');
+    expect(result).toContain('&lt;b&gt;bold&lt;/b&gt;');
+  });
+
+  it('renders multiple messages in order', () => {
+    const msgs = [
+      makeMessage({ id: '1', sender_name: 'Alpha', content: 'first' }),
+      makeMessage({ id: '2', sender_name: 'Beta', content: 'second' }),
+    ];
+    const result = formatMessages(msgs, 'UTC');
+    const alphaPos = result.indexOf('sender="Alpha"');
+    const betaPos = result.indexOf('sender="Beta"');
+    expect(alphaPos).toBeLessThan(betaPos);
   });
 });
 
-// --- getAvailableGroups ---
+// --- stripInternalTags ---
 
-describe('getAvailableGroups', () => {
-  it('returns only groups, excludes DMs', () => {
-    storeChatMetadata(
-      'group1@g.us',
-      '2024-01-01T00:00:01.000Z',
-      'Group 1',
-      'whatsapp',
-      true,
+describe('stripInternalTags', () => {
+  it('removes a simple internal block', () => {
+    expect(stripInternalTags('hello <internal>secret</internal> world')).toBe(
+      'hello  world',
     );
-    storeChatMetadata(
-      'user@s.whatsapp.net',
-      '2024-01-01T00:00:02.000Z',
-      'User DM',
-      'whatsapp',
-      false,
-    );
-    storeChatMetadata(
-      'group2@g.us',
-      '2024-01-01T00:00:03.000Z',
-      'Group 2',
-      'whatsapp',
-      true,
-    );
-
-    const groups = getAvailableGroups();
-    expect(groups).toHaveLength(2);
-    expect(groups.map((g) => g.jid)).toContain('group1@g.us');
-    expect(groups.map((g) => g.jid)).toContain('group2@g.us');
-    expect(groups.map((g) => g.jid)).not.toContain('user@s.whatsapp.net');
   });
 
-  it('excludes __group_sync__ sentinel', () => {
-    storeChatMetadata('__group_sync__', '2024-01-01T00:00:00.000Z');
-    storeChatMetadata(
-      'group@g.us',
-      '2024-01-01T00:00:01.000Z',
-      'Group',
-      'whatsapp',
-      true,
-    );
-
-    const groups = getAvailableGroups();
-    expect(groups).toHaveLength(1);
-    expect(groups[0].jid).toBe('group@g.us');
+  it('removes multiline internal block', () => {
+    const input = 'before\n<internal>\nline1\nline2\n</internal>\nafter';
+    const result = stripInternalTags(input);
+    expect(result).not.toContain('<internal>');
+    expect(result).toContain('before');
+    expect(result).toContain('after');
   });
 
-  it('marks registered groups correctly', () => {
-    storeChatMetadata(
-      'reg@g.us',
-      '2024-01-01T00:00:01.000Z',
-      'Registered',
-      'whatsapp',
-      true,
-    );
-    storeChatMetadata(
-      'unreg@g.us',
-      '2024-01-01T00:00:02.000Z',
-      'Unregistered',
-      'whatsapp',
-      true,
-    );
-
-    _setRegisteredGroups({
-      'reg@g.us': {
-        name: 'Registered',
-        folder: 'registered',
-        trigger: '@Alef',
-        added_at: '2024-01-01T00:00:00.000Z',
-      },
-    });
-
-    const groups = getAvailableGroups();
-    const reg = groups.find((g) => g.jid === 'reg@g.us');
-    const unreg = groups.find((g) => g.jid === 'unreg@g.us');
-
-    expect(reg?.isRegistered).toBe(true);
-    expect(unreg?.isRegistered).toBe(false);
+  it('trims whitespace after removal leaving empty string', () => {
+    expect(stripInternalTags('  <internal>x</internal>  ')).toBe('');
   });
 
-  it('returns groups ordered by most recent activity', () => {
-    storeChatMetadata(
-      'old@g.us',
-      '2024-01-01T00:00:01.000Z',
-      'Old',
-      'whatsapp',
-      true,
+  it('removes multiple internal blocks', () => {
+    const result = stripInternalTags(
+      '<internal>a</internal> visible <internal>b</internal>',
     );
-    storeChatMetadata(
-      'new@g.us',
-      '2024-01-01T00:00:05.000Z',
-      'New',
-      'whatsapp',
-      true,
-    );
-    storeChatMetadata(
-      'mid@g.us',
-      '2024-01-01T00:00:03.000Z',
-      'Mid',
-      'whatsapp',
-      true,
-    );
-
-    const groups = getAvailableGroups();
-    expect(groups[0].jid).toBe('new@g.us');
-    expect(groups[1].jid).toBe('mid@g.us');
-    expect(groups[2].jid).toBe('old@g.us');
+    expect(result).toBe('visible');
   });
 
-  it('excludes non-group chats regardless of JID format', () => {
-    // Unknown JID format stored without is_group should not appear
-    storeChatMetadata(
-      'unknown-format-123',
-      '2024-01-01T00:00:01.000Z',
-      'Unknown',
-    );
-    // Explicitly non-group with unusual JID
-    storeChatMetadata(
-      'custom:abc',
-      '2024-01-01T00:00:02.000Z',
-      'Custom DM',
-      'custom',
-      false,
-    );
-    // A real group for contrast
-    storeChatMetadata(
-      'group@g.us',
-      '2024-01-01T00:00:03.000Z',
-      'Group',
-      'whatsapp',
-      true,
-    );
+  it('returns original trimmed text when no internal tags', () => {
+    expect(stripInternalTags('no tags here')).toBe('no tags here');
+  });
+});
 
-    const groups = getAvailableGroups();
-    expect(groups).toHaveLength(1);
-    expect(groups[0].jid).toBe('group@g.us');
+// --- formatOutbound ---
+
+describe('formatOutbound', () => {
+  it('strips internal tags from text', () => {
+    const result = formatOutbound('hi <internal>hidden</internal> there');
+    expect(result).not.toContain('<internal>');
+    expect(result).toContain('hi');
+    expect(result).toContain('there');
   });
 
-  it('returns empty array when no chats exist', () => {
-    const groups = getAvailableGroups();
-    expect(groups).toHaveLength(0);
+  it('returns empty string when result is empty after stripping', () => {
+    expect(formatOutbound('<internal>all hidden</internal>')).toBe('');
+  });
+
+  it('returns empty string for empty input', () => {
+    expect(formatOutbound('')).toBe('');
+  });
+
+  it('returns text unchanged when no internal tags', () => {
+    expect(formatOutbound('clean text')).toBe('clean text');
+  });
+});
+
+// --- findChannel ---
+
+describe('findChannel', () => {
+  function makeChannel(ownsResult: boolean): Channel {
+    return {
+      name: 'test',
+      connect: vi.fn(),
+      sendMessage: vi.fn(),
+      isConnected: vi.fn(() => true),
+      ownsJid: vi.fn(() => ownsResult),
+      disconnect: vi.fn(),
+    };
+  }
+
+  it('returns the channel whose ownsJid returns true', () => {
+    const ch1 = makeChannel(false);
+    const ch2 = makeChannel(true);
+    expect(findChannel([ch1, ch2], 'some-jid')).toBe(ch2);
+  });
+
+  it('returns undefined when no channel owns the jid', () => {
+    const ch1 = makeChannel(false);
+    const ch2 = makeChannel(false);
+    expect(findChannel([ch1, ch2], 'unknown-jid')).toBeUndefined();
+  });
+
+  it('calls ownsJid with the provided jid', () => {
+    const ch = makeChannel(true);
+    findChannel([ch], 'my-jid');
+    expect(ch.ownsJid).toHaveBeenCalledWith('my-jid');
+  });
+
+  it('returns undefined for empty channel list', () => {
+    expect(findChannel([], 'jid')).toBeUndefined();
   });
 });

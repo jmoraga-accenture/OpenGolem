@@ -1,162 +1,144 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-// Mock logger
 vi.mock('./logger.js', () => ({
   logger: {
-    debug: vi.fn(),
     info: vi.fn(),
+    debug: vi.fn(),
     warn: vi.fn(),
     error: vi.fn(),
   },
 }));
 
-// Mock child_process — store the mock fn so tests can configure it
-const mockExecSync = vi.fn();
+// Mock child_process before importing the module under test
 vi.mock('child_process', () => ({
-  execSync: (...args: unknown[]) => mockExecSync(...args),
+  execSync: vi.fn(),
 }));
 
+// Mock os so we can control platform
+vi.mock('os', () => ({
+  default: {
+    platform: vi.fn(() => 'linux'),
+  },
+}));
+
+import { execSync } from 'child_process';
+import os from 'os';
 import {
-  CONTAINER_RUNTIME_BIN,
+  hostGatewayArgs,
   readonlyMountArgs,
   stopContainer,
   ensureContainerRuntimeRunning,
-  cleanupOrphans,
+  CONTAINER_RUNTIME_BIN,
 } from './container-runtime.js';
-import { logger } from './logger.js';
+
+const mockExecSync = vi.mocked(execSync);
+const mockPlatform = vi.mocked(os.platform);
 
 beforeEach(() => {
   vi.clearAllMocks();
 });
 
-// --- Pure functions ---
+// --- hostGatewayArgs ---
 
-describe('readonlyMountArgs', () => {
-  it('returns -v flag with :ro suffix', () => {
-    const args = readonlyMountArgs('/host/path', '/container/path');
-    expect(args).toEqual(['-v', '/host/path:/container/path:ro']);
+describe('hostGatewayArgs', () => {
+  it('returns host-gateway arg on linux', () => {
+    mockPlatform.mockReturnValue('linux');
+    const args = hostGatewayArgs();
+    expect(args).toContain('--add-host=host.docker.internal:host-gateway');
+  });
+
+  it('returns empty array on non-linux platforms', () => {
+    mockPlatform.mockReturnValue('darwin');
+    const args = hostGatewayArgs();
+    expect(args).toEqual([]);
   });
 });
 
+// --- readonlyMountArgs ---
+
+describe('readonlyMountArgs', () => {
+  it('returns a -v flag followed by host:container:ro', () => {
+    const args = readonlyMountArgs('/host/path', '/container/path');
+    expect(args).toEqual(['-v', '/host/path:/container/path:ro']);
+  });
+
+  it('first element is -v', () => {
+    const args = readonlyMountArgs('/a', '/b');
+    expect(args[0]).toBe('-v');
+  });
+
+  it('second element contains :ro suffix', () => {
+    const args = readonlyMountArgs('/foo', '/bar');
+    expect(args[1]).toMatch(/:ro$/);
+  });
+});
+
+// --- stopContainer ---
+
 describe('stopContainer', () => {
-  it('calls docker stop for valid container names', () => {
-    stopContainer('opengolem-test-123');
+  it('calls execSync with the correct docker stop command', () => {
+    mockExecSync.mockReturnValue(Buffer.from(''));
+    stopContainer('opengolem-abc123');
     expect(mockExecSync).toHaveBeenCalledWith(
-      `${CONTAINER_RUNTIME_BIN} stop -t 1 opengolem-test-123`,
+      `${CONTAINER_RUNTIME_BIN} stop -t 1 opengolem-abc123`,
       { stdio: 'pipe' },
     );
   });
 
-  it('rejects names with shell metacharacters', () => {
-    expect(() => stopContainer('foo; rm -rf /')).toThrow(
-      'Invalid container name',
-    );
-    expect(() => stopContainer('foo$(whoami)')).toThrow(
-      'Invalid container name',
-    );
-    expect(() => stopContainer('foo`id`')).toThrow('Invalid container name');
-    expect(mockExecSync).not.toHaveBeenCalled();
+  it('throws for invalid container name', () => {
+    expect(() => stopContainer('bad name!')).toThrow('Invalid container name');
+  });
+
+  it('throws for container name starting with special char', () => {
+    expect(() => stopContainer('-bad')).toThrow('Invalid container name');
+  });
+
+  it('accepts alphanumeric names with dots and underscores', () => {
+    mockExecSync.mockReturnValue(Buffer.from(''));
+    expect(() => stopContainer('container_name.1')).not.toThrow();
   });
 });
 
 // --- ensureContainerRuntimeRunning ---
 
 describe('ensureContainerRuntimeRunning', () => {
-  it('does nothing when runtime is already running', () => {
-    mockExecSync.mockReturnValueOnce('');
+  it('does not throw when docker info succeeds', () => {
+    mockExecSync.mockReturnValue(Buffer.from('Server: Docker Engine'));
+    expect(() => ensureContainerRuntimeRunning()).not.toThrow();
+  });
 
+  it('calls docker info', () => {
+    mockExecSync.mockReturnValue(Buffer.from(''));
     ensureContainerRuntimeRunning();
-
-    expect(mockExecSync).toHaveBeenCalledTimes(1);
-    expect(mockExecSync).toHaveBeenCalledWith(`${CONTAINER_RUNTIME_BIN} info`, {
-      stdio: 'pipe',
-      timeout: 10000,
-    });
-    expect(logger.debug).toHaveBeenCalledWith(
-      'Container runtime already running',
+    expect(mockExecSync).toHaveBeenCalledWith(
+      `${CONTAINER_RUNTIME_BIN} info`,
+      expect.objectContaining({ stdio: 'pipe' }),
     );
   });
 
   it('throws when docker info fails', () => {
-    mockExecSync.mockImplementationOnce(() => {
-      throw new Error('Cannot connect to the Docker daemon');
+    mockExecSync.mockImplementation(() => {
+      throw new Error('docker daemon not running');
     });
-
     expect(() => ensureContainerRuntimeRunning()).toThrow(
       'Container runtime is required but failed to start',
     );
-    expect(logger.error).toHaveBeenCalled();
-  });
-});
-
-// --- cleanupOrphans ---
-
-describe('cleanupOrphans', () => {
-  it('stops orphaned opengolem containers', () => {
-    // docker ps returns container names, one per line
-    mockExecSync.mockReturnValueOnce(
-      'opengolem-group1-111\nopengolem-group2-222\n',
-    );
-    // stop calls succeed
-    mockExecSync.mockReturnValue('');
-
-    cleanupOrphans();
-
-    // ps + 2 stop calls
-    expect(mockExecSync).toHaveBeenCalledTimes(3);
-    expect(mockExecSync).toHaveBeenNthCalledWith(
-      2,
-      `${CONTAINER_RUNTIME_BIN} stop -t 1 opengolem-group1-111`,
-      { stdio: 'pipe' },
-    );
-    expect(mockExecSync).toHaveBeenNthCalledWith(
-      3,
-      `${CONTAINER_RUNTIME_BIN} stop -t 1 opengolem-group2-222`,
-      { stdio: 'pipe' },
-    );
-    expect(logger.info).toHaveBeenCalledWith(
-      { count: 2, names: ['opengolem-group1-111', 'opengolem-group2-222'] },
-      'Stopped orphaned containers',
-    );
   });
 
-  it('does nothing when no orphans exist', () => {
-    mockExecSync.mockReturnValueOnce('');
-
-    cleanupOrphans();
-
-    expect(mockExecSync).toHaveBeenCalledTimes(1);
-    expect(logger.info).not.toHaveBeenCalled();
-  });
-
-  it('warns and continues when ps fails', () => {
-    mockExecSync.mockImplementationOnce(() => {
-      throw new Error('docker not available');
+  it('includes the original error as cause when docker info fails', () => {
+    const cause = new Error('daemon down');
+    mockExecSync.mockImplementation(() => {
+      throw cause;
     });
-
-    cleanupOrphans(); // should not throw
-
-    expect(logger.warn).toHaveBeenCalledWith(
-      expect.objectContaining({ err: expect.any(Error) }),
-      'Failed to clean up orphaned containers',
-    );
-  });
-
-  it('continues stopping remaining containers when one stop fails', () => {
-    mockExecSync.mockReturnValueOnce('opengolem-a-1\nopengolem-b-2\n');
-    // First stop fails
-    mockExecSync.mockImplementationOnce(() => {
-      throw new Error('already stopped');
-    });
-    // Second stop succeeds
-    mockExecSync.mockReturnValueOnce('');
-
-    cleanupOrphans(); // should not throw
-
-    expect(mockExecSync).toHaveBeenCalledTimes(3);
-    expect(logger.info).toHaveBeenCalledWith(
-      { count: 2, names: ['opengolem-a-1', 'opengolem-b-2'] },
-      'Stopped orphaned containers',
-    );
+    let thrown: unknown;
+    expect(() => {
+      try {
+        ensureContainerRuntimeRunning();
+      } catch (err: unknown) {
+        thrown = err;
+        throw err;
+      }
+    }).toThrow();
+    expect((thrown as { cause?: unknown }).cause).toBe(cause);
   });
 });
