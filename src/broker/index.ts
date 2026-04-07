@@ -204,7 +204,10 @@ class TokenStore {
     if (parts.length !== 3) return null;
     const [header, claims, sig] = parts;
     const expected = this.hmac(`${header}.${claims}`);
-    if (sig !== expected) return null;
+    // Constant-time comparison to prevent timing side-channel (F-M13-2)
+    const sigBuf = Buffer.from(sig);
+    const expBuf = Buffer.from(expected);
+    if (sigBuf.length !== expBuf.length || !crypto.timingSafeEqual(sigBuf, expBuf)) return null;
     const id = this.byToken.get(token);
     return id ? (this.records.get(id) ?? null) : null;
   }
@@ -984,9 +987,11 @@ async function forwardRequest(
   urlPath: string,
   start: number,
 ): Promise<void> {
-  // Resolve target
-  const epHeader = req.headers['x-provider-endpoint'];
-  const targetBase = typeof epHeader === 'string' ? epHeader : upstreamBase;
+  // Always use the configured upstreamBase — never accept x-provider-endpoint
+  // from containers. Accepting a container-supplied URL would allow a valid
+  // token to redirect credentialed requests to arbitrary internal addresses
+  // (SSRF), bypassing the Call Inspector's endpoint-scope check. (F-M13-1)
+  const targetBase = upstreamBase;
   const isHttp = targetBase.startsWith('http://');
   const targetUrl = new URL(urlPath, targetBase.endsWith('/') ? targetBase.slice(0, -1) : targetBase);
 
