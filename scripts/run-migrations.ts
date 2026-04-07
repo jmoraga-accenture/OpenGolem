@@ -3,41 +3,58 @@ import { execFileSync, execSync } from 'child_process';
 import fs from 'fs';
 import path from 'path';
 
-function compareSemver(a: string, b: string): number {
-  const partsA = a.split('.').map(Number);
-  const partsB = b.split('.').map(Number);
-  for (let i = 0; i < Math.max(partsA.length, partsB.length); i++) {
-    const diff = (partsA[i] || 0) - (partsB[i] || 0);
-    if (diff !== 0) return diff;
+const [, , fromVersion, toVersion, newCorePath] = process.argv;
+
+if (!fromVersion || !toVersion || !newCorePath) {
+  process.stderr.write(
+    'Usage: tsx scripts/run-migrations.ts <from-version> <to-version> <new-core-path>\n',
+  );
+  process.exit(1);
+}
+
+const migrationsDir = path.join(newCorePath, 'migrations');
+
+if (!fs.existsSync(migrationsDir)) {
+  process.stdout.write(JSON.stringify({ migrationsRun: 0, results: [] }, null, 2) + '\n');
+  process.exit(0);
+}
+
+function semverCompare(a: string, b: string): number {
+  const pa = a.split('.').map(Number);
+  const pb = b.split('.').map(Number);
+  for (let i = 0; i < 3; i++) {
+    if (pa[i] !== pb[i]) return (pa[i] ?? 0) - (pb[i] ?? 0);
   }
   return 0;
 }
 
-// Resolve tsx binary once to avoid npx race conditions across migrations
+const semverPattern = /^\d+\.\d+\.\d+$/;
+
+const allVersions = fs
+  .readdirSync(migrationsDir, { withFileTypes: true })
+  .filter((d) => d.isDirectory() && semverPattern.test(d.name))
+  .map((d) => d.name);
+
+const filtered = allVersions
+  .filter(
+    (v) => semverCompare(v, fromVersion) > 0 && semverCompare(v, toVersion) <= 0,
+  )
+  .sort(semverCompare);
+
 function resolveTsx(): string {
-  // Check local node_modules first
-  const local = path.resolve('node_modules/.bin/tsx');
+  const local = path.join(process.cwd(), 'node_modules', '.bin', 'tsx');
   if (fs.existsSync(local)) return local;
-  // Fall back to whichever tsx is in PATH
   try {
-    return execSync('which tsx', { encoding: 'utf-8' }).trim();
+    const which = execSync('which tsx', { encoding: 'utf8' }).trim();
+    if (which) return which;
   } catch {
-    return 'npx'; // last resort
+    // fall through
   }
+  return 'npx';
 }
 
 const tsxBin = resolveTsx();
-
-const fromVersion = process.argv[2];
-const toVersion = process.argv[3];
-const newCorePath = process.argv[4];
-
-if (!fromVersion || !toVersion || !newCorePath) {
-  console.error(
-    'Usage: tsx scripts/run-migrations.ts <from-version> <to-version> <new-core-path>',
-  );
-  process.exit(1);
-}
+const projectRoot = process.cwd();
 
 interface MigrationResult {
   version: string;
@@ -47,30 +64,10 @@ interface MigrationResult {
 
 const results: MigrationResult[] = [];
 
-// Look for migrations in the new core
-const migrationsDir = path.join(newCorePath, 'migrations');
+for (const version of filtered) {
+  const migrationScript = path.join(migrationsDir, version, 'index.ts');
 
-if (!fs.existsSync(migrationsDir)) {
-  console.log(JSON.stringify({ migrationsRun: 0, results: [] }, null, 2));
-  process.exit(0);
-}
-
-// Discover migration directories (version-named)
-const entries = fs.readdirSync(migrationsDir, { withFileTypes: true });
-const migrationVersions = entries
-  .filter((e) => e.isDirectory() && /^\d+\.\d+\.\d+$/.test(e.name))
-  .map((e) => e.name)
-  .filter(
-    (v) =>
-      compareSemver(v, fromVersion) > 0 && compareSemver(v, toVersion) <= 0,
-  )
-  .sort(compareSemver);
-
-const projectRoot = process.cwd();
-
-for (const version of migrationVersions) {
-  const migrationIndex = path.join(migrationsDir, version, 'index.ts');
-  if (!fs.existsSync(migrationIndex)) {
+  if (!fs.existsSync(migrationScript)) {
     results.push({
       version,
       success: false,
@@ -80,26 +77,30 @@ for (const version of migrationVersions) {
   }
 
   try {
-    const tsxArgs = tsxBin.endsWith('npx')
-      ? ['tsx', migrationIndex, projectRoot]
-      : [migrationIndex, projectRoot];
-    execFileSync(tsxBin, tsxArgs, {
-      stdio: 'pipe',
+    const args =
+      tsxBin === 'npx'
+        ? ['tsx', migrationScript, projectRoot]
+        : [migrationScript, projectRoot];
+    execFileSync(tsxBin, args, {
       cwd: projectRoot,
+      stdio: 'pipe',
       timeout: 120_000,
     });
     results.push({ version, success: true });
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    results.push({ version, success: false, error: message });
+    results.push({
+      version,
+      success: false,
+      error: err instanceof Error ? err.message : String(err),
+    });
   }
 }
 
-console.log(
-  JSON.stringify({ migrationsRun: results.length, results }, null, 2),
+process.stdout.write(
+  JSON.stringify({ migrationsRun: results.length, results }, null, 2) + '\n',
 );
 
-// Exit with error if any migration failed
 if (results.some((r) => !r.success)) {
   process.exit(1);
 }
+process.exit(0);
