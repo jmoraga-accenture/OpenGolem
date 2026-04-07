@@ -1,3 +1,4 @@
+import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -36,6 +37,7 @@ import {
 } from './container-runtime.js';
 import {
   catoCheck,
+  computePayloadHashAndSize,
   startCatoInlineHook,
   stopCatoInlineHook,
 } from './cato/inline.js';
@@ -603,10 +605,15 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
   saveState();
 
   const prompt = formatMessages(filtered, TIMEZONE);
+  const { payloadHash, payloadSize } = computePayloadHashAndSize(prompt);
   const cato = await catoCheck({
-    type: 'check_action',
-    groupFolder: group.folder,
-    prompt,
+    checkId: crypto.randomUUID(),
+    action: 'AGENT_PROMPT',
+    contextId: group.folder,
+    tokenId: chatJid,
+    payloadHash,
+    payloadSize,
+    contentExcerpt: Buffer.from(prompt, 'utf8').slice(0, 4096).toString('base64') || null,
   });
   if (!cato.allow) {
     // SECURITY: never expose internal Cato reason codes to the user channel.

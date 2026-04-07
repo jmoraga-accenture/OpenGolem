@@ -1,9 +1,10 @@
 import { ChildProcess } from 'child_process';
+import crypto from 'crypto';
 import { CronExpressionParser } from 'cron-parser';
 import fs from 'fs';
 
 import { ASSISTANT_NAME, SCHEDULER_POLL_INTERVAL, TIMEZONE } from './config.js';
-import { catoCheck } from './cato/inline.js';
+import { catoCheck, computePayloadHashAndSize } from './cato/inline.js';
 import {
   ContainerOutput,
   runContainerAgent,
@@ -150,10 +151,16 @@ async function runTask(
 
   // Cato inline check — same gate as processGroupMessages in index.ts.
   // Scheduled tasks bypass the message loop but must still pass Cato.
+  const { payloadHash, payloadSize } = computePayloadHashAndSize(task.prompt);
   const catoResult = await catoCheck({
-    type: 'check_action',
-    groupFolder: task.group_folder,
-    prompt: task.prompt,
+    checkId: crypto.randomUUID(),
+    action: 'AGENT_PROMPT',
+    contextId: task.group_folder,
+    tokenId: task.chat_jid,
+    payloadHash,
+    payloadSize,
+    contentExcerpt:
+      Buffer.from(task.prompt, 'utf8').slice(0, 4096).toString('base64') || null,
   });
   if (!catoResult.allow) {
     logger.warn(
