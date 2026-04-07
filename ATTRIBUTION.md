@@ -18,8 +18,10 @@ Claude Agent SDK, with filesystem-based IPC, SQLite state storage, and a
 sentinel-marker protocol for streamed agent output.
 
 OpenGolem began as a fork of NanoClaw and has been progressively rewritten
-into an original work through two clean-room passes. No NanoClaw source
-remains in the codebase. The MIT license is reproduced below for attribution.
+into an original work through a complete clean-room rewrite (completed
+2026-04-07). All source files have been replaced with clean-room
+implementations written from behavioral specifications, with no NanoClaw
+source remaining. The MIT license is reproduced below for attribution.
 
 NanoClaw MIT License:
 
