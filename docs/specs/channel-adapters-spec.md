@@ -329,6 +329,8 @@ These properties hold at all times during normal operation:
 
 12. **Webhook mode requires payload signature verification.** Any adapter operating in webhook mode must verify the channel provider's payload signature on every inbound request before delivering the event to the orchestrator. For Telegram webhook mode: `X-Telegram-Bot-Api-Secret-Token` header verification against a configured secret. Events that fail verification are discarded; a `message_signature_invalid` event is written to the audit log; HTTP 401 is returned to the caller. No partial event is delivered to the orchestrator. (ADR-31)
 
+13. **Empty allowlist grants no permissions (fail-secure).** For any channel that uses an explicit sender allowlist (e.g. `TELEGRAM_VALID_USERS` for Telegram), an empty or unconfigured allowlist denies access to all senders. It does not fall through to a more permissive default. This is a system-wide safety principle: misconfiguration must fail closed, not open. An operator who intends open access must make that explicit — it cannot be the result of a missing configuration value. (Decision 39)
+
 ---
 
 ## Acceptance Criteria

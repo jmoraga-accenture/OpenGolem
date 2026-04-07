@@ -916,3 +916,24 @@ PSYCHE.md must include a required section `Self-Hosted Provider Posture` specify
 **Implications:**
 - CI configuration must add `npm audit --audit-level=high` as a required step.
 - Phase 2 scope must include crate dependency acceptance criterion as a named deliverable.
+
+---
+
+## Decision 39: Empty Allowlist Grants No Permissions — Fail-Secure Principle (April 2026)
+
+**Question:** When a channel sender allowlist (e.g. `TELEGRAM_VALID_USERS`) is empty or unconfigured, should the system fall through to a more permissive default (per-chat rules, `allow: '*'`) or deny all access?
+
+**Decision:** Empty or unconfigured allowlists **deny all access**. There is no fallthrough to a more permissive default.
+
+This is a named system-wide safety principle: **safety first means an empty configuration grants no permissions**. Misconfiguration must fail closed, not open. The prior behavior — where an empty `TELEGRAM_VALID_USERS` fell through to per-chat `allow: '*'`, effectively granting open access to anyone — was a security defect. An operator who intends open access must make that intention explicit in configuration. It cannot be the silent result of a missing or empty value.
+
+**Scope:** This principle applies to any sender allowlist in the system, present and future. It is not specific to Telegram. Any component that implements an allowlist gate must treat empty/unset as deny-all.
+
+**Implications:**
+- `src/sender-allowlist.ts` `isSenderAllowed`: for `tg:` chats, returns false immediately when `TELEGRAM_VALID_USERS` is unset or empty. Does not consult per-chat rules.
+- `src/sender-allowlist.ts` `shouldDropMessage`: always returns true for `tg:` chats (gate is permanently active).
+- `src/config.ts` `getTelegramValidUserSet()`: documented as returning null = deny-all (not "no gate").
+- `.env.example`: `TELEGRAM_VALID_USERS` is uncommented and marked mandatory.
+- `README.md`: updated to state "empty or unset = no access from anyone."
+- channel-adapters-spec.md: Invariant 13 codifies this principle for all channel adapters.
+- Future allowlist implementations must follow the same pattern — deny-all is the only safe default.

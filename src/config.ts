@@ -131,8 +131,13 @@ export const TIMEZONE = resolveConfigTimezone();
 
 /**
  * Comma-separated Telegram user IDs (strings, same as `from.id` / message `sender`).
- * When non-empty, only these users may interact on `tg:` chats; others are dropped
- * before storage. Unset or empty → use `~/.config/opengolem/sender-allowlist.json` only.
+ *
+ * SECURITY: This is a mandatory gate. Unset or empty = no access from anyone (fail-secure).
+ * An empty allowlist does not fall through to per-chat rules — it denies all Telegram
+ * senders. This is intentional: safety first means an empty configuration grants no
+ * permissions, not open access.
+ *
+ * Returns null when unset or empty (caller interprets null as deny-all for tg: chats).
  */
 export function getTelegramValidUserSet(): Set<string> | null {
   const rawSource =

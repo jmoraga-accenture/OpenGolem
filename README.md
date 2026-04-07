@@ -49,7 +49,7 @@ All settings are optional environment variables; copy `.env.example` to `.env` a
 | `INSPECTOR_RATE_LIMIT` | `60` | Max API calls per minute across all containers |
 | `TELEGRAM_BOT_TOKEN` | — | Bot token from [@BotFather](https://t.me/botfather) |
 | `TELEGRAM_ALLOW_GROUPS` | off | Set `1` / `true` / `yes` to allow supergroups/groups + negative `tg:` ids (needs explicit allowlist per group JID) |
-| `TELEGRAM_VALID_USERS` | — | Comma-separated Telegram user IDs; unset = no env gate |
+| `TELEGRAM_VALID_USERS` | *(required for Telegram)* | Comma-separated Telegram user IDs. **Empty or unset = no access from anyone** (fail-secure). |
 | `CREDENTIAL_PROXY_PORT` | `3001` | Port the credential proxy binds on |
 | `HEALTH_PORT` | `3003` | Port the `/health` endpoint binds on (127.0.0.1 only) |
 | `CATO_AUDIT_INTERVAL_MS` | `21600000` | Cato scheduled audit interval in ms (default 6h) |
