@@ -370,9 +370,21 @@ function validateIntent(raw: Record<string, unknown>): ValidationError | null {
         };
       }
 
-      // host_path must be within permitted mount roots
+      // Canonicalize to defeat path traversal (e.g. /tmp/../etc/passwd satisfies
+      // a /tmp/ prefix check but resolves outside the permitted root).
+      let resolvedHostPath: string;
+      try {
+        resolvedHostPath = fs.realpathSync(hostPath);
+      } catch {
+        return {
+          field: `filesystem.container_mounts[${idx}].host_path`,
+          reason: `host path could not be resolved: ${hostPath}`,
+        };
+      }
+
+      // host_path must be within permitted mount roots (checked against canonical path)
       const withinPermitted = PERMITTED_MOUNT_ROOTS.some(
-        (root) => hostPath === root || hostPath.startsWith(root + '/'),
+        (root) => resolvedHostPath === root || resolvedHostPath.startsWith(root + '/'),
       );
       if (!withinPermitted) {
         return {

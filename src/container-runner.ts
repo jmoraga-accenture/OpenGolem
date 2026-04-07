@@ -205,6 +205,29 @@ function prepareSessionLayout(
   };
 }
 
+/**
+ * Mount only CLAUDE.md and logs/ from a group directory — never the whole
+ * directory. Prevents messages.db (Tier 2) and any future per-group SQLite
+ * files from being reachable inside containers (memory-tiers-spec INV-3, T2-6).
+ */
+function mountGroupFiles(groupDir: string, mounts: PreparedMount[]): void {
+  const claudeMd = path.join(groupDir, 'CLAUDE.md');
+  if (fs.existsSync(claudeMd)) {
+    mounts.push({
+      hostPath: claudeMd,
+      containerPath: '/workspace/group/CLAUDE.md',
+      readonly: false,
+    });
+  }
+  const logsDir = path.join(groupDir, 'logs');
+  fs.mkdirSync(logsDir, { recursive: true });
+  mounts.push({
+    hostPath: logsDir,
+    containerPath: '/workspace/group/logs',
+    readonly: false,
+  });
+}
+
 function buildMounts(
   group: RegisteredGroup,
   input: ContainerInput,
@@ -228,24 +251,20 @@ function buildMounts(
         readonly: true,
       });
     }
-    mounts.push({
-      hostPath: groupDir,
-      containerPath: '/workspace/group',
-      readonly: false,
-    });
+    mountGroupFiles(groupDir, mounts);
   } else {
-    mounts.push({
-      hostPath: groupDir,
-      containerPath: '/workspace/group',
-      readonly: false,
-    });
+    mountGroupFiles(groupDir, mounts);
     const globalDir = path.join(GROUPS_DIR, 'global');
     if (fs.existsSync(globalDir)) {
-      mounts.push({
-        hostPath: globalDir,
-        containerPath: '/workspace/global',
-        readonly: true,
-      });
+      // Global dir: mount only CLAUDE.md — never expose messages.db
+      const globalClaudeMd = path.join(globalDir, 'CLAUDE.md');
+      if (fs.existsSync(globalClaudeMd)) {
+        mounts.push({
+          hostPath: globalClaudeMd,
+          containerPath: '/workspace/global/CLAUDE.md',
+          readonly: true,
+        });
+      }
     }
   }
 
