@@ -1,10 +1,7 @@
 #!/bin/bash
-# Build the OpenGolem agent container image
-
 set -e
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-cd "$SCRIPT_DIR"
+cd "$(dirname "${BASH_SOURCE[0]}")"
 
 IMAGE_NAME="opengolem-agent"
 TAG="${1:-latest}"
@@ -15,9 +12,5 @@ echo "Image: ${IMAGE_NAME}:${TAG}"
 
 ${CONTAINER_RUNTIME} build -t "${IMAGE_NAME}:${TAG}" .
 
-echo ""
-echo "Build complete!"
-echo "Image: ${IMAGE_NAME}:${TAG}"
-echo ""
-echo "Test with:"
-echo "  echo '{\"prompt\":\"What is 2+2?\",\"groupFolder\":\"test\",\"chatJid\":\"test@g.us\",\"isMain\":false}' | ${CONTAINER_RUNTIME} run -i ${IMAGE_NAME}:${TAG}"
+echo "Build complete: ${IMAGE_NAME}:${TAG}"
+echo "Test with: ${CONTAINER_RUNTIME} run --rm ${IMAGE_NAME}:${TAG} --version"
