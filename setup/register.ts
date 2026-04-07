@@ -1,17 +1,14 @@
 /**
- * Step: register — Write channel registration config, create group folders.
- *
- * Accepts --channel to specify the messaging platform (whatsapp, telegram, slack, discord).
- * Uses parameterized SQL queries to prevent injection.
+ * Step: register — Parse CLI args and register a messaging channel group into the SQLite database.
  */
 import fs from 'fs';
 import path from 'path';
 
-import { STORE_DIR } from '../src/config.ts';
-import { initDatabase, setRegisteredGroup } from '../src/db.ts';
-import { isValidGroupFolder } from '../src/group-folder.ts';
-import { logger } from '../src/logger.ts';
-import { emitStatus } from './status.ts';
+import { STORE_DIR } from '../src/config.js';
+import { initDatabase, setRegisteredGroup } from '../src/db.js';
+import { isValidGroupFolder } from '../src/group-folder.js';
+import { logger } from '../src/logger.js';
+import { emitStatus } from './status.js';
 
 interface RegisterArgs {
   jid: string;
@@ -25,176 +22,118 @@ interface RegisterArgs {
 }
 
 function parseArgs(args: string[]): RegisterArgs {
-  const result: RegisterArgs = {
-    jid: '',
-    name: '',
-    trigger: '',
-    folder: '',
-    channel: 'whatsapp', // backward-compat: pre-refactor installs omit --channel
-    requiresTrigger: true,
-    isMain: false,
-    assistantName: 'Alef',
-  };
+  let jid = '';
+  let name = '';
+  let trigger = '';
+  let folder = '';
+  let channel = 'whatsapp';
+  let requiresTrigger = true;
+  let isMain = false;
+  let assistantName = 'Alef';
 
   for (let i = 0; i < args.length; i++) {
-    switch (args[i]) {
-      case '--jid':
-        result.jid = args[++i] || '';
-        break;
-      case '--name':
-        result.name = args[++i] || '';
-        break;
-      case '--trigger':
-        result.trigger = args[++i] || '';
-        break;
-      case '--folder':
-        result.folder = args[++i] || '';
-        break;
-      case '--channel':
-        result.channel = (args[++i] || '').toLowerCase();
-        break;
-      case '--no-trigger-required':
-        result.requiresTrigger = false;
-        break;
-      case '--is-main':
-        result.isMain = true;
-        break;
-      case '--assistant-name':
-        result.assistantName = args[++i] || 'Alef';
-        break;
+    if (args[i] === '--jid' && args[i + 1]) {
+      jid = args[++i];
+    } else if (args[i] === '--name' && args[i + 1]) {
+      name = args[++i];
+    } else if (args[i] === '--trigger' && args[i + 1]) {
+      trigger = args[++i];
+    } else if (args[i] === '--folder' && args[i + 1]) {
+      folder = args[++i];
+    } else if (args[i] === '--channel' && args[i + 1]) {
+      channel = args[++i];
+    } else if (args[i] === '--no-trigger-required') {
+      requiresTrigger = false;
+    } else if (args[i] === '--is-main') {
+      isMain = true;
+    } else if (args[i] === '--assistant-name' && args[i + 1]) {
+      assistantName = args[++i];
     }
   }
 
-  return result;
+  return { jid, name, trigger, folder, channel, requiresTrigger, isMain, assistantName };
 }
 
 export async function run(args: string[]): Promise<void> {
-  const projectRoot = process.cwd();
-  const parsed = parseArgs(args);
+  const { jid, name, trigger, folder, channel, requiresTrigger, isMain, assistantName } =
+    parseArgs(args);
 
-  if (!parsed.jid || !parsed.name || !parsed.trigger || !parsed.folder) {
+  if (!jid || !name || !trigger || !folder) {
+    logger.warn('Missing required args for register');
     emitStatus('REGISTER_CHANNEL', {
       STATUS: 'failed',
       ERROR: 'missing_required_args',
       LOG: 'logs/setup.log',
     });
-    process.exit(4);
+    return;
   }
 
-  if (!isValidGroupFolder(parsed.folder)) {
+  if (!isValidGroupFolder(folder)) {
+    logger.warn({ folder }, 'Invalid group folder');
     emitStatus('REGISTER_CHANNEL', {
       STATUS: 'failed',
       ERROR: 'invalid_folder',
       LOG: 'logs/setup.log',
     });
-    process.exit(4);
+    return;
   }
 
-  logger.info(parsed, 'Registering channel');
-
-  // Ensure data and store directories exist (store/ may not exist on
-  // fresh installs that skip WhatsApp auth, which normally creates it)
-  fs.mkdirSync(path.join(projectRoot, 'data'), { recursive: true });
-  fs.mkdirSync(STORE_DIR, { recursive: true });
-
-  // Initialize database (creates schema + runs migrations)
   initDatabase();
 
-  setRegisteredGroup(parsed.jid, {
-    name: parsed.name,
-    folder: parsed.folder,
-    trigger: parsed.trigger,
+  setRegisteredGroup(jid, {
+    name,
+    folder,
+    trigger,
     added_at: new Date().toISOString(),
-    requiresTrigger: parsed.requiresTrigger,
-    isMain: parsed.isMain,
+    requiresTrigger,
+    isMain,
   });
 
-  logger.info('Wrote registration to SQLite');
+  const groupDir = path.join(STORE_DIR, 'groups', folder);
+  fs.mkdirSync(groupDir, { recursive: true });
 
-  // Create group folders
-  fs.mkdirSync(path.join(projectRoot, 'groups', parsed.folder, 'logs'), {
-    recursive: true,
-  });
-
-  // Create CLAUDE.md in the new group folder from template if it doesn't exist.
-  // The agent runs with CWD=/workspace/group and loads CLAUDE.md from there.
-  // Never overwrite an existing CLAUDE.md — users customize these extensively
-  // (persona, workspace structure, communication rules, family context, etc.)
-  // and a stock template replacement would destroy that work.
-  const groupClaudeMdPath = path.join(
-    projectRoot,
-    'groups',
-    parsed.folder,
-    'CLAUDE.md',
-  );
-  if (!fs.existsSync(groupClaudeMdPath)) {
-    const templatePath = parsed.isMain
-      ? path.join(projectRoot, 'groups', 'main', 'CLAUDE.md')
-      : path.join(projectRoot, 'groups', 'global', 'CLAUDE.md');
-    if (fs.existsSync(templatePath)) {
-      fs.copyFileSync(templatePath, groupClaudeMdPath);
-      logger.info(
-        { file: groupClaudeMdPath, template: templatePath },
-        'Created CLAUDE.md from template',
-      );
-    }
+  const claudeMdPath = path.join(groupDir, 'CLAUDE.md');
+  if (!fs.existsSync(claudeMdPath)) {
+    fs.writeFileSync(claudeMdPath, '', 'utf-8');
   }
 
-  // Update assistant name in CLAUDE.md files if different from default
   let nameUpdated = false;
-  if (parsed.assistantName !== 'Alef') {
-    logger.info(
-      { from: 'Alef', to: parsed.assistantName },
-      'Updating assistant name',
-    );
 
-    const groupsDir = path.join(projectRoot, 'groups');
-    const mdFiles = fs
-      .readdirSync(groupsDir)
-      .map((d) => path.join(groupsDir, d, 'CLAUDE.md'))
-      .filter((f) => fs.existsSync(f));
-
-    for (const mdFile of mdFiles) {
-      if (fs.existsSync(mdFile)) {
-        let content = fs.readFileSync(mdFile, 'utf-8');
-        content = content.replace(/^# Alef$/m, `# ${parsed.assistantName}`);
-        content = content.replace(
-          /You are Alef/g,
-          `You are ${parsed.assistantName}`,
-        );
-        fs.writeFileSync(mdFile, content);
-        logger.info({ file: mdFile }, 'Updated CLAUDE.md');
-      }
+  if (assistantName !== 'Alef') {
+    // Update any existing CLAUDE.md content that references the old assistant name
+    const existing = fs.readFileSync(claudeMdPath, 'utf-8');
+    if (existing.includes('Alef')) {
+      const updated = existing.replace(/Alef/g, assistantName);
+      fs.writeFileSync(claudeMdPath, updated, 'utf-8');
+      nameUpdated = true;
     }
 
-    // Update .env
-    const envFile = path.join(projectRoot, '.env');
-    if (fs.existsSync(envFile)) {
-      let envContent = fs.readFileSync(envFile, 'utf-8');
-      if (envContent.includes('ASSISTANT_NAME=')) {
-        envContent = envContent.replace(
-          /^ASSISTANT_NAME=.*$/m,
-          `ASSISTANT_NAME="${parsed.assistantName}"`,
-        );
+    // Update .env with the assistant name
+    const envPath = path.join(process.cwd(), '.env');
+    const envLine = `ASSISTANT_NAME="${assistantName}"`;
+    if (fs.existsSync(envPath)) {
+      const envContent = fs.readFileSync(envPath, 'utf-8');
+      if (/^ASSISTANT_NAME=/m.test(envContent)) {
+        const updated = envContent.replace(/^ASSISTANT_NAME=.*/m, envLine);
+        fs.writeFileSync(envPath, updated, 'utf-8');
       } else {
-        envContent += `\nASSISTANT_NAME="${parsed.assistantName}"`;
+        fs.appendFileSync(envPath, `\n${envLine}\n`, 'utf-8');
       }
-      fs.writeFileSync(envFile, envContent);
     } else {
-      fs.writeFileSync(envFile, `ASSISTANT_NAME="${parsed.assistantName}"\n`);
+      fs.writeFileSync(envPath, `${envLine}\n`, 'utf-8');
     }
-    logger.info('Set ASSISTANT_NAME in .env');
-    nameUpdated = true;
   }
+
+  logger.info({ jid, name, folder, channel }, 'Channel registered');
 
   emitStatus('REGISTER_CHANNEL', {
-    JID: parsed.jid,
-    NAME: parsed.name,
-    FOLDER: parsed.folder,
-    CHANNEL: parsed.channel,
-    TRIGGER: parsed.trigger,
-    REQUIRES_TRIGGER: parsed.requiresTrigger,
-    ASSISTANT_NAME: parsed.assistantName,
+    JID: jid,
+    NAME: name,
+    FOLDER: folder,
+    CHANNEL: channel,
+    TRIGGER: trigger,
+    REQUIRES_TRIGGER: requiresTrigger,
+    ASSISTANT_NAME: assistantName,
     NAME_UPDATED: nameUpdated,
     STATUS: 'success',
     LOG: 'logs/setup.log',
