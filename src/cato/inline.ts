@@ -87,18 +87,33 @@ function runDeterministicChecks(req: CatoCheckRequest): CatoCheckResponse {
   // Missing required fields → fail-closed
   for (const field of REQUIRED_FIELDS) {
     if (req[field] === undefined || req[field] === null) {
-      return { checkId: String(req.checkId ?? ''), allow: false, code: null, reason: 'malformed request' };
+      return {
+        checkId: String(req.checkId ?? ''),
+        allow: false,
+        code: null,
+        reason: 'malformed request',
+      };
     }
   }
 
   // Unknown action → fail-closed (spec §2.1: unknown action treated as error)
   if (!VALID_ACTIONS.has(req.action)) {
-    return { checkId: req.checkId, allow: false, code: null, reason: 'malformed request' };
+    return {
+      checkId: req.checkId,
+      allow: false,
+      code: null,
+      reason: 'malformed request',
+    };
   }
 
   // Oversized payload check (does not require contentExcerpt)
   if (req.payloadSize > MAX_PAYLOAD_BYTES) {
-    return { checkId: req.checkId, allow: false, code: 'OVERSIZED_PAYLOAD', reason: 'Payload exceeds size limit' };
+    return {
+      checkId: req.checkId,
+      allow: false,
+      code: 'OVERSIZED_PAYLOAD',
+      reason: 'Payload exceeds size limit',
+    };
   }
 
   // Path traversal check (only when contentExcerpt is provided)
@@ -137,9 +152,11 @@ function getAuditLog(): AuditLog | null {
     _auditLog = openAuditLog(dbPath, 'cato');
     return _auditLog;
   } catch (err) {
-    _auditLogError =
-      err instanceof Error ? err : new Error(String(err));
-    logger.error({ err }, 'Cato: failed to open audit log — audit writes will fail closed');
+    _auditLogError = err instanceof Error ? err : new Error(String(err));
+    logger.error(
+      { err },
+      'Cato: failed to open audit log — audit writes will fail closed',
+    );
     return null;
   }
 }
@@ -180,7 +197,9 @@ function writeAuditEvent(
         payload_size: req.payloadSize,
         allow: response.allow,
         ...(response.code ? { risk_code: response.code } : {}),
-        ...(response.reason && !response.allow ? { reason: response.reason } : {}),
+        ...(response.reason && !response.allow
+          ? { reason: response.reason }
+          : {}),
       },
     });
     return true;
@@ -344,7 +363,12 @@ export async function catoCheck(
     const timer = setTimeout(() => {
       client.destroy();
       logger.error('Cato: inline hook timeout — blocking action (fail-closed)');
-      resolve({ checkId: req.checkId, allow: false, code: null, reason: 'cato_timeout' });
+      resolve({
+        checkId: req.checkId,
+        allow: false,
+        code: null,
+        reason: 'cato_timeout',
+      });
     }, CATO_CHECK_TIMEOUT_MS);
 
     const client = net.createConnection(CATO_SOCKET_PATH, () => {
@@ -374,13 +398,23 @@ export async function catoCheck(
       clearTimeout(timer);
       const line = data.split('\n').find((l) => l.trim().length > 0);
       if (!line) {
-        resolve({ checkId: req.checkId, allow: false, code: null, reason: 'empty_response' });
+        resolve({
+          checkId: req.checkId,
+          allow: false,
+          code: null,
+          reason: 'empty_response',
+        });
         return;
       }
       try {
         resolve(JSON.parse(line) as CatoCheckResponse);
       } catch {
-        resolve({ checkId: req.checkId, allow: false, code: null, reason: 'response_parse_error' });
+        resolve({
+          checkId: req.checkId,
+          allow: false,
+          code: null,
+          reason: 'response_parse_error',
+        });
       }
     });
     client.on('error', (err) => {
@@ -389,7 +423,12 @@ export async function catoCheck(
         { err },
         'Cato: inline hook unreachable — blocking action (fail-closed)',
       );
-      resolve({ checkId: req.checkId, allow: false, code: null, reason: 'cato_unreachable' });
+      resolve({
+        checkId: req.checkId,
+        allow: false,
+        code: null,
+        reason: 'cato_unreachable',
+      });
     });
   });
 }

@@ -190,11 +190,9 @@ export function openAuditLog(dbPath: string, writer: AuditWriter): AuditLog {
     )
   `);
 
-  const writeInTransaction = db.transaction(
-    (row: Record<string, unknown>) => {
-      insertStmt.run(row);
-    },
-  );
+  const writeInTransaction = db.transaction((row: Record<string, unknown>) => {
+    insertStmt.run(row);
+  });
 
   return {
     writeEvent(params: AuditEventParams): void {
@@ -205,8 +203,7 @@ export function openAuditLog(dbPath: string, writer: AuditWriter): AuditLog {
         event_type: params.event_type,
         writer,
         context_id: params.context_id ?? null,
-        occurred_at:
-          params.occurred_at ?? Math.floor(Date.now() / 1000),
+        occurred_at: params.occurred_at ?? Math.floor(Date.now() / 1000),
         token_id: params.token_id ?? null,
         check_id: params.check_id ?? null,
         task_id: params.task_id ?? null,

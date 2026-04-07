@@ -160,7 +160,8 @@ async function runTask(
     payloadHash,
     payloadSize,
     contentExcerpt:
-      Buffer.from(task.prompt, 'utf8').slice(0, 4096).toString('base64') || null,
+      Buffer.from(task.prompt, 'utf8').slice(0, 4096).toString('base64') ||
+      null,
   });
   if (!catoResult.allow) {
     logger.warn(

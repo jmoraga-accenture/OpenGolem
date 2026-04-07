@@ -11,10 +11,7 @@ import path from 'path';
 import fs from 'fs';
 import Database from 'better-sqlite3';
 
-import {
-  openAuditLog,
-  AuditInitError,
-} from './index.js';
+import { openAuditLog, AuditInitError } from './index.js';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -65,7 +62,9 @@ describe('AC-1: Schema is created on first open', () => {
 
     const db = new Database(dbPath, { readonly: true });
     const row = db
-      .prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name='events'`)
+      .prepare(
+        `SELECT name FROM sqlite_master WHERE type='table' AND name='events'`,
+      )
       .get() as { name: string } | undefined;
     db.close();
     expect(row?.name).toBe('events');
@@ -78,7 +77,9 @@ describe('AC-1: Schema is created on first open', () => {
 
     const db = new Database(dbPath, { readonly: true });
     const indices = db
-      .prepare(`SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='events'`)
+      .prepare(
+        `SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='events'`,
+      )
       .all() as { name: string }[];
     db.close();
 
@@ -130,9 +131,9 @@ describe('AC-3: INSERT-only write path', () => {
     log.close();
 
     const db = new Database(dbPath, { readonly: true });
-    const row = db
-      .prepare('SELECT COUNT(*) as cnt FROM events')
-      .get() as { cnt: number };
+    const row = db.prepare('SELECT COUNT(*) as cnt FROM events').get() as {
+      cnt: number;
+    };
     db.close();
     expect(row.cnt).toBe(3);
   });
@@ -147,9 +148,9 @@ describe('AC-3: INSERT-only write path', () => {
     log.close();
 
     const db = new Database(dbPath, { readonly: true });
-    const row = db
-      .prepare('SELECT COUNT(*) as cnt FROM events')
-      .get() as { cnt: number };
+    const row = db.prepare('SELECT COUNT(*) as cnt FROM events').get() as {
+      cnt: number;
+    };
     db.close();
     expect(row.cnt).toBe(N);
   });
@@ -168,17 +169,23 @@ describe('AC-4: Concurrent writes from three writers', () => {
     // Write 100 rows from each writer interleaved
     const N = 100;
     for (let i = 0; i < N; i++) {
-      logs[0].writeEvent({ event_type: 'message_received', context_id: `ctx-${i}` });
-      logs[1].writeEvent({ event_type: 'call_proxied', context_id: `ctx-${i}` });
+      logs[0].writeEvent({
+        event_type: 'message_received',
+        context_id: `ctx-${i}`,
+      });
+      logs[1].writeEvent({
+        event_type: 'call_proxied',
+        context_id: `ctx-${i}`,
+      });
       logs[2].writeEvent({ event_type: 'cato_check', context_id: `ctx-${i}` });
     }
 
     for (const log of logs) log.close();
 
     const db = new Database(dbPath, { readonly: true });
-    const total = db
-      .prepare('SELECT COUNT(*) as cnt FROM events')
-      .get() as { cnt: number };
+    const total = db.prepare('SELECT COUNT(*) as cnt FROM events').get() as {
+      cnt: number;
+    };
     const perWriter = db
       .prepare('SELECT writer, COUNT(*) as cnt FROM events GROUP BY writer')
       .all() as { writer: string; cnt: number }[];
@@ -246,7 +253,9 @@ describe('AC-6: payload_hash present for payload events', () => {
 
     const db = new Database(dbPath, { readonly: true });
     const row = db
-      .prepare('SELECT payload_hash, payload_size FROM events WHERE event_type=?')
+      .prepare(
+        'SELECT payload_hash, payload_size FROM events WHERE event_type=?',
+      )
       .get('cato_check') as { payload_hash: string; payload_size: number };
     db.close();
 

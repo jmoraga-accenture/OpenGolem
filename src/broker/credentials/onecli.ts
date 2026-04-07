@@ -26,7 +26,8 @@ export class OneCLICredentialBackend implements CredentialBackend {
     const env = readEnvFile(['ONECLI_GATEWAY_URL', 'ONECLI_GATEWAY_TOKEN']);
 
     const gatewayUrl = process.env.ONECLI_GATEWAY_URL || env.ONECLI_GATEWAY_URL;
-    const vaultToken = process.env.ONECLI_GATEWAY_TOKEN || env.ONECLI_GATEWAY_TOKEN;
+    const vaultToken =
+      process.env.ONECLI_GATEWAY_TOKEN || env.ONECLI_GATEWAY_TOKEN;
 
     if (!gatewayUrl) {
       throw new Error('OneCLICredentialBackend: ONECLI_GATEWAY_URL not set.');

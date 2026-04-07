@@ -474,10 +474,14 @@ async function runAgent(
     registeredJids,
   );
 
-  // Guard: clear sessions over 300KB before spawning — large sessions cause
-  // API requests to exceed the credential proxy's upstream timeout (empirical:
-  // 467KB/136 turns caused repeated 30-min container timeouts with no output).
-  const MAX_SESSION_BYTES = 300_000;
+  // Session size guard: only clear if the session file is extremely large.
+  // The Claude Agent SDK handles context compaction internally — we should not
+  // pre-empt it. The 300KB threshold (added to work around a proxy timeout)
+  // was far too aggressive: it cleared mid-conversation context and caused
+  // worse UX than the occasional slow request it was trying to prevent.
+  // Threshold raised to 10MB — sessions this large would exceed the model's
+  // context window anyway. Below that, trust the SDK.
+  const MAX_SESSION_BYTES = 10_000_000;
   const sessionId = sessions[group.folder];
   if (sessionId) {
     const sessionFile = path.join(
@@ -494,7 +498,7 @@ async function runAgent(
       if (size > MAX_SESSION_BYTES) {
         logger.warn(
           { group: group.name, sessionSizeBytes: size, sessionId },
-          'Session too large — clearing before spawn to prevent proxy timeout',
+          'Session extremely large — clearing to prevent context window overflow',
         );
         delete sessions[group.folder];
         deleteSession(group.folder);
@@ -613,7 +617,8 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
     tokenId: chatJid,
     payloadHash,
     payloadSize,
-    contentExcerpt: Buffer.from(prompt, 'utf8').slice(0, 4096).toString('base64') || null,
+    contentExcerpt:
+      Buffer.from(prompt, 'utf8').slice(0, 4096).toString('base64') || null,
   });
   if (!cato.allow) {
     // SECURITY: never expose internal Cato reason codes to the user channel.

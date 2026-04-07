@@ -122,12 +122,16 @@ export class TuiChannel implements Channel {
       '║           SYSTEM STATUS ' + systemStatusLabel.padEnd(18) + '║',
       '╠══════════════════════════════════════════╣',
       '║  CHANNELS                                ║',
-      `║  • tui: ${this.connected ? '[connected]' : '[disconnected]'}`.padEnd(45) + '║',
+      `║  • tui: ${this.connected ? '[connected]' : '[disconnected]'}`.padEnd(
+        45,
+      ) + '║',
       '╠══════════════════════════════════════════╣',
       '║  TASKS                                   ║',
       '╠══════════════════════════════════════════╣',
       '║  GOVERNANCE                              ║',
-      `║  Hansei reports pending: ${health.quarantinedHanseiReports}`.padEnd(45) + '║',
+      `║  Hansei reports pending: ${health.quarantinedHanseiReports}`.padEnd(
+        45,
+      ) + '║',
       isDegraded
         ? `║  Status: [degraded] — review required`.padEnd(45) + '║'
         : `║  Status: [ok]`.padEnd(45) + '║',

@@ -39,7 +39,9 @@ function cleanSocket() {
 }
 
 /** Build a well-formed spec-compliant CatoCheckRequest. */
-function makeRequest(overrides: Partial<CatoCheckRequest> = {}): CatoCheckRequest {
+function makeRequest(
+  overrides: Partial<CatoCheckRequest> = {},
+): CatoCheckRequest {
   return {
     checkId: randomUUID(),
     action: 'AGENT_PROMPT',
@@ -101,35 +103,31 @@ describe('Cato inline hook — deterministic checks', () => {
 
   it('blocks contentExcerpt containing path traversal (../)', async () => {
     // Path traversal is checked in the base64-decoded contentExcerpt
-    const excerpt = Buffer.from('Read the file at ../../etc/passwd').toString('base64');
-    const result = await catoCheck(
-      makeRequest({ contentExcerpt: excerpt }),
+    const excerpt = Buffer.from('Read the file at ../../etc/passwd').toString(
+      'base64',
     );
+    const result = await catoCheck(makeRequest({ contentExcerpt: excerpt }));
     expect(result.allow).toBe(false);
     expect(result.code).toBe('PATH_TRAVERSAL');
   });
 
   it('blocks contentExcerpt containing Windows path traversal (..\\)', async () => {
-    const excerpt = Buffer.from('Open ..\\..\\windows\\system32').toString('base64');
-    const result = await catoCheck(
-      makeRequest({ contentExcerpt: excerpt }),
+    const excerpt = Buffer.from('Open ..\\..\\windows\\system32').toString(
+      'base64',
     );
+    const result = await catoCheck(makeRequest({ contentExcerpt: excerpt }));
     expect(result.allow).toBe(false);
     expect(result.code).toBe('PATH_TRAVERSAL');
   });
 
   it('blocks an oversized payload (payloadSize > 100 KB)', async () => {
-    const result = await catoCheck(
-      makeRequest({ payloadSize: 101_000 }),
-    );
+    const result = await catoCheck(makeRequest({ payloadSize: 101_000 }));
     expect(result.allow).toBe(false);
     expect(result.code).toBe('OVERSIZED_PAYLOAD');
   });
 
   it('allows a payload right at the size limit (100 000 bytes)', async () => {
-    const result = await catoCheck(
-      makeRequest({ payloadSize: 100_000 }),
-    );
+    const result = await catoCheck(makeRequest({ payloadSize: 100_000 }));
     expect(result.allow).toBe(true);
   });
 
@@ -141,9 +139,7 @@ describe('Cato inline hook — deterministic checks', () => {
   });
 
   it('blocks unknown action values', async () => {
-    const result = await catoCheck(
-      makeRequest({ action: 'UNKNOWN_VALUE' }),
-    );
+    const result = await catoCheck(makeRequest({ action: 'UNKNOWN_VALUE' }));
     expect(result.allow).toBe(false);
   });
 

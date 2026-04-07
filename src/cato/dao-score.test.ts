@@ -274,7 +274,10 @@ describe('computeDaoScore — raw count fields', () => {
     const db = makeAuditDb();
     insertCall(db, { outcome: 'pass' });
     insertCall(db, { outcome: 'pass' });
-    insertCall(db, { outcome: 'hard_block', block_rule: 'checkSkillWhitelist' });
+    insertCall(db, {
+      outcome: 'hard_block',
+      block_rule: 'checkSkillWhitelist',
+    });
     insertCall(db, { outcome: 'soft_block', block_rule: 'rateLimit' });
     insertCall(db, { outcome: 'hard_block', block_rule: 'checkMemoryScope' });
     const score = computeDaoScore(db);

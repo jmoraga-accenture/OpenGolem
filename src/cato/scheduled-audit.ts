@@ -359,7 +359,10 @@ export async function runCatoAudit(): Promise<void> {
       ? (parsedFindings as Record<string, unknown>).status
       : 'unknown';
 
-  logger.info({ reportPath: finalPath, status: reportStatus }, 'Cato: audit complete');
+  logger.info(
+    { reportPath: finalPath, status: reportStatus },
+    'Cato: audit complete',
+  );
 
   if (reportStatus === 'alert') {
     logger.warn(
