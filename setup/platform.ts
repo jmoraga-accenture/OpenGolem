@@ -1,5 +1,5 @@
 /**
- * Cross-platform detection utilities for OpenGolem setup.
+ * Cross-platform OS detection utilities for the OpenGolem setup wizard.
  */
 import { execSync } from 'child_process';
 import fs from 'fs';
@@ -18,8 +18,8 @@ export function getPlatform(): Platform {
 export function isWSL(): boolean {
   if (os.platform() !== 'linux') return false;
   try {
-    const release = fs.readFileSync('/proc/version', 'utf-8').toLowerCase();
-    return release.includes('microsoft') || release.includes('wsl');
+    const content = fs.readFileSync('/proc/version', 'utf-8').toLowerCase();
+    return content.includes('microsoft') || content.includes('wsl');
   } catch {
     return false;
   }
@@ -30,60 +30,53 @@ export function isRoot(): boolean {
 }
 
 export function isHeadless(): boolean {
-  // No display server available
   if (getPlatform() === 'linux') {
     return !process.env.DISPLAY && !process.env.WAYLAND_DISPLAY;
   }
-  // macOS is never headless in practice (even SSH sessions can open URLs)
   return false;
 }
 
 export function hasSystemd(): boolean {
   if (getPlatform() !== 'linux') return false;
   try {
-    // Check if systemd is PID 1
-    const init = fs.readFileSync('/proc/1/comm', 'utf-8').trim();
-    return init === 'systemd';
+    const comm = fs.readFileSync('/proc/1/comm', 'utf-8').trim();
+    return comm === 'systemd';
   } catch {
     return false;
   }
 }
 
-/**
- * Open a URL in the default browser, cross-platform.
- * Returns true if the command was attempted, false if no method available.
- */
-export function openBrowser(url: string): boolean {
+export function commandExists(cmd: string): boolean {
   try {
-    const platform = getPlatform();
-    if (platform === 'macos') {
+    execSync(`which ${cmd}`, { stdio: 'ignore' });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export function openBrowser(url: string): boolean {
+  const platform = getPlatform();
+  if (platform === 'macos') {
+    try {
       execSync(`open ${JSON.stringify(url)}`, { stdio: 'ignore' });
       return true;
+    } catch {
+      return false;
     }
-    if (platform === 'linux') {
-      // Try xdg-open first, then wslview for WSL
-      if (commandExists('xdg-open')) {
-        execSync(`xdg-open ${JSON.stringify(url)}`, { stdio: 'ignore' });
-        return true;
-      }
-      if (isWSL() && commandExists('wslview')) {
-        execSync(`wslview ${JSON.stringify(url)}`, { stdio: 'ignore' });
-        return true;
-      }
-      // WSL without wslview: try cmd.exe
-      if (isWSL()) {
+  }
+  if (platform === 'linux') {
+    for (const browser of ['xdg-open', 'sensible-browser', 'x-www-browser']) {
+      if (commandExists(browser)) {
         try {
-          execSync(`cmd.exe /c start "" ${JSON.stringify(url)}`, {
-            stdio: 'ignore',
-          });
+          execSync(`${browser} ${JSON.stringify(url)}`, { stdio: 'ignore' });
           return true;
         } catch {
-          // cmd.exe not available
+          // try next
         }
       }
     }
-  } catch {
-    // Command failed
+    return false;
   }
   return false;
 }
@@ -93,26 +86,8 @@ export function getServiceManager(): ServiceManager {
   if (platform === 'macos') return 'launchd';
   if (platform === 'linux') {
     if (hasSystemd()) return 'systemd';
-    return 'none';
   }
   return 'none';
-}
-
-export function getNodePath(): string {
-  try {
-    return execSync('command -v node', { encoding: 'utf-8' }).trim();
-  } catch {
-    return process.execPath;
-  }
-}
-
-export function commandExists(name: string): boolean {
-  try {
-    execSync(`command -v ${name}`, { stdio: 'ignore' });
-    return true;
-  } catch {
-    return false;
-  }
 }
 
 export function getNodeVersion(): string | null {

@@ -1,6 +1,6 @@
 /**
  * Structured status block output for setup steps.
- * Each step emits a block that the SKILL.md LLM can parse.
+ * Each step emits a block that the setup skill LLM can parse.
  */
 
 export function emitStatus(
