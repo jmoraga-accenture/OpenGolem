@@ -919,21 +919,33 @@ PSYCHE.md must include a required section `Self-Hosted Provider Posture` specify
 
 ---
 
-## Decision 39: Empty Allowlist Grants No Permissions — Fail-Secure Principle (April 2026)
+## Decision 39: Default Deny — Explicit Permission Required for All Access (April 2026)
 
-**Question:** When a channel sender allowlist (e.g. `TELEGRAM_VALID_USERS`) is empty or unconfigured, should the system fall through to a more permissive default (per-chat rules, `allow: '*'`) or deny all access?
+**Question:** When an access control gate (sender allowlist, skill permission, group registration, filesystem path, network endpoint) is empty, unconfigured, or has no matching entry, should the system fall through to a more permissive default or deny access?
 
-**Decision:** Empty or unconfigured allowlists **deny all access**. There is no fallthrough to a more permissive default.
+**Decision:** **All access control gates in OpenGolem default to deny. Explicit permission is always required. An absent, empty, or unconfigured gate is not an open gate — it is a closed one.**
 
-This is a named system-wide safety principle: **safety first means an empty configuration grants no permissions**. Misconfiguration must fail closed, not open. The prior behavior — where an empty `TELEGRAM_VALID_USERS` fell through to per-chat `allow: '*'`, effectively granting open access to anyone — was a security defect. An operator who intends open access must make that intention explicit in configuration. It cannot be the silent result of a missing or empty value.
+This is a foundational system-wide security principle, on equal footing with the audit-first and Cato-mediated design. It applies uniformly:
 
-**Scope:** This principle applies to any sender allowlist in the system, present and future. It is not specific to Telegram. Any component that implements an allowlist gate must treat empty/unset as deny-all.
+| Gate | Empty/unconfigured means |
+|------|--------------------------|
+| Channel sender allowlist (`TELEGRAM_VALID_USERS`, future channels) | No senders allowed |
+| Skill `apply_permission` | Skill cannot be applied by anyone below admin |
+| Group registration | Unregistered group receives no agent response |
+| Token `skillSet` | No skill calls permitted |
+| Token `dataScopes` | No memory access permitted |
+| Node.js `--permission` filesystem paths | No filesystem access outside declared paths |
+| Call Inspector endpoint scope | No outbound calls outside declared endpoints |
+| Credential proxy bind address | No bind to undeclared interfaces |
+
+**What triggered this decision:** A prior implementation of `TELEGRAM_VALID_USERS` fell through to per-chat `allow: '*'` when the variable was empty or unset — meaning a missing configuration silently granted open access to all Telegram senders. This is the class of defect that passes all feature tests and surfaces only through security review. The fix and this named principle prevent the same pattern from appearing in future gates.
+
+**Implementation rule:** Any component that implements an access control gate — now or in the future — must treat empty/absent configuration as deny-all. The only way to grant access is an explicit, non-empty, administrator-controlled configuration value. This rule is enforced in code review and by the Security Reviewer at each milestone gate.
 
 **Implications:**
-- `src/sender-allowlist.ts` `isSenderAllowed`: for `tg:` chats, returns false immediately when `TELEGRAM_VALID_USERS` is unset or empty. Does not consult per-chat rules.
-- `src/sender-allowlist.ts` `shouldDropMessage`: always returns true for `tg:` chats (gate is permanently active).
-- `src/config.ts` `getTelegramValidUserSet()`: documented as returning null = deny-all (not "no gate").
-- `.env.example`: `TELEGRAM_VALID_USERS` is uncommented and marked mandatory.
-- `README.md`: updated to state "empty or unset = no access from anyone."
-- channel-adapters-spec.md: Invariant 13 codifies this principle for all channel adapters.
-- Future allowlist implementations must follow the same pattern — deny-all is the only safe default.
+- `src/sender-allowlist.ts`: `isSenderAllowed` returns false for `tg:` chats when `TELEGRAM_VALID_USERS` is unset or empty; does not consult per-chat fallback rules. *(Applied.)*
+- `src/skills/skill-schema.ts`: skill application requires explicit `apply_permission`; missing field is a validation error. *(Applied.)*
+- `src/memory/tier1.ts`, `tier3.ts`: memory writes require explicit Cato `allow: true`; absent response = deny. *(Applied.)*
+- Future channel adapters: any new sender allowlist must default to deny-all when unconfigured.
+- Future skill types: any new permission gate must default to deny when the gate field is absent.
+- Security Reviewer must verify default-deny behavior at every milestone gate for any component that introduces a new access control surface.

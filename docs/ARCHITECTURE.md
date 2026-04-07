@@ -650,6 +650,27 @@ Memory is organized in three tiers with distinct access controls. Agents do not 
 
 These are the decisions where the design space had real alternatives. Each records the choice, the reason, and what the choice implies.
 
+### Security Principle: Default Deny — Explicit Permission Required for All Access (Decision 39)
+
+**This principle governs the entire system.** It is not a feature of any one component — it is the baseline posture every component must uphold.
+
+Every access control gate — channel sender allowlists, skill permissions, group registration, token scopes, filesystem paths, network endpoints, memory write approval — defaults to **deny**. An absent, empty, or unconfigured gate is a closed gate, not an open one. The only way into any protected resource is an explicit, administrator-controlled, non-empty permission grant.
+
+**Why this matters:** The class of defect this prevents is silent open access from misconfiguration. A missing `TELEGRAM_VALID_USERS` that falls through to `allow: '*'`; a skill permission field that defaults to `power` instead of failing; a memory write that proceeds when Cato's socket is unreachable. These defects pass all feature tests. They are only caught by security review or by someone who knows what the semantics *should* be. Named as a principle, they become a checklist item at every milestone gate.
+
+**Applies to:**
+- Channel sender allowlists: unconfigured = no senders allowed (channels are silent to unknown users)
+- Skill application: missing or invalid `apply_permission` = validation failure (skill does not install)
+- Group registration: unregistered group = no agent response (the agent does not exist for that group)
+- Token scopes (`skillSet`, `dataScopes`): empty = no calls, no memory access
+- Filesystem access (Node.js `--permission`): undeclared path = access denied
+- Network endpoints (Call Inspector): undeclared endpoint = call blocked
+- Memory writes (Cato gate): non-`allow: true` response = write denied, including socket-unreachable
+
+**Implementation rule:** Any developer adding a new access control surface must treat empty/absent configuration as deny-all and have the Security Reviewer verify this at the milestone gate.
+
+---
+
 ### ADR-1: Cato Is Infrastructure, Not Persona
 
 **Choice:** Cato has no conversational character, cannot be addressed by users or agents, and communicates through a binary allow/block protocol only. Alef translates Cato's decisions into user-readable explanations.
