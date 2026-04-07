@@ -52,7 +52,7 @@ Single Node.js process (v1.0-dev branch, Phase 2 development in progress). Chann
 - `OPENGOLEM_CHANNELS` — e.g. `tui`, `tui,telegram` (see `src/channels/channel-enabled.ts`)
 - `TELEGRAM_BOT_TOKEN` — when using Telegram (bot from @BotFather)
 - `TELEGRAM_ALLOW_GROUPS` — `1` / `true` / `yes` to allow supergroups/groups
-- `TELEGRAM_VALID_USERS` — optional comma-separated Telegram user ids
+- `TELEGRAM_VALID_USERS` — **mandatory** comma-separated Telegram user IDs; empty or unset = no access from anyone (fail-secure)
 - `LOG_LEVEL` — `debug` | `info` | `warn` | `error` | `fatal` (TUI-only default is `warn` when unset)
 - `INBOUND_RATE_LIMIT_PER_SENDER` — max messages per sender per 60s window (default: 10)
 - `INBOUND_QUEUE_MAX_DEPTH` — max pending messages per group queue (default: 100)

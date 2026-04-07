@@ -127,8 +127,11 @@ export function isSenderAllowed(
   sender: string,
   cfg: SenderAllowlistConfig,
 ): boolean {
-  const tgSet = getTelegramValidUserSet();
-  if (chatJid.startsWith('tg:') && tgSet) {
+  if (chatJid.startsWith('tg:')) {
+    // TELEGRAM_VALID_USERS is mandatory for Telegram.
+    // Unset or empty = no access from anyone (fail-secure).
+    const tgSet = getTelegramValidUserSet();
+    if (!tgSet) return false;
     return tgSet.has(sender);
   }
   const entry = getEntry(chatJid, cfg);
@@ -140,7 +143,8 @@ export function shouldDropMessage(
   chatJid: string,
   cfg: SenderAllowlistConfig,
 ): boolean {
-  if (chatJid.startsWith('tg:') && getTelegramValidUserSet()) {
+  if (chatJid.startsWith('tg:')) {
+    // Telegram always uses drop mode — isSenderAllowed is the gate.
     return true;
   }
   return getEntry(chatJid, cfg).mode === 'drop';

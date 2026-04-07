@@ -219,10 +219,6 @@ describe('isTriggerAllowed', () => {
 });
 
 describe('filterMessagesForTelegramAllowlist', () => {
-  beforeEach(() => {
-    // Override repo .env so Telegram tests are not gated by TELEGRAM_VALID_USERS.
-    process.env.TELEGRAM_VALID_USERS = '';
-  });
   afterEach(() => {
     delete process.env.TELEGRAM_VALID_USERS;
   });
@@ -249,14 +245,25 @@ describe('filterMessagesForTelegramAllowlist', () => {
     ).toEqual(msgs);
   });
 
-  it('with allow=* keeps all Telegram senders', () => {
+  it('with TELEGRAM_VALID_USERS set, keeps listed senders', () => {
+    process.env.TELEGRAM_VALID_USERS = '1,2';
     const msgs = [{ sender: '1' }, { sender: '2' }];
     expect(
       filterMessagesForTelegramAllowlist('tg:-100', msgs, cfgOpen),
     ).toEqual(msgs);
   });
 
-  it('filters Telegram to allowlisted senders only', () => {
+  it('with TELEGRAM_VALID_USERS unset, denies all Telegram senders', () => {
+    delete process.env.TELEGRAM_VALID_USERS;
+    const msgs = [{ sender: '1' }, { sender: '2' }];
+    expect(
+      filterMessagesForTelegramAllowlist('tg:-100', msgs, cfgOpen),
+    ).toEqual([]);
+  });
+
+  it('filters Telegram to TELEGRAM_VALID_USERS, ignores per-chat allow list', () => {
+    // TELEGRAM_VALID_USERS is the gate; per-chat cfg is not consulted for tg:
+    process.env.TELEGRAM_VALID_USERS = '111';
     const msgs = [
       { sender: '111', content: 'ok' },
       { sender: '999', content: 'no' },
@@ -266,7 +273,8 @@ describe('filterMessagesForTelegramAllowlist', () => {
     ).toEqual([msgs[0]]);
   });
 
-  it('keeps is_from_me and is_bot_message on Telegram', () => {
+  it('keeps is_from_me and is_bot_message regardless of TELEGRAM_VALID_USERS', () => {
+    delete process.env.TELEGRAM_VALID_USERS;
     const msgs = [
       { sender: '999', is_from_me: true },
       { sender: '888', is_bot_message: true },
