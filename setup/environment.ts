@@ -1,7 +1,7 @@
 /**
- * Step: environment — Detect OS, Node, container runtimes, existing config.
- * Replaces 01-check-environment.sh
+ * Setup step: detect OS, Node, container runtimes, and existing config.
  */
+import { execSync } from 'child_process';
 import fs from 'fs';
 import path from 'path';
 
@@ -12,82 +12,77 @@ import { logger } from '../src/logger.js';
 import { commandExists, getPlatform, isHeadless, isWSL } from './platform.js';
 import { emitStatus } from './status.js';
 
+const projectRoot = process.cwd();
+
+type DockerStatus = 'running' | 'installed_not_running' | 'not_found';
+
+function getDockerStatus(): DockerStatus {
+  if (!commandExists('docker')) return 'not_found';
+  try {
+    execSync('docker info', { stdio: 'ignore' });
+    return 'running';
+  } catch {
+    return 'installed_not_running';
+  }
+}
+
+function checkRegisteredGroups(): boolean {
+  const jsonPath = path.join(projectRoot, 'data', 'registered_groups.json');
+  if (fs.existsSync(jsonPath)) return true;
+
+  const dbPath = path.join(STORE_DIR, 'messages.db');
+  if (!fs.existsSync(dbPath)) return false;
+
+  try {
+    const db = new Database(dbPath, { readonly: true });
+    const row = db
+      .prepare('SELECT COUNT(*) as count FROM registered_groups')
+      .get() as { count: number };
+    db.close();
+    return row.count > 0;
+  } catch {
+    return false;
+  }
+}
+
 export async function run(_args: string[]): Promise<void> {
-  const projectRoot = process.cwd();
+  const PLATFORM = getPlatform();
+  const IS_WSL = isWSL();
+  const IS_HEADLESS = isHeadless();
+  const APPLE_CONTAINER = commandExists('container');
+  const DOCKER = getDockerStatus();
 
-  logger.info('Starting environment check');
-
-  const platform = getPlatform();
-  const wsl = isWSL();
-  const headless = isHeadless();
-
-  // Check Apple Container
-  let appleContainer: 'installed' | 'not_found' = 'not_found';
-  if (commandExists('container')) {
-    appleContainer = 'installed';
-  }
-
-  // Check Docker
-  let docker: 'running' | 'installed_not_running' | 'not_found' = 'not_found';
-  if (commandExists('docker')) {
-    try {
-      const { execSync } = await import('child_process');
-      execSync('docker info', { stdio: 'ignore' });
-      docker = 'running';
-    } catch {
-      docker = 'installed_not_running';
-    }
-  }
-
-  // Check existing config
-  const hasEnv = fs.existsSync(path.join(projectRoot, '.env'));
+  const HAS_ENV = fs.existsSync(path.join(projectRoot, '.env'));
 
   const authDir = path.join(projectRoot, 'store', 'auth');
-  const hasAuth = fs.existsSync(authDir) && fs.readdirSync(authDir).length > 0;
+  const HAS_AUTH =
+    fs.existsSync(authDir) && fs.readdirSync(authDir).length > 0;
 
-  let hasRegisteredGroups = false;
-  // Check JSON file first (pre-migration)
-  if (fs.existsSync(path.join(projectRoot, 'data', 'registered_groups.json'))) {
-    hasRegisteredGroups = true;
-  } else {
-    // Check SQLite directly using better-sqlite3 (no sqlite3 CLI needed)
-    const dbPath = path.join(STORE_DIR, 'messages.db');
-    if (fs.existsSync(dbPath)) {
-      try {
-        const db = new Database(dbPath, { readonly: true });
-        const row = db
-          .prepare('SELECT COUNT(*) as count FROM registered_groups')
-          .get() as { count: number };
-        if (row.count > 0) hasRegisteredGroups = true;
-        db.close();
-      } catch {
-        // Table might not exist yet
-      }
-    }
-  }
+  const HAS_REGISTERED_GROUPS = checkRegisteredGroups();
 
   logger.info(
     {
-      platform,
-      wsl,
-      appleContainer,
-      docker,
-      hasEnv,
-      hasAuth,
-      hasRegisteredGroups,
+      PLATFORM,
+      IS_WSL,
+      IS_HEADLESS,
+      APPLE_CONTAINER,
+      DOCKER,
+      HAS_ENV,
+      HAS_AUTH,
+      HAS_REGISTERED_GROUPS,
     },
-    'Environment check complete',
+    'environment check complete',
   );
 
   emitStatus('CHECK_ENVIRONMENT', {
-    PLATFORM: platform,
-    IS_WSL: wsl,
-    IS_HEADLESS: headless,
-    APPLE_CONTAINER: appleContainer,
-    DOCKER: docker,
-    HAS_ENV: hasEnv,
-    HAS_AUTH: hasAuth,
-    HAS_REGISTERED_GROUPS: hasRegisteredGroups,
+    PLATFORM,
+    IS_WSL,
+    IS_HEADLESS,
+    APPLE_CONTAINER,
+    DOCKER,
+    HAS_ENV,
+    HAS_AUTH,
+    HAS_REGISTERED_GROUPS,
     STATUS: 'success',
     LOG: 'logs/setup.log',
   });
