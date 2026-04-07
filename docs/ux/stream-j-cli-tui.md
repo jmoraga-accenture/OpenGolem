@@ -1,5 +1,5 @@
 # Stream J — UX Review: CLI and TUI Interaction Model
-*Status: Awaiting PM approval | Produced: 2026-04-06*
+*Status: Approved | Produced: 2026-04-06*
 *UX/Interaction Designer: Claude Code | Scope: TUI interface + Telegram channel UX*
 
 ---
@@ -559,11 +559,22 @@ The following items require Jim's review before any recommendation is acted upon
 
 1. **R1 (status hint):** Should the status hint include a queue depth indicator (e.g. `queue: 2`) or is the health panel (Ctrl-D) the right surface for that? The tradeoff is between always-visible pulse information and prompt clutter.
 
+ **From Jim:** queue depth in status hint
+
 2. **R8 (`[FLAG]` audit tag vs. display tag):** The spec already separates audit log tags from display configuration. This review recommends making that separation explicit in the behavioral spec. Does the Spec Writer need a new ADR for this, or is it covered by the existing "configurable display markers" design in ARCHITECTURE.md §3.5?
+
+ **From Jim:** If it's not clear to you then it needs fixing no matter what. I suggest changing ARCHITECTURE.md §3.5 and creating an ADR pointing at the changes
 
 3. **R9 (unlisted sender TUI advisory):** The recommended advisory appears in the TUI only. Should it also appear in the audit log as a `sender_blocked` event type distinct from the existing `message_received` event (which logs a hash of the sender, not a block outcome)? This is an audit log schema question for the orchestrator spec, not just a UX question.
 
+ **From Jim:** Agreed
+
 4. **R10 (supervised mode prompt):** The architecture defines Supervised mode as a Call Inspector soft-block with a "channel adapter round-trip." The TUI design above treats this as a prompt-level interaction. Is the intent that the user confirms via the same channel (i.e., the Telegram user approves their own action, not the TUI operator approves it on their behalf)? If so, the TUI approval prompt is for the case where TUI is the active channel. The recommendation above assumes TUI-as-channel; if Supervised mode is per-group and the group uses Telegram, the approval prompt appears in Telegram instead. Clarification from the Architect is needed.
+
+
+ **From Jim:** per channel, remember that each channel is an instance with its own permissions and rules (and evolving Golem). True supervisor/admin help is needed for changes that will affect the "root" Golem and behaviors, skills, permissions, etc affecting all channels
+
+
 
 ---
 
