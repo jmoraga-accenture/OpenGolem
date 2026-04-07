@@ -1,8 +1,65 @@
-*Status: Approved | Produced: 2026-04-06*
+*Status: Approved | Produced: 2026-04-06 | Updated: 2026-04-07 (§3.1 current state corrected; digest and pin compliance confirmed; Parts 1–2 policy summary added)*
 
 # OpenGolem — Supply-Chain Policy
-*Supply-Chain Auditor session | Stream L — Phase 1 | Parts 3 and 4*
-*Inputs: container/Dockerfile, container/build.sh, container/agent-runner/package.json, docs/ECOSYSTEM.md, docs/DECISIONS.md Decision 7, docs/sec/security-strengthening.md F-10, docs/ARCHITECTURE.md §1.2*
+*Supply-Chain Auditor session | Stream L — Phase 1*
+*Inputs: container/Dockerfile, container/build.sh, container/agent-runner/package.json, package.json, package-lock.json, docs/ECOSYSTEM.md, docs/DECISIONS.md Decision 7, docs/sec/security-strengthening.md F-10, docs/ARCHITECTURE.md §1.2*
+
+---
+
+## Part 1 — npm Audit CI Enforcement Rule
+
+### 1.1 Zero-High-Severity Gate
+
+**Command:** `npm audit --audit-level=high`
+
+All CI pipelines for the OpenGolem host-side codebase must run this command as a required check on every PR and push to `main`. A result with any `high` or `critical` finding in any production dependency causes a CI failure and blocks merge.
+
+**Production dependency scope:** The gate applies to packages in the `dependencies` block (not `devDependencies`). Development dependencies are audited separately with `npm audit --only=dev --audit-level=critical`: a `critical` devDep finding is a gate failure; a `high` devDep finding is a warning logged but not blocking.
+
+**Nightly sweep:** A separate nightly CI job runs `npm audit --audit-level=moderate` against `main` without a PR gate, catching newly disclosed CVEs between PR cycles. A new `high` or `critical` nightly finding triggers an alert requiring human review within one business day.
+
+**Suppression:** Individual CVEs may be suppressed only via a `.nsprc` entry containing the CVE identifier, suppression date, justification, and responsible approver (Jim). Blanket suppression of audit-level gates is prohibited. Suppressed CVEs are reviewed at the next scheduled audit cycle and must be re-evaluated when a patch becomes available.
+
+**Current status:** `npm audit` is not yet running in CI. This is the highest-priority gap from the Phase 1 audit (Finding SC-1 in `supply-chain-audit-phase1.md`).
+
+---
+
+## Part 2 — package-lock.json Integrity Verification
+
+### 2.1 Lockfile Enforcement
+
+**Install command:** All CI and deployment install steps must use `npm ci`, not `npm install`. `npm ci` installs from `package-lock.json` exactly, failing if `package.json` and `package-lock.json` are out of sync.
+
+**What constitutes a failure mode:** The CI step fails if:
+- `package-lock.json` is absent from the repository
+- `package-lock.json` and `package.json` are inconsistent (version mismatch)
+- Any package's integrity hash in the lockfile does not match the registry-reported hash
+
+**Lockfile commit policy:** `package-lock.json` must be committed to the repository and must not be in `.gitignore`. PRs that modify `package.json` must also update `package-lock.json`; a PR that modifies `package.json` without a corresponding lockfile update is blocked by CI.
+
+**Current status:** `package-lock.json` is committed and not in `.gitignore`. Whether `npm ci` is used in CI has not been confirmed. See Finding SC-2 in `supply-chain-audit-phase1.md`.
+
+### 2.2 Dependency Addition Policy
+
+Any PR that adds a new production dependency must include in the PR description:
+1. The functional justification for the new package (what capability it provides that no existing dependency satisfies).
+2. A brief transitive graph review: the number of transitive packages added, whether any have `postinstall`/`preinstall` scripts, and whether any are native bindings.
+3. Evidence that the package has no current `high` or `critical` CVEs (`npm audit` output or equivalent).
+4. Confirmation that the version is pinned exactly in `package.json` (no caret or tilde range for production dependencies).
+
+Jim is the named approver for all new production dependency additions.
+
+### 2.3 Version Update Trigger Classes
+
+**Class A — Security-triggered (mandatory):** CVE at HIGH or CRITICAL severity. Update within 72 hours. PR must include exploitability assessment for the OpenGolem deployment context.
+
+**Class B — Patch-version update (on-demand):** New patch release, no CVE trigger. Permitted but not automatic. Quarterly review cadence for `cron-parser`; on-demand only for `grammy` and `better-sqlite3`.
+
+**Class C — Minor or major version bump:** Requires Jim sign-off as named approver. PR must document transitive graph changes, any new install scripts, and (for `better-sqlite3`) whether the binary download mechanism changed.
+
+**72-hour quarantine:** No production dependency is updated to a version published within the previous 72 hours, absent a confirmed CVE in the current version.
+
+**`better-sqlite3` binary verification:** Any `better-sqlite3` version bump requires manual SHA-256 verification of the downloaded prebuilt `.node` binary against the hash published on the GitHub releases page, documented in the PR. See Finding SC-3 in `supply-chain-audit-phase1.md`.
 
 ---
 
@@ -10,19 +67,25 @@
 
 ### 3.1 Current State
 
+*Updated 2026-04-07: The Dockerfile has been verified against the current source. The digest-pinning and global-install-pinning requirements described in §3.2 are already implemented. The original §3.1 described a floating-tag state; that description reflected the policy intent at time of writing. The actual Dockerfile is compliant.*
+
 The agent container is built from:
 
 ```
-FROM node:22-slim
+FROM node:22-slim@sha256:80fdb3f57c815e1b638d221f30a826823467c4a56c8f6a8d7aa091cd9b1675ea
 ```
 
-This is a **floating tag**. `node:22-slim` resolves to whatever the Docker Hub `node` maintainers have published most recently under that tag. Between two `docker pull` operations — or between two `./container/build.sh` runs — the resolved image SHA-256 digest may change silently. The CI pipeline has no mechanism to detect this change, and `build.sh` does not record the digest of the resolved image.
+This is a digest-pinned reference — **compliant with §3.2**. The digest resolves deterministically to the same image bytes regardless of any tag overwrite on Docker Hub.
 
-This creates two supply-chain risks:
-1. **Silent base image substitution:** A compromise of the `node` Docker Hub namespace (or a tag overwrite — which Docker Hub permits for non-`@sha256` references) would deliver a malicious base image without any change to the Dockerfile.
-2. **Non-reproducible builds:** Two builds from the same Dockerfile may produce different images if the base image has been updated between runs. This makes audit and reproducibility claims impossible.
+The global npm installs are also exact-version pinned:
 
-The container also installs `@anthropic-ai/claude-code` and `agent-browser` globally at build time via `npm install -g`, without pinning to exact versions or verifying package signatures. These are additional floating-version installation points inside the container image.
+```
+RUN npm install -g agent-browser@0.25.1 @anthropic-ai/claude-code@2.1.92
+```
+
+Both pins are **compliant with §3.2**.
+
+The remaining gap is that a CI enforcement check (to prevent a future PR from removing the digest) and Trivy scanning are not yet implemented. These are addressed by Findings SC-5 and SC-7 in `supply-chain-audit-phase1.md`.
 
 ### 3.2 Base Image Pinning Policy
 
@@ -34,6 +97,13 @@ FROM node:22-slim@sha256:<64-character-hex-digest>
 ```
 
 The `node:22-slim` tag may be retained as a human-readable label alongside the digest, but the digest is the authoritative reference that Docker resolves. A Dockerfile that references a tag without a digest must be rejected by CI.
+
+**CI enforcement:** A lint step must verify the presence of a `@sha256:` digest reference in the `FROM` line:
+```bash
+grep -E '^FROM.*@sha256:[a-f0-9]{64}' container/Dockerfile || \
+  (echo "ERROR: Dockerfile FROM must include digest pin" && exit 1)
+```
+This step runs on every PR and push to `main`.
 
 **How to obtain the current digest:**
 ```bash
@@ -48,12 +118,8 @@ docker buildx imagetools inspect node:22-slim --format '{{json .Manifest}}' | jq
 
 **Digest update procedure:** The digest is updated deliberately, following the scanning gate described in §3.3. The update constitutes a code change (Dockerfile modification), is committed to the repository, and undergoes the standard PR review and merge process. No automated digest bump is permitted without a human review step.
 
-**npm global installs inside the Dockerfile:** The following lines also require version pins:
+**npm global installs inside the Dockerfile:** Global installs must use exact version pins, as currently implemented:
 ```
-# Current (floating — must be changed):
-RUN npm install -g agent-browser @anthropic-ai/claude-code
-
-# Required (exact version pins):
 RUN npm install -g agent-browser@<exact-version> @anthropic-ai/claude-code@<exact-version>
 ```
 
