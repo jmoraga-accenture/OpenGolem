@@ -1,12 +1,12 @@
 # OpenGolem
 
-Security-first personal AI assistant. See `docs/SPECS.md` for architecture. See `docs/PLAN.md` for implementation status. Human-facing overview: `README.md`. Cursor layout: `CURSOR.md` and `.cursor/rules/opengolem.mdc`.
+Security-first personal AI assistant. See `docs/ARCHITECTURE.md` for architecture. See `docs/PLAN_V1.md` for implementation status. Human-facing overview: `README.md`. Cursor layout: `CURSOR.md` and `.cursor/rules/opengolem.mdc`.
 
 ## Quick Context
 
-Single Node.js process (Phase 1 TypeScript baseline). Channels (Telegram, WhatsApp, Teams, TUI) are skills that self-register at startup. Messages route to Claude Agent SDK running in isolated Linux containers. Each group has its own filesystem, memory, and container sandbox. Credentials are mediated — agents never see raw API keys.
+Single Node.js process (v1.0-dev branch, Phase 2 development in progress). Channels: **TUI + Telegram** (v1.0 defaults, Decision 30). Messages route to Claude Agent SDK running in isolated Linux containers. Each group has its own filesystem, memory, and container sandbox. Credentials are mediated via Token Broker — agents never see raw API keys.
 
-**Current phase:** M1 complete. Security-hardened TypeScript baseline. See `docs/SECURITY_AUDIT.md` and `docs/PLAN.md` for lineage.
+**Current phase:** M12/M16/M17 complete (Token Broker, Skill Schema, Memory Tiers implemented). 563 tests passing. See `docs/PLAN_V1.md` for milestone status and `docs/PM_BRIEF.md` for open decisions.
 
 ## Key Files
 
@@ -14,7 +14,11 @@ Single Node.js process (Phase 1 TypeScript baseline). Channels (Telegram, WhatsA
 |------|---------|
 | `src/index.ts` | Orchestrator: state, message loop, agent invocation |
 | `src/channels/registry.ts` | Channel registry (self-registration at startup) |
-| `src/credential-proxy.ts` | Native credential proxy (M1 placeholder for Token Broker) |
+| `src/broker/index.ts` | Token Broker — JSON-RPC 2.0, Call Inspector, credential proxy |
+| `src/memory/tier1.ts` | Tier 1: CLAUDE.md per-group memory with Cato gate |
+| `src/memory/tier2.ts` | Tier 2: messages.db episodic memory (WAL, per-group) |
+| `src/memory/tier3.ts` | Tier 3: memory.db strategic memory with Inspector gate |
+| `src/skills/skill-schema.ts` | Skill schema validation and lifecycle |
 | `src/ipc.ts` | IPC watcher and task processing |
 | `src/router.ts` | Message formatting and outbound routing |
 | `src/config.ts` | Trigger pattern, paths, intervals |
@@ -23,29 +27,36 @@ Single Node.js process (Phase 1 TypeScript baseline). Channels (Telegram, WhatsA
 | `src/db.ts` | SQLite operations |
 | `groups/{name}/CLAUDE.md` | Per-group memory (isolated) |
 | `container/skills/` | Skills loaded inside agent containers (browser, status) |
-| `docs/SPECS.md` | Architecture specification (v0.4) |
-| `docs/PLAN.md` | Implementation plan with milestone status |
-| `docs/SECURITY_AUDIT.md` | Security audit findings and fixes |
-| `docs/DECISIONS.md` | Architecture decision records |
+| `docs/ARCHITECTURE.md` | Architecture specification (v1.0) |
+| `docs/PLAN_V1.md` | Implementation plan with milestone status |
+| `docs/DECISIONS.md` | Architecture decision records (ADR-1 through ADR-38) |
+| `docs/SECURITY_STRENGTHENING.md` | Security findings F-1–F-10 and closure status |
+| `docs/PM_BRIEF.md` | PM operating document — open decisions and stream status |
+| `docs/specs/` | Behavioral specs for all components |
+| `docs/deployment/` | Hardening, credential rotation, broker recovery runbooks |
 | `README.md` | Overview, quick start, credits (lineage vs new work) |
 | `.cursor/rules/opengolem.mdc` | Cursor IDE always-on project rules |
 
 ## Secrets / Credentials
 
-**Target (see `docs/SPECS.md` §5.1, `docs/DECISIONS.md` Decision 8):** three selectable backends behind the Token Broker — **`.env`** (dev), **Bitwarden** (recommended production), **OneCLI** Agent Vault (optional; same gateway pattern as the upstream stack when configured on a secure local bind).
+**Target (see `docs/ARCHITECTURE.md` §5.1, `docs/DECISIONS.md` Decision 8):** three selectable backends behind the Token Broker — **`.env`** (dev), **Bitwarden** (recommended production), **OneCLI** Agent Vault (optional).
 
-**Current implementation (M1):** native credential proxy (`src/credential-proxy.ts`) reads from `.env` and injects into container API requests via `ANTHROPIC_BASE_URL`. Supports `ANTHROPIC_API_KEY`, `CLAUDE_CODE_OAUTH_TOKEN`, and `ANTHROPIC_AUTH_TOKEN`. Token Broker (M2) will replace this with opaque scoped tokens + pluggable backends.
+**Current implementation:** Token Broker (`src/broker/index.ts`) reads from `.env` credential backend and issues derivative tokens to containers. Containers never receive raw credentials — they call the credential proxy which injects the real credential per-call after Call Inspector checks.
 
 **`.env` keys:**
 - `CLAUDE_CODE_OAUTH_TOKEN` — Enterprise/Pro OAuth token (from `claude setup-token`)
 - `ANTHROPIC_API_KEY` — API key from console.anthropic.com
 - `ANTHROPIC_BASE_URL_UPSTREAM` — custom Enterprise endpoint (optional)
 - `CREDENTIAL_PROXY_PORT` — proxy port (default: 3001)
+- `CREDENTIAL_PROXY_BIND_ADDRESS` — override Docker bridge bind address (default: `172.17.0.1`)
 - `OPENGOLEM_CHANNELS` — e.g. `tui`, `tui,telegram` (see `src/channels/channel-enabled.ts`)
 - `TELEGRAM_BOT_TOKEN` — when using Telegram (bot from @BotFather)
-- `TELEGRAM_ALLOW_GROUPS` — `1` / `true` / `yes` to allow supergroups/groups (requires explicit allowlist per `tg:-…` chat; see `docs/INTERNALS.md`)
-- `TELEGRAM_VALID_USERS` — optional comma-separated Telegram user ids; see `docs/INTERNALS.md`
+- `TELEGRAM_ALLOW_GROUPS` — `1` / `true` / `yes` to allow supergroups/groups
+- `TELEGRAM_VALID_USERS` — optional comma-separated Telegram user ids
 - `LOG_LEVEL` — `debug` | `info` | `warn` | `error` | `fatal` (TUI-only default is `warn` when unset)
+- `INBOUND_RATE_LIMIT_PER_SENDER` — max messages per sender per 60s window (default: 10)
+- `INBOUND_QUEUE_MAX_DEPTH` — max pending messages per group queue (default: 100)
+- `CREDENTIAL_RELOAD_INTERVAL` — credential backend poll interval ms (default: 300000)
 
 ## Skills
 
@@ -71,7 +82,7 @@ Run commands directly — don't tell the user to run them.
 ```bash
 npm run dev          # Run with hot reload
 npm run build        # Compile TypeScript
-npm test             # Run test suite (445 tests)
+npm test             # Run test suite (563 tests)
 ./container/build.sh # Rebuild agent container image
 ```
 

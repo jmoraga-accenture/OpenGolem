@@ -1,4 +1,4 @@
-*Status: Awaiting PM approval | Produced: 2026-04-06*
+*Status: Approved | Produced: 2026-04-06*
 
 # OpenGolem — Supply-Chain Policy
 *Supply-Chain Auditor session | Stream L — Phase 1 | Parts 3 and 4*

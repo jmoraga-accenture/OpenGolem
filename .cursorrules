@@ -1,3 +1,3 @@
 # OpenGolem
 
-Read repository **CLAUDE.md** first. Architecture: **docs/SPECS.md** and **docs/PLAN.md**. Overview and credits: **README.md**. Additional Cursor rules: **.cursor/rules/opengolem.mdc**.
+Read repository **CLAUDE.md** first. Architecture: **docs/ARCHITECTURE.md** and **docs/PLAN_V1.md**. Overview and credits: **README.md**. Additional Cursor rules: **.cursor/rules/opengolem.mdc**.

@@ -6,7 +6,7 @@ alwaysApply: true
 # OpenGolem
 
 - **Start here:** repository root `CLAUDE.md` (commands, key files, credentials, sentinel protocol).
-- **Architecture and security model:** `docs/SPECS.md`. **Roadmap / lineage:** `docs/PLAN.md`.
+- **Architecture and security model:** `docs/ARCHITECTURE.md`. **Roadmap / lineage:** `docs/PLAN_V1.md`.
 - **Human-facing overview and credits:** `README.md` (NanoClaw / MicroClaw lineage; original direction and new work credited to Jim Moraga).
 - Prefer **small, focused** changes; match existing naming and patterns; do not expand scope without an explicit request.
 - After substantive TypeScript changes, run **`npm test`** when practical.

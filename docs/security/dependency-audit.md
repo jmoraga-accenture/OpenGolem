@@ -1,4 +1,4 @@
-*Status: Awaiting PM approval | Produced: 2026-04-06*
+*Status: Approved | Produced: 2026-04-06*
 
 # OpenGolem — Dependency Audit Report
 *Supply-Chain Auditor session | Stream L — Phase 1 | Inputs: package.json, package-lock.json, docs/sec/security-strengthening.md F-10, docs/DECISIONS.md Decisions 28 and 30, docs/ECOSYSTEM.md, docs/ARCHITECTURE.md*

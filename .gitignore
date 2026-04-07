@@ -65,7 +65,6 @@ Thumbs.db
 *.swo
 *~
 
-.env
 
 logs/
 store/
@@ -75,3 +74,8 @@ reports/
 dev-handoff/
 .archive/
 
+
+# Claude Code worktrees and SQLite WAL
+.claude/worktrees/
+*.db-shm
+*.db-wal

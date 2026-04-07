@@ -1,5 +1,5 @@
 # Stream G — Cybersecurity Specialist Report (v2)
-*Status: Awaiting PM approval | Produced: 2026-04-06 | Supersedes: v1 (four-channel scope)*
+*Status: Approved | Produced: 2026-04-06 | Supersedes: v1 (four-channel scope)*
 *Inputs: ARCHITECTURE.md v1.0, SECURITY_STRENGTHENING.md, DECISIONS.md (Decisions 1–30), docs/specs/token-broker-spec.md, docs/specs/orchestrator-spec.md, docs/specs/channel-adapters-spec.md, docs/specs/audit-log-spec.md, docs/specs/cato-spec.md, docs/specs/skill-schema-spec.md, docs/specs/soul-psyche-spec.md, package.json*
 
 ---
