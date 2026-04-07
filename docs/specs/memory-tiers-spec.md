@@ -170,7 +170,7 @@ Every outbound response routed by the orchestrator is written to the relevant gr
 A `tasks` row is created when a container is spawned for a task, and updated when the task ends (with `ended_at` and final `status`). A task that times out records `status = 'timed_out'`. A task blocked by Cato records `status = 'blocked'`.
 
 **T2-6: No container access**
-The directory `groups/{name}/` is bind-mounted into containers for group `name` with specific file and path permissions. `messages.db` must not be included in the container's bind mount set. A container that attempts to open `messages.db` receives a filesystem permission error.
+Containers for group `name` receive a layered bind mount set: `groups/{name}/workspace/` → `/workspace/group/` (r/w), with `CLAUDE.md`, `logs/`, and `attachments/` overlaid individually. `messages.db` lives flat in `groups/{name}/` — outside the `workspace/` subdirectory — and is never included in any container's bind mount set. A container that attempts to open `messages.db` receives a filesystem not-found error.
 
 **T2-7: Cato read access**
 Cato may open a read-only connection to any group's `messages.db` during scheduled audits. This read connection does not block orchestrator writes. WAL (Write-Ahead Logging) mode is mandatory for all Tier 2 `messages.db` files (Decision 21). The orchestrator must set `PRAGMA journal_mode=WAL` when creating or opening any `messages.db`. This ensures Cato's read-only audit connections do not block orchestrator writes.

@@ -9,7 +9,7 @@
  * Required env vars:
  *   ONECLI_GATEWAY_URL   — base URL of the OneCLI gateway
  *                          (e.g. http://127.0.0.1:4000)
- *   ONECLI_VAULT_TOKEN   — bearer token for gateway authentication
+ *   ONECLI_GATEWAY_TOKEN   — bearer token for gateway authentication
  *
  * The gateway must expose:
  *   POST /v1/credential
@@ -23,16 +23,16 @@ export class OneCLICredentialBackend implements CredentialBackend {
   readonly name = 'onecli';
 
   async resolve(): Promise<ResolvedCredential> {
-    const env = readEnvFile(['ONECLI_GATEWAY_URL', 'ONECLI_VAULT_TOKEN']);
+    const env = readEnvFile(['ONECLI_GATEWAY_URL', 'ONECLI_GATEWAY_TOKEN']);
 
     const gatewayUrl = process.env.ONECLI_GATEWAY_URL || env.ONECLI_GATEWAY_URL;
-    const vaultToken = process.env.ONECLI_VAULT_TOKEN || env.ONECLI_VAULT_TOKEN;
+    const vaultToken = process.env.ONECLI_GATEWAY_TOKEN || env.ONECLI_GATEWAY_TOKEN;
 
     if (!gatewayUrl) {
       throw new Error('OneCLICredentialBackend: ONECLI_GATEWAY_URL not set.');
     }
     if (!vaultToken) {
-      throw new Error('OneCLICredentialBackend: ONECLI_VAULT_TOKEN not set.');
+      throw new Error('OneCLICredentialBackend: ONECLI_GATEWAY_TOKEN not set.');
     }
 
     const url = `${gatewayUrl.replace(/\/$/, '')}/v1/credential`;

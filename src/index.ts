@@ -609,9 +609,12 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
     prompt,
   });
   if (!cato.allow) {
+    // SECURITY: never expose internal Cato reason codes to the user channel.
+    // Reason is written to the audit log by the Cato inline hook; the user
+    // receives only a neutral, non-actionable notice.
     await channel.sendMessage(
       chatJid,
-      `[Cato] Blocked (${cato.reason ?? 'policy'}).`,
+      "[BLOCKED] I can't help with that request. If you think this is a mistake, please try rephrasing.",
     );
     return true;
   }

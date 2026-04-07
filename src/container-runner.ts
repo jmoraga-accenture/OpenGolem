@@ -206,19 +206,44 @@ function prepareSessionLayout(
 }
 
 /**
- * Mount only CLAUDE.md and logs/ from a group directory — never the whole
- * directory. Prevents messages.db (Tier 2) and any future per-group SQLite
- * files from being reachable inside containers (memory-tiers-spec INV-3, T2-6).
+ * Mount group files into /workspace/group/ inside the container.
+ *
+ * Security invariant (INV-3, T2-6): messages.db and any other per-group SQLite
+ * files MUST NOT be reachable inside containers. This is achieved by using a
+ * dedicated `workspace/` subdirectory of groupDir as the base mount — messages.db
+ * sits flat in groupDir and is never included. Specific files (CLAUDE.md, logs/,
+ * attachments/) are overlaid on top of the base mount via Docker's nested
+ * bind-mount semantics (more-specific path wins).
+ *
+ * Layout on host:
+ *   groups/{name}/workspace/   → /workspace/group/       (r/w — agent scratch)
+ *   groups/{name}/CLAUDE.md    → /workspace/group/CLAUDE.md  (r/w, overlays base)
+ *   groups/{name}/logs/        → /workspace/group/logs/   (r/w, overlays base)
+ *   groups/{name}/attachments/ → /workspace/group/attachments/ (r/o, overlays base)
+ *   groups/{name}/messages.db  ← NOT mounted (stays host-only)
  */
 function mountGroupFiles(groupDir: string, mounts: PreparedMount[]): void {
+  // Base: writable scratch dir for agent-created files (ideas/, research/, etc.)
+  const workspaceDir = path.join(groupDir, 'workspace');
+  fs.mkdirSync(workspaceDir, { recursive: true });
+  mounts.push({
+    hostPath: workspaceDir,
+    containerPath: '/workspace/group',
+    readonly: false,
+  });
+
+  // CLAUDE.md overlay — always ensure it exists so the bind mount can be created
   const claudeMd = path.join(groupDir, 'CLAUDE.md');
-  if (fs.existsSync(claudeMd)) {
-    mounts.push({
-      hostPath: claudeMd,
-      containerPath: '/workspace/group/CLAUDE.md',
-      readonly: false,
-    });
+  if (!fs.existsSync(claudeMd)) {
+    fs.writeFileSync(claudeMd, '');
   }
+  mounts.push({
+    hostPath: claudeMd,
+    containerPath: '/workspace/group/CLAUDE.md',
+    readonly: false,
+  });
+
+  // logs/ overlay
   const logsDir = path.join(groupDir, 'logs');
   fs.mkdirSync(logsDir, { recursive: true });
   mounts.push({
@@ -227,6 +252,7 @@ function mountGroupFiles(groupDir: string, mounts: PreparedMount[]): void {
     readonly: false,
   });
 
+  // attachments/ overlay — read-only: agent reads user-sent files, cannot modify them
   const attachDir = path.join(groupDir, 'attachments');
   fs.mkdirSync(attachDir, { recursive: true });
   mounts.push({
@@ -441,21 +467,14 @@ export async function runContainerAgent(
     budget: 100,
   };
   if (process.env.VITEST) {
-    void issueToken(issueOpts).catch((err) => {
-      logger.warn(
-        { err },
-        'Token broker issueToken failed; continuing without broker token',
-      );
-    });
+    // In test environments the broker socket is unavailable — fire-and-forget
+    // so the call doesn't block test execution.
+    void issueToken(issueOpts).catch(() => {});
   } else {
-    try {
-      brokerToken = await issueToken(issueOpts);
-    } catch (err) {
-      logger.warn(
-        { err },
-        'Token broker issueToken failed; continuing without broker token',
-      );
-    }
+    // FAIL-CLOSED: if the broker cannot issue a token, refuse to dispatch.
+    // A container without a broker token bypasses the Call Inspector and
+    // credential scoping — that is never an acceptable degraded mode.
+    brokerToken = await issueToken(issueOpts);
   }
 
   const proxyUrl = getContainerProxyUrl(CREDENTIAL_PROXY_PORT);

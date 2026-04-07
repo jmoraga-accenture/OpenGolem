@@ -414,7 +414,13 @@ This boundary is the primary host-container interface. Any change to it is a sec
 **Spawn direction (orchestrator → container):**
 *Protocol:* Container runtime invocation (docker run / apple container run) with explicit parameters.
 *What the orchestrator controls:*
-- Bind mounts: `--mount type=bind,src=<group-dir>,dst=/workspace/group,ro=false` and `--mount type=bind,src=<extra-dir>,dst=/workspace/extra,ro=true`
+- Bind mounts (layered, more-specific path wins):
+  - `--mount type=bind,src=<group-dir>/workspace,dst=/workspace/group,ro=false` — agent scratch area; persists across container runs
+  - `--mount type=bind,src=<group-dir>/CLAUDE.md,dst=/workspace/group/CLAUDE.md,ro=false` — Tier 1 memory overlay
+  - `--mount type=bind,src=<group-dir>/logs,dst=/workspace/group/logs,ro=false` — container log overlay
+  - `--mount type=bind,src=<group-dir>/attachments,dst=/workspace/group/attachments,ro=true` — user-sent attachments, read-only
+  - `--mount type=bind,src=<extra-dir>,dst=/workspace/extra,ro=true` — shared read-only context
+  - `messages.db` is never mounted — it sits flat in `<group-dir>/` outside the `workspace/` subdirectory (INV-3, T2-6)
 - Environment variables: `ANTHROPIC_BASE_URL` (set to credential proxy URL), provider config vars, `ASSISTANT_NAME`, `ALEF_FLAG_DISPLAY_TAG`, `ALEF_BLOCKED_DISPLAY_TAG` (defaults `[FLAG]`, `[BLOCKED]` — §3.5)
 - No raw credentials in environment
 - Resource limits: CPU and memory caps set at spawn time per task profile
@@ -796,6 +802,40 @@ Every access control gate — channel sender allowlists, skill permissions, grou
 *This document is the input to SPECS.md v1.0. SPECS.md v1.0 will translate this architecture into behavioral specifications for each component. The implementation audit follows: an Explore subagent walks `src/` against this document and produces a gap list (keep / shed / build). A **new** staged implementation roadmap replaces `docs/PLAN.md` v0.1 only after that audit; it treats the current codebase as v0.1 (starting point, not target), sequences parallel workstreams where permitted, and **does not** use retired “Phase 2 clean lab” framing.*
 
 *Produced: 2026-04-05. Architect: this session. Review comments RC-1–RC-7 incorporated 2026-04-05.*
+
+---
+
+## 8. Control Maturity Matrix
+
+This table is the authoritative record of which security controls are currently enforced, which are advisory, and which are planned. **Docs must not claim stronger guarantees than the Enforced column warrants.**
+
+| Control | Status | Notes |
+|---------|--------|-------|
+| Broker token issued at every dispatch | **Enforced** | Fail-closed since v0.3: dispatch aborts if `issueToken` throws |
+| Broker token revoked on container exit | **Enforced** | `revokeContainer` called in all exit paths |
+| Call Inspector — prompt injection check | **Enforced** | Hard block; never advisory |
+| Call Inspector — call rate limit | **Enforced** | Hard block; configurable via `INSPECTOR_RATE_LIMIT` |
+| Call Inspector — endpoint scope check | **Enforced** | Hard block; rejects non-Anthropic endpoints |
+| Call Inspector — skill whitelist | **Advisory** | Phase 1 limitation: container identity not yet propagated; check always passes. See `src/inspector/checks.ts`. |
+| Call Inspector — memory scope | **Advisory** | Phase 1 limitation: same reason as skill whitelist. |
+| Cato inline — path traversal block | **Enforced** | Hard block |
+| Cato inline — oversized prompt block | **Enforced** | Hard block |
+| Cato inline — broader policy coverage | **Planned** | Structured risk codes, richer rule set: Phase 2 (M14) |
+| Cato scheduled audit | **Partial** | Fires on interval; LLM audit path runs; `dao_score` computed. Hansei report delivery and escalation relay: Phase 2 |
+| Cato separate trust domain | **Partial** | IPC boundary exists (`cato.sock`); not a separate process with independent restart |
+| Broker token scopes constrained by skill set | **Planned** | Requires `.intent.md` validation + broker issuance integration (M18/M19) |
+| Request identity on proxied outbound calls | **Planned** | Container → proxy identity propagation not yet implemented |
+| Inbound rate limiting | **Enforced** | Sliding-window per-sender + queue depth cap (`INBOUND_RATE_LIMIT_PER_SENDER`, `INBOUND_QUEUE_MAX_DEPTH`) |
+| Credential proxy — raw credential isolation | **Enforced** | Containers never hold real API keys; proxy injects per-call |
+| Audit log — INSERT-only | **Enforced** | No UPDATE/DELETE in write path; WAL mode |
+| Audit log — HMAC chain integrity | **Planned** | Phase 2 (F-3) |
+| Memory scope — Tier 1 (CLAUDE.md) isolation | **Enforced** | Per-group bind mount; no cross-group path |
+| Memory scope — Tier 2 (messages.db) isolation | **Enforced** | Never mounted into containers (INV-3) |
+| Memory scope — Tier 3 (strategic memory) | **Planned** | Not yet implemented |
+| `.intent.md` skill declarations | **Partial** | Schema exists; validation runs at load time; broker issuance not yet constrained by declared scopes |
+| Governance / dashboard surface | **Planned** | M29–M32 |
+
+**Legend:** Enforced = hard guarantee in current code. Partial = mechanism exists, coverage or integration incomplete. Advisory = check runs but never blocks. Planned = not yet implemented.
 
 ---
 
