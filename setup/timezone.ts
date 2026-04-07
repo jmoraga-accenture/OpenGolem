@@ -1,7 +1,5 @@
 /**
- * Step: timezone — Detect, validate, and persist the user's timezone.
- * Writes TZ to .env if a valid IANA timezone is resolved.
- * Emits NEEDS_USER_INPUT=true when autodetection fails.
+ * Setup step: detect, validate, and persist the timezone.
  */
 import fs from 'fs';
 import path from 'path';
@@ -10,58 +8,73 @@ import { isValidTimezone } from '../src/timezone.js';
 import { logger } from '../src/logger.js';
 import { emitStatus } from './status.js';
 
-export async function run(args: string[]): Promise<void> {
-  const projectRoot = process.cwd();
-  const envFile = path.join(projectRoot, '.env');
+const projectRoot = process.cwd();
+const envPath = path.join(projectRoot, '.env');
 
-  // Check what's already in .env
-  let envFileTz: string | undefined;
-  if (fs.existsSync(envFile)) {
-    const content = fs.readFileSync(envFile, 'utf-8');
-    const match = content.match(/^TZ=(.+)$/m);
-    if (match) envFileTz = match[1].trim().replace(/^["']|["']$/g, '');
+function readEnvFileTz(): string | undefined {
+  if (!fs.existsSync(envPath)) return undefined;
+  const content = fs.readFileSync(envPath, 'utf-8');
+  const match = /^TZ=(.+)$/m.exec(content);
+  return match?.[1]?.trim() || undefined;
+}
+
+function writeEnvFileTz(tz: string): void {
+  if (fs.existsSync(envPath)) {
+    const content = fs.readFileSync(envPath, 'utf-8');
+    if (/^TZ=.*/m.test(content)) {
+      fs.writeFileSync(envPath, content.replace(/^TZ=.*$/m, `TZ=${tz}`));
+    } else {
+      fs.writeFileSync(envPath, content.trimEnd() + `\nTZ=${tz}\n`);
+    }
+  } else {
+    fs.writeFileSync(envPath, `TZ=${tz}\n`);
+  }
+}
+
+export async function run(args: string[]): Promise<void> {
+  const SYSTEM_TZ = Intl.DateTimeFormat().resolvedOptions().timeZone;
+  const ENV_TZ = process.env.TZ ?? '';
+  const ENV_FILE_TZ = readEnvFileTz() ?? '';
+
+  // Parse --tz flag
+  let flagTz: string | undefined;
+  const tzIdx = args.indexOf('--tz');
+  if (tzIdx !== -1 && args[tzIdx + 1]) {
+    flagTz = args[tzIdx + 1];
   }
 
-  const systemTz = Intl.DateTimeFormat().resolvedOptions().timeZone;
-  const envTz = process.env.TZ;
+  // Resolve with priority: --tz > .env file > process.env.TZ > system TZ
+  const candidates: Array<string | undefined> = [
+    flagTz,
+    ENV_FILE_TZ || undefined,
+    ENV_TZ || undefined,
+    SYSTEM_TZ || undefined,
+  ];
 
-  // Accept --tz flag from CLI (used when setup skill collects from user)
-  const tzFlagIdx = args.indexOf('--tz');
-  const userTz = tzFlagIdx !== -1 ? args[tzFlagIdx + 1] : undefined;
-
-  // Resolve: user-provided > .env > process.env > system autodetect
-  let resolvedTz: string | undefined;
-  for (const candidate of [userTz, envFileTz, envTz, systemTz]) {
+  let RESOLVED_TZ = '';
+  for (const candidate of candidates) {
     if (candidate && isValidTimezone(candidate)) {
-      resolvedTz = candidate;
+      RESOLVED_TZ = candidate;
       break;
     }
   }
 
-  const needsUserInput = !resolvedTz;
+  const NEEDS_USER_INPUT = !RESOLVED_TZ;
+  const STATUS = NEEDS_USER_INPUT ? 'needs_input' : 'success';
 
-  if (resolvedTz && resolvedTz !== envFileTz) {
-    // Write/update TZ in .env
-    if (fs.existsSync(envFile)) {
-      let content = fs.readFileSync(envFile, 'utf-8');
-      if (/^TZ=/m.test(content)) {
-        content = content.replace(/^TZ=.*$/m, `TZ=${resolvedTz}`);
-      } else {
-        content = content.trimEnd() + `\nTZ=${resolvedTz}\n`;
-      }
-      fs.writeFileSync(envFile, content);
-    } else {
-      fs.writeFileSync(envFile, `TZ=${resolvedTz}\n`);
-    }
-    logger.info({ timezone: resolvedTz }, 'Set TZ in .env');
+  if (RESOLVED_TZ && RESOLVED_TZ !== ENV_FILE_TZ) {
+    writeEnvFileTz(RESOLVED_TZ);
+    logger.info({ RESOLVED_TZ }, 'timezone written to .env');
   }
 
+  logger.info({ SYSTEM_TZ, ENV_TZ, ENV_FILE_TZ, RESOLVED_TZ, STATUS }, 'timezone step complete');
+
   emitStatus('TIMEZONE', {
-    SYSTEM_TZ: systemTz || 'unknown',
-    ENV_TZ: envTz || 'unset',
-    ENV_FILE_TZ: envFileTz || 'unset',
-    RESOLVED_TZ: resolvedTz || 'none',
-    NEEDS_USER_INPUT: needsUserInput,
-    STATUS: needsUserInput ? 'needs_input' : 'success',
+    SYSTEM_TZ,
+    ENV_TZ,
+    ENV_FILE_TZ,
+    RESOLVED_TZ,
+    NEEDS_USER_INPUT,
+    STATUS,
   });
 }
