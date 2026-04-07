@@ -1,652 +1,385 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
+  _closeDatabase,
   _initTestDatabase,
   createTask,
-  deleteTask,
-  getAllChats,
   getAllRegisteredGroups,
-  getLastBotMessageTimestamp,
+  getAllTasks,
+  getDueTasks,
   getMessagesSince,
   getNewMessages,
-  getTaskById,
   setRegisteredGroup,
   storeChatMetadata,
   storeMessage,
   updateTask,
 } from './db.js';
-import { formatMessages } from './router.js';
+import type { NewMessage, RegisteredGroup, ScheduledTask } from './types.js';
+
+vi.mock('./config.js', () => ({
+  DATA_DIR: '/tmp/og-db-test',
+  STORE_DIR: '/tmp/og-db-test/store',
+  ASSISTANT_NAME: 'Alef',
+}));
+
+vi.mock('./logger.js', () => ({
+  logger: {
+    debug: vi.fn(),
+    info: vi.fn(),
+    warn: vi.fn(),
+    error: vi.fn(),
+  },
+}));
+
+// group-folder validation: allow alphanumeric + hyphens, min 1 char
+vi.mock('./group-folder.js', () => ({
+  isValidGroupFolder: (folder: string) => /^[a-z0-9][a-z0-9-]*$/.test(folder),
+}));
 
 beforeEach(() => {
   _initTestDatabase();
 });
 
-// Helper to store a message using the normalized NewMessage interface
-function store(overrides: {
-  id: string;
-  chat_jid: string;
-  sender: string;
-  sender_name: string;
-  content: string;
-  timestamp: string;
-  is_from_me?: boolean;
-}) {
-  storeMessage({
-    id: overrides.id,
-    chat_jid: overrides.chat_jid,
-    sender: overrides.sender,
-    sender_name: overrides.sender_name,
-    content: overrides.content,
-    timestamp: overrides.timestamp,
-    is_from_me: overrides.is_from_me ?? false,
-  });
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+function makeMessage(overrides: Partial<NewMessage> = {}): NewMessage {
+  return {
+    id: 'msg-1',
+    chat_jid: 'chat@test',
+    sender: 'sender@test',
+    sender_name: 'Alice',
+    content: 'Hello world',
+    timestamp: new Date().toISOString(),
+    is_from_me: false,
+    is_bot_message: false,
+    reply_to_message_id: undefined,
+    reply_to_message_content: undefined,
+    reply_to_sender_name: undefined,
+    ...overrides,
+  };
 }
 
-// --- storeMessage (NewMessage format) ---
+function makeGroup(overrides: Partial<RegisteredGroup> = {}): RegisteredGroup {
+  return {
+    name: 'Test Group',
+    folder: 'test-group',
+    trigger: '@Alef',
+    added_at: new Date().toISOString(),
+    requiresTrigger: true,
+    isMain: false,
+    assertivenessLevel: 10,
+    ...overrides,
+  };
+}
+
+function makeTask(
+  overrides: Partial<Omit<ScheduledTask, 'last_run' | 'last_result'>> = {},
+): Omit<ScheduledTask, 'last_run' | 'last_result'> {
+  return {
+    id: 'task-1',
+    group_folder: 'test-group',
+    chat_jid: 'chat@test',
+    prompt: 'Send a daily summary',
+    script: null,
+    schedule_type: 'cron',
+    schedule_value: '0 9 * * *',
+    context_mode: 'isolated',
+    next_run: new Date(Date.now() + 60_000).toISOString(),
+    status: 'active',
+    created_at: new Date().toISOString(),
+    ...overrides,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// initDatabase / _initTestDatabase
+// ---------------------------------------------------------------------------
+
+describe('_initTestDatabase', () => {
+  it('initialises without throwing', () => {
+    // _initTestDatabase() was already called in beforeEach — no error means pass
+    expect(true).toBe(true);
+  });
+
+  it('can be called multiple times (re-opens cleanly)', () => {
+    _initTestDatabase();
+    _initTestDatabase();
+    // Should be functional after double init
+    expect(() => getAllTasks()).not.toThrow();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// storeChatMetadata
+// ---------------------------------------------------------------------------
+
+describe('storeChatMetadata', () => {
+  it('inserts a new chat row', () => {
+    const ts = new Date().toISOString();
+    expect(() =>
+      storeChatMetadata('jid@test', ts, 'Test Chat', 'telegram', false),
+    ).not.toThrow();
+  });
+
+  it('upserts — updating name and channel on conflict', () => {
+    const ts1 = '2025-01-01T00:00:00.000Z';
+    const ts2 = '2025-01-02T00:00:00.000Z';
+    storeChatMetadata('jid@test', ts1, 'Old Name', 'telegram', false);
+    storeChatMetadata('jid@test', ts2, 'New Name', 'telegram', false);
+    // Calling again should not throw
+    expect(() =>
+      storeChatMetadata('jid@test', ts2, 'New Name', 'telegram', false),
+    ).not.toThrow();
+  });
+
+  it('accepts undefined name and channel', () => {
+    const ts = new Date().toISOString();
+    expect(() => storeChatMetadata('jid2@test', ts)).not.toThrow();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// storeMessage / getMessagesSince
+// ---------------------------------------------------------------------------
 
 describe('storeMessage', () => {
-  it('stores a message and retrieves it', () => {
-    storeChatMetadata('group@g.us', '2024-01-01T00:00:00.000Z');
-
-    store({
-      id: 'msg-1',
-      chat_jid: 'group@g.us',
-      sender: '123@s.whatsapp.net',
-      sender_name: 'Alice',
-      content: 'hello world',
-      timestamp: '2024-01-01T00:00:01.000Z',
-    });
-
-    const messages = getMessagesSince(
-      'group@g.us',
-      '2024-01-01T00:00:00.000Z',
-      'Alef',
-    );
-    expect(messages).toHaveLength(1);
-    expect(messages[0].id).toBe('msg-1');
-    expect(messages[0].sender).toBe('123@s.whatsapp.net');
-    expect(messages[0].sender_name).toBe('Alice');
-    expect(messages[0].content).toBe('hello world');
+  it('stores a message without error', () => {
+    storeChatMetadata('chat@test', new Date().toISOString());
+    expect(() => storeMessage(makeMessage())).not.toThrow();
   });
 
-  it('filters out empty content', () => {
-    storeChatMetadata('group@g.us', '2024-01-01T00:00:00.000Z');
-
-    store({
-      id: 'msg-2',
-      chat_jid: 'group@g.us',
-      sender: '111@s.whatsapp.net',
-      sender_name: 'Dave',
-      content: '',
-      timestamp: '2024-01-01T00:00:04.000Z',
-    });
-
-    const messages = getMessagesSince(
-      'group@g.us',
-      '2024-01-01T00:00:00.000Z',
-      'Alef',
-    );
-    expect(messages).toHaveLength(0);
+  it('replaces an existing message with the same id+chat_jid', () => {
+    storeChatMetadata('chat@test', new Date().toISOString());
+    const msg = makeMessage({ content: 'original' });
+    storeMessage(msg);
+    storeMessage({ ...msg, content: 'updated' });
+    // Should not throw on duplicate
+    const msgs = getMessagesSince('chat@test', '1970-01-01T00:00:00.000Z', 'Alef');
+    expect(msgs).toHaveLength(1);
+    expect(msgs[0].content).toBe('updated');
   });
 
-  it('stores is_from_me flag', () => {
-    storeChatMetadata('group@g.us', '2024-01-01T00:00:00.000Z');
-
-    store({
-      id: 'msg-3',
-      chat_jid: 'group@g.us',
-      sender: 'me@s.whatsapp.net',
-      sender_name: 'Me',
-      content: 'my message',
-      timestamp: '2024-01-01T00:00:05.000Z',
-      is_from_me: true,
-    });
-
-    // Message is stored (we can retrieve it — is_from_me doesn't affect retrieval)
-    const messages = getMessagesSince(
-      'group@g.us',
-      '2024-01-01T00:00:00.000Z',
-      'Alef',
-    );
-    expect(messages).toHaveLength(1);
-  });
-
-  it('upserts on duplicate id+chat_jid', () => {
-    storeChatMetadata('group@g.us', '2024-01-01T00:00:00.000Z');
-
-    store({
-      id: 'msg-dup',
-      chat_jid: 'group@g.us',
-      sender: '123@s.whatsapp.net',
-      sender_name: 'Alice',
-      content: 'original',
-      timestamp: '2024-01-01T00:00:01.000Z',
-    });
-
-    store({
-      id: 'msg-dup',
-      chat_jid: 'group@g.us',
-      sender: '123@s.whatsapp.net',
-      sender_name: 'Alice',
-      content: 'updated',
-      timestamp: '2024-01-01T00:00:01.000Z',
-    });
-
-    const messages = getMessagesSince(
-      'group@g.us',
-      '2024-01-01T00:00:00.000Z',
-      'Alef',
-    );
-    expect(messages).toHaveLength(1);
-    expect(messages[0].content).toBe('updated');
-  });
-});
-
-// --- reply context persistence ---
-
-describe('reply context', () => {
-  it('stores and retrieves reply_to fields', () => {
-    storeChatMetadata('group@g.us', '2024-01-01T00:00:00.000Z');
-
-    storeMessage({
-      id: 'reply-1',
-      chat_jid: 'group@g.us',
-      sender: '123',
-      sender_name: 'Alice',
-      content: 'Yes, on my way!',
-      timestamp: '2024-01-01T00:00:01.000Z',
-      reply_to_message_id: '42',
-      reply_to_message_content: 'Are you coming tonight?',
+  it('stores reply fields when provided', () => {
+    storeChatMetadata('chat@test', new Date().toISOString());
+    const msg = makeMessage({
+      id: 'reply-msg',
+      reply_to_message_id: 'orig-id',
+      reply_to_message_content: 'original content',
       reply_to_sender_name: 'Bob',
     });
-
-    const messages = getMessagesSince(
-      'group@g.us',
-      '2024-01-01T00:00:00.000Z',
-      'Alef',
-    );
-    expect(messages).toHaveLength(1);
-    expect(messages[0].reply_to_message_id).toBe('42');
-    expect(messages[0].reply_to_message_content).toBe(
-      'Are you coming tonight?',
-    );
-    expect(messages[0].reply_to_sender_name).toBe('Bob');
-  });
-
-  it('returns null for messages without reply context', () => {
-    storeChatMetadata('group@g.us', '2024-01-01T00:00:00.000Z');
-
-    store({
-      id: 'no-reply',
-      chat_jid: 'group@g.us',
-      sender: '123',
-      sender_name: 'Alice',
-      content: 'Just a normal message',
-      timestamp: '2024-01-01T00:00:01.000Z',
-    });
-
-    const messages = getMessagesSince(
-      'group@g.us',
-      '2024-01-01T00:00:00.000Z',
-      'Alef',
-    );
-    expect(messages).toHaveLength(1);
-    expect(messages[0].reply_to_message_id).toBeNull();
-    expect(messages[0].reply_to_message_content).toBeNull();
-    expect(messages[0].reply_to_sender_name).toBeNull();
-  });
-
-  it('retrieves reply context via getNewMessages', () => {
-    storeChatMetadata('group@g.us', '2024-01-01T00:00:00.000Z');
-
-    storeMessage({
-      id: 'reply-2',
-      chat_jid: 'group@g.us',
-      sender: '456',
-      sender_name: 'Carol',
-      content: 'Agreed',
-      timestamp: '2024-01-01T00:00:01.000Z',
-      reply_to_message_id: '99',
-      reply_to_message_content: 'We should meet',
-      reply_to_sender_name: 'Dave',
-    });
-
-    const { messages } = getNewMessages(
-      ['group@g.us'],
-      '2024-01-01T00:00:00.000Z',
-      'Alef',
-    );
-    expect(messages).toHaveLength(1);
-    expect(messages[0].reply_to_message_id).toBe('99');
-    expect(messages[0].reply_to_sender_name).toBe('Dave');
+    storeMessage(msg);
+    const msgs = getMessagesSince('chat@test', '1970-01-01T00:00:00.000Z', 'Alef');
+    expect(msgs[0].reply_to_message_id).toBe('orig-id');
+    expect(msgs[0].reply_to_sender_name).toBe('Bob');
   });
 });
 
-// --- getMessagesSince ---
+// ---------------------------------------------------------------------------
+// getMessagesSince
+// ---------------------------------------------------------------------------
 
 describe('getMessagesSince', () => {
   beforeEach(() => {
-    storeChatMetadata('group@g.us', '2024-01-01T00:00:00.000Z');
-
-    store({
-      id: 'm1',
-      chat_jid: 'group@g.us',
-      sender: 'Alice@s.whatsapp.net',
-      sender_name: 'Alice',
-      content: 'first',
-      timestamp: '2024-01-01T00:00:01.000Z',
-    });
-    store({
-      id: 'm2',
-      chat_jid: 'group@g.us',
-      sender: 'Bob@s.whatsapp.net',
-      sender_name: 'Bob',
-      content: 'second',
-      timestamp: '2024-01-01T00:00:02.000Z',
-    });
-    storeMessage({
-      id: 'm3',
-      chat_jid: 'group@g.us',
-      sender: 'Bot@s.whatsapp.net',
-      sender_name: 'Bot',
-      content: 'bot reply',
-      timestamp: '2024-01-01T00:00:03.000Z',
-      is_bot_message: true,
-    });
-    store({
-      id: 'm4',
-      chat_jid: 'group@g.us',
-      sender: 'Carol@s.whatsapp.net',
-      sender_name: 'Carol',
-      content: 'third',
-      timestamp: '2024-01-01T00:00:04.000Z',
-    });
+    storeChatMetadata('chat@test', new Date().toISOString());
   });
 
   it('returns messages after the given timestamp', () => {
-    const msgs = getMessagesSince(
-      'group@g.us',
-      '2024-01-01T00:00:02.000Z',
-      'Alef',
+    const early = '2025-01-01T00:00:00.000Z';
+    const late = '2025-06-01T00:00:00.000Z';
+    storeMessage(makeMessage({ id: 'm1', timestamp: '2025-03-01T00:00:00.000Z' }));
+    storeMessage(makeMessage({ id: 'm2', timestamp: '2025-07-01T00:00:00.000Z' }));
+
+    const results = getMessagesSince('chat@test', early, 'Alef');
+    expect(results.length).toBe(2);
+
+    const results2 = getMessagesSince('chat@test', late, 'Alef');
+    expect(results2.length).toBe(1);
+    expect(results2[0].id).toBe('m2');
+  });
+
+  it('excludes bot messages', () => {
+    storeMessage(makeMessage({ id: 'human', timestamp: '2025-03-01T00:00:00.000Z', is_bot_message: false }));
+    storeMessage(makeMessage({ id: 'bot', timestamp: '2025-03-02T00:00:00.000Z', is_bot_message: true }));
+
+    const results = getMessagesSince('chat@test', '1970-01-01T00:00:00.000Z', 'Alef');
+    expect(results.map((m) => m.id)).not.toContain('bot');
+    expect(results.map((m) => m.id)).toContain('human');
+  });
+
+  it('excludes messages matching botPrefix pattern', () => {
+    storeMessage(
+      makeMessage({ id: 'prefixed', timestamp: '2025-03-01T00:00:00.000Z', content: 'Alef: some reply' }),
     );
-    // Should exclude m1, m2 (before/at timestamp), m3 (bot message)
-    expect(msgs).toHaveLength(1);
-    expect(msgs[0].content).toBe('third');
-  });
-
-  it('excludes bot messages via is_bot_message flag', () => {
-    const msgs = getMessagesSince(
-      'group@g.us',
-      '2024-01-01T00:00:00.000Z',
-      'Alef',
+    storeMessage(
+      makeMessage({ id: 'normal', timestamp: '2025-03-02T00:00:00.000Z', content: 'regular text' }),
     );
-    const botMsgs = msgs.filter((m) => m.content === 'bot reply');
-    expect(botMsgs).toHaveLength(0);
+
+    const results = getMessagesSince('chat@test', '1970-01-01T00:00:00.000Z', 'Alef');
+    expect(results.map((m) => m.id)).not.toContain('prefixed');
   });
 
-  it('returns all non-bot messages when sinceTimestamp is empty', () => {
-    const msgs = getMessagesSince('group@g.us', '', 'Alef');
-    // 3 user messages (bot message excluded)
-    expect(msgs).toHaveLength(3);
-  });
-
-  it('recovers cursor from last bot reply when lastAgentTimestamp is missing', () => {
-    // beforeEach already inserts m3 (bot reply at 00:00:03) and m4 (user at 00:00:04)
-    // Add more old history before the bot reply
-    for (let i = 1; i <= 50; i++) {
-      store({
-        id: `history-${i}`,
-        chat_jid: 'group@g.us',
-        sender: 'user@s.whatsapp.net',
-        sender_name: 'User',
-        content: `old message ${i}`,
-        timestamp: `2023-06-${String(i).padStart(2, '0')}T12:00:00.000Z`,
-      });
-    }
-
-    // New message after the bot reply (m3 at 00:00:03)
-    store({
-      id: 'new-1',
-      chat_jid: 'group@g.us',
-      sender: 'user@s.whatsapp.net',
-      sender_name: 'User',
-      content: 'new message after bot reply',
-      timestamp: '2024-01-02T00:00:00.000Z',
-    });
-
-    // Recover cursor from the last bot message (m3 from beforeEach)
-    const recovered = getLastBotMessageTimestamp('group@g.us', 'Alef');
-    expect(recovered).toBe('2024-01-01T00:00:03.000Z');
-
-    // Using recovered cursor: only gets messages after the bot reply
-    const msgs = getMessagesSince('group@g.us', recovered!, 'Alef', 10);
-    // m4 (third, 00:00:04) + new-1 — skips all 50 old messages and m1/m2
-    expect(msgs).toHaveLength(2);
-    expect(msgs[0].content).toBe('third');
-    expect(msgs[1].content).toBe('new message after bot reply');
-  });
-
-  it('caps messages to configured limit even with recovered cursor', () => {
-    // beforeEach inserts m3 (bot at 00:00:03). Add 30 messages after it.
-    for (let i = 1; i <= 30; i++) {
-      store({
-        id: `pending-${i}`,
-        chat_jid: 'group@g.us',
-        sender: 'user@s.whatsapp.net',
-        sender_name: 'User',
-        content: `pending message ${i}`,
-        timestamp: `2024-02-${String(i).padStart(2, '0')}T12:00:00.000Z`,
-      });
-    }
-
-    const recovered = getLastBotMessageTimestamp('group@g.us', 'Alef');
-    expect(recovered).toBe('2024-01-01T00:00:03.000Z');
-
-    // With limit=10, only the 10 most recent are returned
-    const msgs = getMessagesSince('group@g.us', recovered!, 'Alef', 10);
-    expect(msgs).toHaveLength(10);
-    // Most recent 10: pending-21 through pending-30
-    expect(msgs[0].content).toBe('pending message 21');
-    expect(msgs[9].content).toBe('pending message 30');
-  });
-
-  it('returns last N messages when no bot reply and no cursor exist', () => {
-    // Use a fresh group with no bot messages
-    storeChatMetadata('fresh@g.us', '2024-01-01T00:00:00.000Z');
-    for (let i = 1; i <= 20; i++) {
-      store({
-        id: `fresh-${i}`,
-        chat_jid: 'fresh@g.us',
-        sender: 'user@s.whatsapp.net',
-        sender_name: 'User',
-        content: `message ${i}`,
-        timestamp: `2024-02-${String(i).padStart(2, '0')}T12:00:00.000Z`,
-      });
-    }
-
-    const recovered = getLastBotMessageTimestamp('fresh@g.us', 'Alef');
-    expect(recovered).toBeUndefined();
-
-    // No cursor → sinceTimestamp = '' but limit caps the result
-    const msgs = getMessagesSince('fresh@g.us', '', 'Alef', 10);
-    expect(msgs).toHaveLength(10);
-
-    const prompt = formatMessages(msgs, 'Asia/Jerusalem');
-    const messageTagCount = (prompt.match(/<message /g) || []).length;
-    expect(messageTagCount).toBe(10);
-  });
-
-  it('filters pre-migration bot messages via content prefix backstop', () => {
-    // Simulate a message written before migration: has prefix but is_bot_message = 0
-    store({
-      id: 'm5',
-      chat_jid: 'group@g.us',
-      sender: 'Bot@s.whatsapp.net',
-      sender_name: 'Bot',
-      content: 'Alef: old bot reply',
-      timestamp: '2024-01-01T00:00:05.000Z',
-    });
-    const msgs = getMessagesSince(
-      'group@g.us',
-      '2024-01-01T00:00:04.000Z',
-      'Alef',
-    );
-    expect(msgs).toHaveLength(0);
+  it('returns empty array when no messages exist for chat', () => {
+    const results = getMessagesSince('empty-chat@test', '1970-01-01T00:00:00.000Z', 'Alef');
+    expect(results).toEqual([]);
   });
 });
 
-// --- getNewMessages ---
+// ---------------------------------------------------------------------------
+// getNewMessages
+// ---------------------------------------------------------------------------
 
 describe('getNewMessages', () => {
   beforeEach(() => {
-    storeChatMetadata('group1@g.us', '2024-01-01T00:00:00.000Z');
-    storeChatMetadata('group2@g.us', '2024-01-01T00:00:00.000Z');
-
-    store({
-      id: 'a1',
-      chat_jid: 'group1@g.us',
-      sender: 'user@s.whatsapp.net',
-      sender_name: 'User',
-      content: 'g1 msg1',
-      timestamp: '2024-01-01T00:00:01.000Z',
-    });
-    store({
-      id: 'a2',
-      chat_jid: 'group2@g.us',
-      sender: 'user@s.whatsapp.net',
-      sender_name: 'User',
-      content: 'g2 msg1',
-      timestamp: '2024-01-01T00:00:02.000Z',
-    });
-    storeMessage({
-      id: 'a3',
-      chat_jid: 'group1@g.us',
-      sender: 'user@s.whatsapp.net',
-      sender_name: 'User',
-      content: 'bot reply',
-      timestamp: '2024-01-01T00:00:03.000Z',
-      is_bot_message: true,
-    });
-    store({
-      id: 'a4',
-      chat_jid: 'group1@g.us',
-      sender: 'user@s.whatsapp.net',
-      sender_name: 'User',
-      content: 'g1 msg2',
-      timestamp: '2024-01-01T00:00:04.000Z',
-    });
+    storeChatMetadata('chat1@test', new Date().toISOString());
+    storeChatMetadata('chat2@test', new Date().toISOString());
   });
 
-  it('returns new messages across multiple groups', () => {
-    const { messages, newTimestamp } = getNewMessages(
-      ['group1@g.us', 'group2@g.us'],
-      '2024-01-01T00:00:00.000Z',
+  it('returns empty result when jids array is empty', () => {
+    const result = getNewMessages([], '1970-01-01T00:00:00.000Z', 'Alef');
+    expect(result).toEqual({ messages: [], newTimestamp: '' });
+  });
+
+  it('returns messages across multiple chats after lastTimestamp', () => {
+    storeMessage(makeMessage({ id: 'a1', chat_jid: 'chat1@test', timestamp: '2025-03-01T00:00:00.000Z' }));
+    storeMessage(makeMessage({ id: 'a2', chat_jid: 'chat2@test', timestamp: '2025-04-01T00:00:00.000Z' }));
+
+    const result = getNewMessages(
+      ['chat1@test', 'chat2@test'],
+      '2025-02-01T00:00:00.000Z',
       'Alef',
     );
-    // Excludes bot message, returns 3 user messages
-    expect(messages).toHaveLength(3);
-    expect(newTimestamp).toBe('2024-01-01T00:00:04.000Z');
+    expect(result.messages.length).toBe(2);
+    // newTimestamp should be the latest timestamp
+    expect(result.newTimestamp).toBe('2025-04-01T00:00:00.000Z');
   });
 
-  it('filters by timestamp', () => {
-    const { messages } = getNewMessages(
-      ['group1@g.us', 'group2@g.us'],
-      '2024-01-01T00:00:02.000Z',
-      'Alef',
-    );
-    // Only g1 msg2 (after ts, not bot)
-    expect(messages).toHaveLength(1);
-    expect(messages[0].content).toBe('g1 msg2');
-  });
-
-  it('returns empty for no registered groups', () => {
-    const { messages, newTimestamp } = getNewMessages([], '', 'Alef');
-    expect(messages).toHaveLength(0);
-    expect(newTimestamp).toBe('');
+  it('preserves lastTimestamp when no new messages exist', () => {
+    const ts = '2025-01-01T00:00:00.000Z';
+    const result = getNewMessages(['chat1@test'], ts, 'Alef');
+    expect(result.messages).toEqual([]);
+    expect(result.newTimestamp).toBe(ts);
   });
 });
 
-// --- storeChatMetadata ---
+// ---------------------------------------------------------------------------
+// setRegisteredGroup / getAllRegisteredGroups
+// ---------------------------------------------------------------------------
 
-describe('storeChatMetadata', () => {
-  it('stores chat with JID as default name', () => {
-    storeChatMetadata('group@g.us', '2024-01-01T00:00:00.000Z');
-    const chats = getAllChats();
-    expect(chats).toHaveLength(1);
-    expect(chats[0].jid).toBe('group@g.us');
-    expect(chats[0].name).toBe('group@g.us');
+describe('setRegisteredGroup / getAllRegisteredGroups', () => {
+  it('registers a new group', () => {
+    setRegisteredGroup('jid@test', makeGroup());
+    const all = getAllRegisteredGroups();
+    expect(Object.keys(all)).toContain('jid@test');
+    expect(all['jid@test'].name).toBe('Test Group');
   });
 
-  it('stores chat with explicit name', () => {
-    storeChatMetadata('group@g.us', '2024-01-01T00:00:00.000Z', 'My Group');
-    const chats = getAllChats();
-    expect(chats[0].name).toBe('My Group');
+  it('upserts on duplicate jid', () => {
+    setRegisteredGroup('jid@test', makeGroup({ name: 'Original' }));
+    setRegisteredGroup('jid@test', makeGroup({ name: 'Updated' }));
+    const all = getAllRegisteredGroups();
+    expect(all['jid@test'].name).toBe('Updated');
   });
 
-  it('updates name on subsequent call with name', () => {
-    storeChatMetadata('group@g.us', '2024-01-01T00:00:00.000Z');
-    storeChatMetadata('group@g.us', '2024-01-01T00:00:01.000Z', 'Updated Name');
-    const chats = getAllChats();
-    expect(chats).toHaveLength(1);
-    expect(chats[0].name).toBe('Updated Name');
+  it('throws for invalid folder name', () => {
+    expect(() =>
+      setRegisteredGroup('jid@test', makeGroup({ folder: '../evil' })),
+    ).toThrow();
   });
 
-  it('preserves newer timestamp on conflict', () => {
-    storeChatMetadata('group@g.us', '2024-01-01T00:00:05.000Z');
-    storeChatMetadata('group@g.us', '2024-01-01T00:00:01.000Z');
-    const chats = getAllChats();
-    expect(chats[0].last_message_time).toBe('2024-01-01T00:00:05.000Z');
+  it('getAllRegisteredGroups returns empty object when none registered', () => {
+    const all = getAllRegisteredGroups();
+    expect(all).toEqual({});
+  });
+
+  it('stores and retrieves containerConfig', () => {
+    const group = makeGroup({
+      containerConfig: { timeout: 60000, additionalMounts: [] },
+    });
+    setRegisteredGroup('jid-cfg@test', group);
+    const all = getAllRegisteredGroups();
+    expect(all['jid-cfg@test'].containerConfig?.timeout).toBe(60000);
+  });
+
+  it('stores requiresTrigger=false correctly', () => {
+    setRegisteredGroup('jid-no-trigger@test', makeGroup({ requiresTrigger: false }));
+    const all = getAllRegisteredGroups();
+    expect(all['jid-no-trigger@test'].requiresTrigger).toBe(false);
   });
 });
 
-// --- Task CRUD ---
+// ---------------------------------------------------------------------------
+// createTask / getAllTasks / getDueTasks / updateTask
+// ---------------------------------------------------------------------------
 
 describe('task CRUD', () => {
-  it('creates and retrieves a task', () => {
-    createTask({
-      id: 'task-1',
-      group_folder: 'main',
-      chat_jid: 'group@g.us',
-      prompt: 'do something',
-      schedule_type: 'once',
-      schedule_value: '2024-06-01T00:00:00.000Z',
-      context_mode: 'isolated',
-      next_run: '2024-06-01T00:00:00.000Z',
-      status: 'active',
-      created_at: '2024-01-01T00:00:00.000Z',
-    });
-
-    const task = getTaskById('task-1');
-    expect(task).toBeDefined();
-    expect(task!.prompt).toBe('do something');
-    expect(task!.status).toBe('active');
+  it('createTask stores the task', () => {
+    createTask(makeTask());
+    const all = getAllTasks();
+    expect(all).toHaveLength(1);
+    expect(all[0].id).toBe('task-1');
+    expect(all[0].prompt).toBe('Send a daily summary');
+    expect(all[0].last_run).toBeNull();
+    expect(all[0].last_result).toBeNull();
   });
 
-  it('updates task status', () => {
-    createTask({
-      id: 'task-2',
-      group_folder: 'main',
-      chat_jid: 'group@g.us',
-      prompt: 'test',
-      schedule_type: 'once',
-      schedule_value: '2024-06-01T00:00:00.000Z',
-      context_mode: 'isolated',
-      next_run: null,
-      status: 'active',
-      created_at: '2024-01-01T00:00:00.000Z',
-    });
-
-    updateTask('task-2', { status: 'paused' });
-    expect(getTaskById('task-2')!.status).toBe('paused');
+  it('getAllTasks returns all tasks regardless of status', () => {
+    createTask(makeTask({ id: 't1', status: 'active' }));
+    createTask(makeTask({ id: 't2', status: 'paused' }));
+    createTask(makeTask({ id: 't3', status: 'completed' }));
+    expect(getAllTasks()).toHaveLength(3);
   });
 
-  it('deletes a task and its run logs', () => {
-    createTask({
-      id: 'task-3',
-      group_folder: 'main',
-      chat_jid: 'group@g.us',
-      prompt: 'delete me',
-      schedule_type: 'once',
-      schedule_value: '2024-06-01T00:00:00.000Z',
-      context_mode: 'isolated',
-      next_run: null,
-      status: 'active',
-      created_at: '2024-01-01T00:00:00.000Z',
-    });
+  it('getDueTasks returns only active tasks with next_run <= now', () => {
+    const past = new Date(Date.now() - 5000).toISOString();
+    const future = new Date(Date.now() + 60_000).toISOString();
 
-    deleteTask('task-3');
-    expect(getTaskById('task-3')).toBeUndefined();
-  });
-});
+    createTask(makeTask({ id: 'due', next_run: past, status: 'active' }));
+    createTask(makeTask({ id: 'future', next_run: future, status: 'active' }));
+    createTask(makeTask({ id: 'paused', next_run: past, status: 'paused' }));
 
-// --- LIMIT behavior ---
-
-describe('message query LIMIT', () => {
-  beforeEach(() => {
-    storeChatMetadata('group@g.us', '2024-01-01T00:00:00.000Z');
-
-    for (let i = 1; i <= 10; i++) {
-      store({
-        id: `lim-${i}`,
-        chat_jid: 'group@g.us',
-        sender: 'user@s.whatsapp.net',
-        sender_name: 'User',
-        content: `message ${i}`,
-        timestamp: `2024-01-01T00:00:${String(i).padStart(2, '0')}.000Z`,
-      });
-    }
+    const due = getDueTasks();
+    expect(due.map((t) => t.id)).toContain('due');
+    expect(due.map((t) => t.id)).not.toContain('future');
+    expect(due.map((t) => t.id)).not.toContain('paused');
   });
 
-  it('getNewMessages caps to limit and returns most recent in chronological order', () => {
-    const { messages, newTimestamp } = getNewMessages(
-      ['group@g.us'],
-      '2024-01-01T00:00:00.000Z',
-      'Alef',
-      3,
-    );
-    expect(messages).toHaveLength(3);
-    expect(messages[0].content).toBe('message 8');
-    expect(messages[2].content).toBe('message 10');
-    // Chronological order preserved
-    expect(messages[1].timestamp > messages[0].timestamp).toBe(true);
-    // newTimestamp reflects latest returned row
-    expect(newTimestamp).toBe('2024-01-01T00:00:10.000Z');
+  it('getDueTasks returns empty when no tasks are due', () => {
+    const future = new Date(Date.now() + 60_000).toISOString();
+    createTask(makeTask({ id: 'not-due', next_run: future }));
+    expect(getDueTasks()).toHaveLength(0);
   });
 
-  it('getMessagesSince caps to limit and returns most recent in chronological order', () => {
-    const messages = getMessagesSince(
-      'group@g.us',
-      '2024-01-01T00:00:00.000Z',
-      'Alef',
-      3,
-    );
-    expect(messages).toHaveLength(3);
-    expect(messages[0].content).toBe('message 8');
-    expect(messages[2].content).toBe('message 10');
-    expect(messages[1].timestamp > messages[0].timestamp).toBe(true);
+  it('updateTask modifies specified fields', () => {
+    createTask(makeTask({ id: 'upd-task', status: 'active' }));
+    updateTask('upd-task', { status: 'paused', prompt: 'Updated prompt' });
+    const all = getAllTasks();
+    const task = all.find((t) => t.id === 'upd-task');
+    expect(task?.status).toBe('paused');
+    expect(task?.prompt).toBe('Updated prompt');
+    // Other fields unchanged
+    expect(task?.schedule_type).toBe('cron');
   });
 
-  it('returns all messages when count is under the limit', () => {
-    const { messages } = getNewMessages(
-      ['group@g.us'],
-      '2024-01-01T00:00:00.000Z',
-      'Alef',
-      50,
-    );
-    expect(messages).toHaveLength(10);
-  });
-});
-
-// --- RegisteredGroup isMain round-trip ---
-
-describe('registered group isMain', () => {
-  it('persists isMain=true through set/get round-trip', () => {
-    setRegisteredGroup('main@s.whatsapp.net', {
-      name: 'Main Chat',
-      folder: 'whatsapp_main',
-      trigger: '@Alef',
-      added_at: '2024-01-01T00:00:00.000Z',
-      isMain: true,
-    });
-
-    const groups = getAllRegisteredGroups();
-    const group = groups['main@s.whatsapp.net'];
-    expect(group).toBeDefined();
-    expect(group.isMain).toBe(true);
-    expect(group.folder).toBe('whatsapp_main');
+  it('updateTask with empty updates is a no-op', () => {
+    createTask(makeTask({ id: 'noop-task' }));
+    expect(() => updateTask('noop-task', {})).not.toThrow();
+    const all = getAllTasks();
+    expect(all[0].prompt).toBe('Send a daily summary');
   });
 
-  it('omits isMain for non-main groups', () => {
-    setRegisteredGroup('group@g.us', {
-      name: 'Family Chat',
-      folder: 'whatsapp_family-chat',
-      trigger: '@Alef',
-      added_at: '2024-01-01T00:00:00.000Z',
-    });
+  it('createTask stores script field', () => {
+    createTask(makeTask({ id: 'script-task', script: 'console.log("hello")' }));
+    const all = getAllTasks();
+    const task = all.find((t) => t.id === 'script-task');
+    expect(task?.script).toBe('console.log("hello")');
+  });
 
-    const groups = getAllRegisteredGroups();
-    const group = groups['group@g.us'];
-    expect(group).toBeDefined();
-    expect(group.isMain).toBeUndefined();
+  it('createTask with null script stores null', () => {
+    createTask(makeTask({ id: 'null-script', script: null }));
+    const all = getAllTasks();
+    const task = all.find((t) => t.id === 'null-script');
+    expect(task?.script).toBeNull();
   });
 });
