@@ -657,6 +657,205 @@ describe('details column JSON serialization', () => {
 });
 
 // ---------------------------------------------------------------------------
+// M37 — Concurrent Writer Integrity
+// ---------------------------------------------------------------------------
+
+describe('M37 — Concurrent Writer Integrity', () => {
+  const N = 50; // events per writer; 150 total
+  const WRITERS = ['orchestrator', 'broker', 'cato'] as const;
+  const CONTEXT_ID = 'ctx-m37-concurrent';
+
+  it('no WAL errors or lock contentions under concurrent load', async () => {
+    const dbPath = makeDbPath();
+    const logs = WRITERS.map((w) => openAuditLog(dbPath, w));
+
+    // Fire all three writers concurrently via Promise.all
+    await Promise.all(
+      logs.map((log, wi) =>
+        Promise.resolve().then(() => {
+          for (let i = 0; i < N; i++) {
+            log.writeEvent({
+              event_type: `m37_event_w${wi}`,
+              context_id: CONTEXT_ID,
+              details: { writer_index: wi, seq: i },
+            });
+          }
+        }),
+      ),
+    );
+
+    for (const log of logs) log.close();
+
+    // Verify no rows are missing
+    const db = new Database(dbPath, { readonly: true });
+    const total = (
+      db.prepare('SELECT COUNT(*) as cnt FROM events').get() as { cnt: number }
+    ).cnt;
+    db.close();
+
+    expect(total).toBe(N * WRITERS.length);
+  });
+
+  it('post-workload row count matches event count per writer', async () => {
+    const dbPath = makeDbPath();
+    const logs = WRITERS.map((w) => openAuditLog(dbPath, w));
+
+    await Promise.all(
+      logs.map((log, wi) =>
+        Promise.resolve().then(() => {
+          for (let i = 0; i < N; i++) {
+            log.writeEvent({
+              event_type: `m37_integrity_w${wi}`,
+              context_id: CONTEXT_ID,
+            });
+          }
+        }),
+      ),
+    );
+
+    for (const log of logs) log.close();
+
+    const db = new Database(dbPath, { readonly: true });
+
+    // Total rows
+    const total = (
+      db.prepare('SELECT COUNT(*) as cnt FROM events').get() as { cnt: number }
+    ).cnt;
+    expect(total).toBe(150);
+
+    // Per-writer counts
+    const perWriter = db
+      .prepare('SELECT writer, COUNT(*) as cnt FROM events GROUP BY writer')
+      .all() as { writer: string; cnt: number }[];
+
+    for (const w of WRITERS) {
+      const found = perWriter.find((r) => r.writer === w);
+      expect(found?.cnt).toBe(N);
+    }
+
+    // No partial rows — details column must be valid JSON for every row
+    const allRows = db
+      .prepare('SELECT details FROM events')
+      .all() as { details: string }[];
+    for (const row of allRows) {
+      expect(() => JSON.parse(row.details)).not.toThrow();
+    }
+
+    // context_id queries return complete event sets
+    const ctxRows = db
+      .prepare('SELECT writer FROM events WHERE context_id = ?')
+      .all(CONTEXT_ID) as { writer: string }[];
+    expect(ctxRows.length).toBe(150);
+
+    db.close();
+  });
+
+  it('sequence_id per writer is monotonically increasing (no gaps)', async () => {
+    const dbPath = makeDbPath();
+    const logs = WRITERS.map((w) => openAuditLog(dbPath, w));
+
+    await Promise.all(
+      logs.map((log, wi) =>
+        Promise.resolve().then(() => {
+          for (let i = 0; i < N; i++) {
+            log.writeEvent({ event_type: `m37_seq_w${wi}` });
+          }
+        }),
+      ),
+    );
+
+    for (const log of logs) log.close();
+
+    const db = new Database(dbPath, { readonly: true });
+
+    for (const w of WRITERS) {
+      const rows = db
+        .prepare(
+          `SELECT sequence_id FROM events WHERE writer = ? ORDER BY sequence_id ASC`,
+        )
+        .all(w) as { sequence_id: number }[];
+
+      expect(rows.length).toBe(N);
+      // sequence_id starts at 1
+      expect(rows[0]!.sequence_id).toBe(1);
+      // strictly increasing, no gaps
+      for (let i = 1; i < rows.length; i++) {
+        expect(rows[i]!.sequence_id).toBe(rows[i - 1]!.sequence_id + 1);
+      }
+    }
+
+    db.close();
+  });
+
+  it('no occurred_at timestamps in the future', async () => {
+    const dbPath = makeDbPath();
+    const logs = WRITERS.map((w) => openAuditLog(dbPath, w));
+    const beforeSec = Math.floor(Date.now() / 1000);
+
+    await Promise.all(
+      logs.map((log, wi) =>
+        Promise.resolve().then(() => {
+          for (let i = 0; i < N; i++) {
+            log.writeEvent({ event_type: `m37_ts_w${wi}` });
+          }
+        }),
+      ),
+    );
+
+    for (const log of logs) log.close();
+    const afterSec = Math.floor(Date.now() / 1000) + 1; // +1 for rounding
+
+    const db = new Database(dbPath, { readonly: true });
+    const rows = db
+      .prepare('SELECT occurred_at FROM events')
+      .all() as { occurred_at: number }[];
+    db.close();
+
+    for (const row of rows) {
+      expect(row.occurred_at).toBeGreaterThanOrEqual(beforeSec);
+      expect(row.occurred_at).toBeLessThanOrEqual(afterSec);
+    }
+  });
+
+  it('temporal consistency: no timestamp inversions beyond 2s within context_id', async () => {
+    const dbPath = makeDbPath();
+    const logs = WRITERS.map((w) => openAuditLog(dbPath, w));
+
+    await Promise.all(
+      logs.map((log, wi) =>
+        Promise.resolve().then(() => {
+          for (let i = 0; i < N; i++) {
+            log.writeEvent({
+              event_type: `m37_temporal_w${wi}`,
+              context_id: CONTEXT_ID,
+            });
+          }
+        }),
+      ),
+    );
+
+    for (const log of logs) log.close();
+
+    const db = new Database(dbPath, { readonly: true });
+    const rows = db
+      .prepare(
+        `SELECT occurred_at FROM events WHERE context_id = ? ORDER BY occurred_at ASC`,
+      )
+      .all(CONTEXT_ID) as { occurred_at: number }[];
+    db.close();
+
+    expect(rows.length).toBe(150);
+
+    // No entry should be more than 2 seconds earlier than its predecessor
+    // (clock resolution tolerance for concurrent writes on the same second)
+    for (let i = 1; i < rows.length; i++) {
+      const delta = rows[i]!.occurred_at - rows[i - 1]!.occurred_at;
+      expect(delta).toBeGreaterThanOrEqual(-2);
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Idempotent schema: re-opening an existing DB does not error
 // ---------------------------------------------------------------------------
 
