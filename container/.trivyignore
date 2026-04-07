@@ -1,0 +1,8 @@
+# Trivy CVE suppression file (SC-7)
+# Format: one CVE ID per line, with mandatory comment explaining the suppression
+# and an expiry date. Never suppress without evidence and a named approver.
+#
+# Example:
+# CVE-2024-XXXXX  # Accepted: affects feature X not used in this image. Expires: 2026-07-01. Approver: Jim.
+#
+# No active suppressions.

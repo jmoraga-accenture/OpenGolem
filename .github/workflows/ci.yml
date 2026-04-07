@@ -5,6 +5,9 @@ on:
     branches: [main, v1.0-dev, 'stream-*']
   pull_request:
     branches: [main, v1.0-dev]
+  schedule:
+    # Nightly Trivy scan at 02:00 UTC (SC-7)
+    - cron: '0 2 * * *'
 
 jobs:
   test:
@@ -33,3 +36,33 @@ jobs:
       - name: Security audit
         # ADR-38 / Decision 38: zero high/critical CVEs required
         run: npm audit --audit-level=high
+
+      - name: Dockerfile digest-pin check
+        # SC-5: prevent regression from digest-pinned to floating tag
+        run: |
+          grep -E '^FROM.*@sha256:[a-f0-9]{64}' container/Dockerfile \
+            || (echo "ERROR: Dockerfile FROM must include @sha256: digest pin" && exit 1)
+
+  container-scan:
+    name: Container Scan (Trivy)
+    runs-on: ubuntu-latest
+    # Run on PRs touching container/ and on nightly schedule (SC-7)
+    if: |
+      github.event_name == 'schedule' ||
+      (github.event_name == 'pull_request' &&
+       contains(join(github.event.pull_request.changed_files, ','), 'container/'))
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build container image
+        run: docker build -t opengolem-agent:ci ./container
+
+      - name: Run Trivy scan
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: opengolem-agent:ci
+          format: table
+          exit-code: '1'
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+          trivyignores: container/.trivyignore
