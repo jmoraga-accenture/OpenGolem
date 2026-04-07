@@ -75,7 +75,9 @@ dev-handoff/
 .archive/
 
 
-# Claude Code worktrees and SQLite WAL
+# Claude Code — worktrees and local settings (skills are intentionally tracked)
 .claude/worktrees/
+.claude/settings.json
+.claude/settings.local.json
 *.db-shm
 *.db-wal
