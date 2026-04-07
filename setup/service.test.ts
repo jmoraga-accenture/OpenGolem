@@ -1,187 +1,341 @@
-import { describe, it, expect } from 'vitest';
-import path from 'path';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 /**
- * Tests for service configuration generation.
+ * Clean-room tests for setup/service.ts run() function.
  *
- * These tests verify the generated content of plist/systemd/nohup configs
- * without actually loading services.
+ * Tests build-first gate, service manager selection, plist/unit/nohup file
+ * generation, and status emission — without actually loading any system service.
  */
 
-// Helper: generate a plist string the same way service.ts does
-function generatePlist(
-  nodePath: string,
-  projectRoot: string,
-  homeDir: string,
-): string {
-  return `<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-    <key>Label</key>
-    <string>com.opengolem</string>
-    <key>ProgramArguments</key>
-    <array>
-        <string>${nodePath}</string>
-        <string>${projectRoot}/dist/index.js</string>
-    </array>
-    <key>WorkingDirectory</key>
-    <string>${projectRoot}</string>
-    <key>RunAtLoad</key>
-    <true/>
-    <key>KeepAlive</key>
-    <true/>
-    <key>EnvironmentVariables</key>
-    <dict>
-        <key>PATH</key>
-        <string>/usr/local/bin:/usr/bin:/bin:${homeDir}/.local/bin</string>
-        <key>HOME</key>
-        <string>${homeDir}</string>
-    </dict>
-    <key>StandardOutPath</key>
-    <string>${projectRoot}/logs/opengolem.log</string>
-    <key>StandardErrorPath</key>
-    <string>${projectRoot}/logs/opengolem.error.log</string>
-</dict>
-</plist>`;
-}
+// --- Hoisted mock state (vi.mock factories are hoisted before variable declarations) ---
 
-function generateSystemdUnit(
-  nodePath: string,
-  projectRoot: string,
-  homeDir: string,
-  isSystem: boolean,
-): string {
-  return `[Unit]
-Description=OpenGolem Personal Assistant
-After=network.target
+const {
+  mockEmitStatus,
+  mockFs,
+  mockGetPlatform,
+  mockGetNodePath,
+  mockGetServiceManager,
+  mockHasSystemd,
+  mockIsRoot,
+  mockIsWSL,
+  mockExecSync,
+  mockExecFileSync,
+} = vi.hoisted(() => {
+  const mockFs = {
+    mkdirSync: vi.fn(),
+    writeFileSync: vi.fn(),
+    existsSync: vi.fn(() => false),
+  };
+  return {
+    mockEmitStatus: vi.fn(),
+    mockFs,
+    mockGetPlatform: vi.fn(() => 'linux' as const),
+    mockGetNodePath: vi.fn(() => '/usr/bin/node'),
+    mockGetServiceManager: vi.fn(() => 'systemd' as const),
+    mockHasSystemd: vi.fn(() => true),
+    mockIsRoot: vi.fn(() => false),
+    mockIsWSL: vi.fn(() => false),
+    mockExecSync: vi.fn(() => ''),
+    mockExecFileSync: vi.fn(() => ''),
+  };
+});
 
-[Service]
-Type=simple
-ExecStart=${nodePath} ${projectRoot}/dist/index.js
-WorkingDirectory=${projectRoot}
-Restart=always
-RestartSec=5
-KillMode=process
-Environment=HOME=${homeDir}
-Environment=PATH=/usr/local/bin:/usr/bin:/bin:${homeDir}/.local/bin
-StandardOutput=append:${projectRoot}/logs/opengolem.log
-StandardError=append:${projectRoot}/logs/opengolem.error.log
+vi.mock('./status.js', () => ({
+  emitStatus: mockEmitStatus,
+}));
 
-[Install]
-WantedBy=${isSystem ? 'multi-user.target' : 'default.target'}`;
-}
+vi.mock('../src/logger.js', () => ({
+  logger: {
+    info: vi.fn(),
+    warn: vi.fn(),
+    error: vi.fn(),
+    debug: vi.fn(),
+  },
+}));
 
-describe('plist generation', () => {
-  it('contains the correct label', () => {
-    const plist = generatePlist(
-      '/usr/local/bin/node',
-      '/home/user/opengolem',
-      '/home/user',
+vi.mock('fs', async () => {
+  const actual = await vi.importActual<typeof import('fs')>('fs');
+  return {
+    ...actual,
+    default: {
+      ...actual,
+      mkdirSync: mockFs.mkdirSync,
+      writeFileSync: mockFs.writeFileSync,
+      existsSync: mockFs.existsSync,
+    },
+  };
+});
+
+vi.mock('./platform.js', () => ({
+  getPlatform: mockGetPlatform,
+  getNodePath: mockGetNodePath,
+  getServiceManager: mockGetServiceManager,
+  hasSystemd: mockHasSystemd,
+  isRoot: mockIsRoot,
+  isWSL: mockIsWSL,
+}));
+
+vi.mock('child_process', async () => {
+  const actual = await vi.importActual<typeof import('child_process')>('child_process');
+  return {
+    ...actual,
+    execSync: mockExecSync,
+    execFileSync: mockExecFileSync,
+  };
+});
+
+vi.spyOn(process, 'exit').mockImplementation(() => {
+  throw new Error('process.exit');
+});
+
+import { run } from './service.js';
+
+beforeEach(() => {
+  vi.clearAllMocks();
+  // Default happy-path: linux + systemd + non-root + build succeeds
+  mockGetPlatform.mockReturnValue('linux');
+  mockGetNodePath.mockReturnValue('/usr/bin/node');
+  mockGetServiceManager.mockReturnValue('systemd');
+  mockHasSystemd.mockReturnValue(true);
+  mockIsRoot.mockReturnValue(false);
+  mockIsWSL.mockReturnValue(false);
+  mockFs.existsSync.mockReturnValue(false);
+  mockExecSync.mockReturnValue('');
+  mockExecFileSync.mockReturnValue('');
+});
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
+
+// --- Tests ---
+
+describe('service.run() — build failure gate', () => {
+  it('emits failed status and exits when npm build fails', async () => {
+    mockExecSync.mockImplementation((cmd: string) => {
+      if (cmd.includes('npm run build')) throw new Error('Build error');
+      return '';
+    });
+
+    await expect(run([])).rejects.toThrow('process.exit');
+    expect(mockEmitStatus).toHaveBeenCalledWith(
+      'SETUP_SERVICE',
+      expect.objectContaining({ STATUS: 'failed', ERROR: 'build_failed' }),
     );
-    expect(plist).toContain('<string>com.opengolem</string>');
   });
 
-  it('uses the correct node path', () => {
-    const plist = generatePlist(
-      '/opt/node/bin/node',
-      '/home/user/opengolem',
-      '/home/user',
-    );
-    expect(plist).toContain('<string>/opt/node/bin/node</string>');
-  });
+  it('does not write any service file when build fails', async () => {
+    mockExecSync.mockImplementation((cmd: string) => {
+      if (cmd.includes('npm run build')) throw new Error('Build error');
+      return '';
+    });
 
-  it('points to dist/index.js', () => {
-    const plist = generatePlist(
-      '/usr/local/bin/node',
-      '/home/user/opengolem',
-      '/home/user',
-    );
-    expect(plist).toContain('/home/user/opengolem/dist/index.js');
-  });
-
-  it('sets log paths', () => {
-    const plist = generatePlist(
-      '/usr/local/bin/node',
-      '/home/user/opengolem',
-      '/home/user',
-    );
-    expect(plist).toContain('opengolem.log');
-    expect(plist).toContain('opengolem.error.log');
+    await expect(run([])).rejects.toThrow();
+    expect(mockFs.writeFileSync).not.toHaveBeenCalled();
   });
 });
 
-describe('systemd unit generation', () => {
-  it('user unit uses default.target', () => {
-    const unit = generateSystemdUnit(
-      '/usr/bin/node',
-      '/home/user/opengolem',
-      '/home/user',
-      false,
-    );
-    expect(unit).toContain('WantedBy=default.target');
-  });
+describe('service.run() — unsupported platform', () => {
+  it('emits failed status and exits on unknown platform', async () => {
+    mockGetPlatform.mockReturnValue('unknown' as 'macos');
 
-  it('system unit uses multi-user.target', () => {
-    const unit = generateSystemdUnit(
-      '/usr/bin/node',
-      '/home/user/opengolem',
-      '/home/user',
-      true,
-    );
-    expect(unit).toContain('WantedBy=multi-user.target');
-  });
-
-  it('contains restart policy', () => {
-    const unit = generateSystemdUnit(
-      '/usr/bin/node',
-      '/home/user/opengolem',
-      '/home/user',
-      false,
-    );
-    expect(unit).toContain('Restart=always');
-    expect(unit).toContain('RestartSec=5');
-  });
-
-  it('uses KillMode=process to preserve detached children', () => {
-    const unit = generateSystemdUnit(
-      '/usr/bin/node',
-      '/home/user/opengolem',
-      '/home/user',
-      false,
-    );
-    expect(unit).toContain('KillMode=process');
-  });
-
-  it('sets correct ExecStart', () => {
-    const unit = generateSystemdUnit(
-      '/usr/bin/node',
-      '/srv/opengolem',
-      '/home/user',
-      false,
-    );
-    expect(unit).toContain(
-      'ExecStart=/usr/bin/node /srv/opengolem/dist/index.js',
+    await expect(run([])).rejects.toThrow('process.exit');
+    expect(mockEmitStatus).toHaveBeenCalledWith(
+      'SETUP_SERVICE',
+      expect.objectContaining({ STATUS: 'failed', ERROR: 'unsupported_platform' }),
     );
   });
 });
 
-describe('WSL nohup fallback', () => {
-  it('generates a valid wrapper script', () => {
-    const projectRoot = '/home/user/opengolem';
-    const nodePath = '/usr/bin/node';
-    const pidFile = path.join(projectRoot, 'opengolem.pid');
+describe('service.run() — macOS launchd path', () => {
+  beforeEach(() => {
+    mockGetPlatform.mockReturnValue('macos');
+    mockGetServiceManager.mockReturnValue('launchd');
+    mockExecSync.mockImplementation((cmd: string) => {
+      if (cmd.includes('npm run build')) return '';
+      if (cmd.includes('launchctl list')) return 'com.opengolem\tsomething';
+      return '';
+    });
+  });
 
-    // Simulate what service.ts generates
-    const wrapper = `#!/bin/bash
-set -euo pipefail
-cd ${JSON.stringify(projectRoot)}
-nohup ${JSON.stringify(nodePath)} ${JSON.stringify(projectRoot)}/dist/index.js >> ${JSON.stringify(projectRoot)}/logs/opengolem.log 2>> ${JSON.stringify(projectRoot)}/logs/opengolem.error.log &
-echo $! > ${JSON.stringify(pidFile)}`;
+  it('writes a plist file', async () => {
+    await run([]);
+    const calls = mockFs.writeFileSync.mock.calls;
+    const plistCall = calls.find((c) => String(c[0]).endsWith('.plist'));
+    expect(plistCall).toBeDefined();
+  });
 
-    expect(wrapper).toContain('#!/bin/bash');
-    expect(wrapper).toContain('nohup');
-    expect(wrapper).toContain(nodePath);
-    expect(wrapper).toContain('opengolem.pid');
+  it('plist content includes com.opengolem label', async () => {
+    await run([]);
+    const calls = mockFs.writeFileSync.mock.calls;
+    const plistCall = calls.find((c) => String(c[0]).endsWith('.plist'));
+    expect(String(plistCall![1])).toContain('com.opengolem');
+  });
+
+  it('plist content includes node path and dist/index.js', async () => {
+    await run([]);
+    const calls = mockFs.writeFileSync.mock.calls;
+    const plistCall = calls.find((c) => String(c[0]).endsWith('.plist'));
+    const content = String(plistCall![1]);
+    expect(content).toContain('/usr/bin/node');
+    expect(content).toContain('dist/index.js');
+  });
+
+  it('emits success status with SERVICE_TYPE=launchd', async () => {
+    await run([]);
+    expect(mockEmitStatus).toHaveBeenCalledWith(
+      'SETUP_SERVICE',
+      expect.objectContaining({ STATUS: 'success', SERVICE_TYPE: 'launchd' }),
+    );
+  });
+
+  it('calls launchctl load with the plist path', async () => {
+    await run([]);
+    const execFileCalls = mockExecFileSync.mock.calls;
+    const loadCall = execFileCalls.find(
+      (c) => c[0] === 'launchctl' && Array.isArray(c[1]) && (c[1] as string[])[0] === 'load',
+    );
+    expect(loadCall).toBeDefined();
+  });
+});
+
+describe('service.run() — Linux systemd (user) path', () => {
+  it('writes a systemd unit file', async () => {
+    await run([]);
+    const calls = mockFs.writeFileSync.mock.calls;
+    const unitCall = calls.find((c) => String(c[0]).endsWith('.service'));
+    expect(unitCall).toBeDefined();
+  });
+
+  it('systemd unit includes ExecStart with node and dist/index.js', async () => {
+    await run([]);
+    const calls = mockFs.writeFileSync.mock.calls;
+    const unitCall = calls.find((c) => String(c[0]).endsWith('.service'));
+    const content = String(unitCall![1]);
+    expect(content).toContain('ExecStart=/usr/bin/node');
+    expect(content).toContain('dist/index.js');
+  });
+
+  it('user unit uses default.target', async () => {
+    mockIsRoot.mockReturnValue(false);
+    await run([]);
+    const calls = mockFs.writeFileSync.mock.calls;
+    const unitCall = calls.find((c) => String(c[0]).endsWith('.service'));
+    expect(String(unitCall![1])).toContain('WantedBy=default.target');
+  });
+
+  it('system unit (root) uses multi-user.target', async () => {
+    mockIsRoot.mockReturnValue(true);
+    await run([]);
+    const calls = mockFs.writeFileSync.mock.calls;
+    const unitCall = calls.find((c) => String(c[0]).endsWith('.service'));
+    expect(String(unitCall![1])).toContain('WantedBy=multi-user.target');
+  });
+
+  it('emits success status with SERVICE_TYPE=systemd-user', async () => {
+    mockIsRoot.mockReturnValue(false);
+    await run([]);
+    expect(mockEmitStatus).toHaveBeenCalledWith(
+      'SETUP_SERVICE',
+      expect.objectContaining({ STATUS: 'success', SERVICE_TYPE: 'systemd-user' }),
+    );
+  });
+
+  it('emits success status with SERVICE_TYPE=systemd-system when root', async () => {
+    mockIsRoot.mockReturnValue(true);
+    await run([]);
+    expect(mockEmitStatus).toHaveBeenCalledWith(
+      'SETUP_SERVICE',
+      expect.objectContaining({ STATUS: 'success', SERVICE_TYPE: 'systemd-system' }),
+    );
+  });
+
+  it('calls systemctl daemon-reload, enable, and start', async () => {
+    await run([]);
+    const execFileCalls = mockExecFileSync.mock.calls;
+    const getCmd = (call: unknown[]) => {
+      const args = call[1] as string[];
+      return args.filter((a) => a !== '--user').join(' ');
+    };
+    const cmds = execFileCalls
+      .filter((c) => c[0] === 'systemctl')
+      .map(getCmd);
+    expect(cmds).toContain('daemon-reload');
+    expect(cmds).toContain('enable opengolem');
+    expect(cmds).toContain('start opengolem');
+  });
+
+  it('falls back to nohup when systemd user session is unavailable', async () => {
+    mockIsRoot.mockReturnValue(false);
+    mockExecSync.mockImplementation((cmd: string) => {
+      if (cmd.includes('npm run build')) return '';
+      // Simulate systemctl --user daemon-reload check failing → triggers nohup fallback
+      if (cmd.includes('systemctl') && cmd.includes('daemon-reload')) {
+        throw new Error('systemd user session unavailable');
+      }
+      return '';
+    });
+
+    await run([]);
+
+    const writeCalls = mockFs.writeFileSync.mock.calls;
+    const wrapperCall = writeCalls.find((c) =>
+      String(c[0]).endsWith('start-opengolem.sh'),
+    );
+    expect(wrapperCall).toBeDefined();
+    expect(mockEmitStatus).toHaveBeenCalledWith(
+      'SETUP_SERVICE',
+      expect.objectContaining({ STATUS: 'success', SERVICE_TYPE: 'nohup' }),
+    );
+  });
+});
+
+describe('service.run() — nohup fallback (no systemd)', () => {
+  beforeEach(() => {
+    mockGetPlatform.mockReturnValue('linux');
+    mockGetServiceManager.mockReturnValue('none');
+    mockHasSystemd.mockReturnValue(false);
+    // systemctl --user daemon-reload throws (no user session)
+    mockExecFileSync.mockImplementation((bin: string, args: string[]) => {
+      if (bin === 'systemctl' && args.includes('daemon-reload')) {
+        throw new Error('no systemd');
+      }
+      return '';
+    });
+  });
+
+  it('writes start-opengolem.sh wrapper', async () => {
+    await run([]);
+    const calls = mockFs.writeFileSync.mock.calls;
+    const wrapperCall = calls.find((c) =>
+      String(c[0]).endsWith('start-opengolem.sh'),
+    );
+    expect(wrapperCall).toBeDefined();
+  });
+
+  it('wrapper script contains bash shebang', async () => {
+    await run([]);
+    const calls = mockFs.writeFileSync.mock.calls;
+    const wrapperCall = calls.find((c) =>
+      String(c[0]).endsWith('start-opengolem.sh'),
+    );
+    expect(String(wrapperCall![1])).toContain('#!/bin/bash');
+  });
+
+  it('wrapper script contains nohup', async () => {
+    await run([]);
+    const calls = mockFs.writeFileSync.mock.calls;
+    const wrapperCall = calls.find((c) =>
+      String(c[0]).endsWith('start-opengolem.sh'),
+    );
+    expect(String(wrapperCall![1])).toContain('nohup');
+  });
+
+  it('emits success status with SERVICE_TYPE=nohup', async () => {
+    await run([]);
+    expect(mockEmitStatus).toHaveBeenCalledWith(
+      'SETUP_SERVICE',
+      expect.objectContaining({ STATUS: 'success', SERVICE_TYPE: 'nohup' }),
+    );
   });
 });

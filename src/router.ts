@@ -10,7 +10,10 @@ export function escapeXml(s: string): string {
     .replace(/"/g, '&quot;');
 }
 
-export function formatMessages(messages: NewMessage[], timezone: string): string {
+export function formatMessages(
+  messages: NewMessage[],
+  timezone: string,
+): string {
   const lines: string[] = [];
   lines.push(`<context timezone="${escapeXml(timezone)}" />`);
   lines.push('<messages>');
@@ -42,6 +45,9 @@ export function formatOutbound(rawText: string): string {
   return result === '' ? '' : result;
 }
 
-export function findChannel(channels: Channel[], jid: string): Channel | undefined {
+export function findChannel(
+  channels: Channel[],
+  jid: string,
+): Channel | undefined {
   return channels.find((channel) => channel.ownsJid(jid));
 }

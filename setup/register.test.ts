@@ -1,464 +1,331 @@
-import fs from 'fs';
-import os from 'os';
-import path from 'path';
-import { afterEach, describe, it, expect, beforeEach } from 'vitest';
-
-import Database from 'better-sqlite3';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 /**
- * Tests for the register step.
+ * Clean-room tests for setup/register.ts run() function.
  *
- * Verifies: parameterized SQL (no injection), file templating,
- * apostrophe in names, .env updates, CLAUDE.md template copy.
+ * Tests argument parsing, validation, DB registration, filesystem operations,
+ * and status emission via mocked dependencies.
  */
 
-function createTestDb(): Database.Database {
-  const db = new Database(':memory:');
-  db.exec(`CREATE TABLE IF NOT EXISTS registered_groups (
-    jid TEXT PRIMARY KEY,
-    name TEXT NOT NULL,
-    folder TEXT NOT NULL UNIQUE,
-    trigger_pattern TEXT NOT NULL,
-    added_at TEXT NOT NULL,
-    container_config TEXT,
-    requires_trigger INTEGER DEFAULT 1,
-    is_main INTEGER DEFAULT 0
-  )`);
-  return db;
-}
+// --- Mocks ---
+// vi.mock factories are hoisted, so we use vi.hoisted() for shared mock state.
 
-describe('parameterized SQL registration', () => {
-  let db: Database.Database;
+const { mockSetRegisteredGroup, mockInitDatabase, mockIsValidGroupFolder,
+        mockEmitStatus, mockFs } = vi.hoisted(() => {
+  const mockFs = {
+    mkdirSync: vi.fn(),
+    existsSync: vi.fn(() => false),
+    writeFileSync: vi.fn(),
+    readFileSync: vi.fn(() => ''),
+    readdirSync: vi.fn(() => [] as string[]),
+    copyFileSync: vi.fn(),
+  };
+  return {
+    mockSetRegisteredGroup: vi.fn(),
+    mockInitDatabase: vi.fn(),
+    mockIsValidGroupFolder: vi.fn(() => true),
+    mockEmitStatus: vi.fn(),
+    mockFs,
+  };
+});
 
-  beforeEach(() => {
-    db = createTestDb();
+vi.mock('../src/db.js', () => ({
+  initDatabase: mockInitDatabase,
+  setRegisteredGroup: mockSetRegisteredGroup,
+}));
+
+vi.mock('../src/group-folder.js', () => ({
+  isValidGroupFolder: mockIsValidGroupFolder,
+}));
+
+vi.mock('../src/config.js', () => ({
+  STORE_DIR: '/tmp/test-store',
+}));
+
+vi.mock('../src/logger.js', () => ({
+  logger: {
+    info: vi.fn(),
+    warn: vi.fn(),
+    error: vi.fn(),
+    debug: vi.fn(),
+  },
+}));
+
+vi.mock('./status.js', () => ({
+  emitStatus: mockEmitStatus,
+}));
+
+vi.mock('fs', async () => {
+  const actual = await vi.importActual<typeof import('fs')>('fs');
+  return {
+    ...actual,
+    default: {
+      ...actual,
+      mkdirSync: mockFs.mkdirSync,
+      existsSync: mockFs.existsSync,
+      writeFileSync: mockFs.writeFileSync,
+      readFileSync: mockFs.readFileSync,
+      readdirSync: mockFs.readdirSync,
+      copyFileSync: mockFs.copyFileSync,
+    },
+  };
+});
+
+import { run } from './register.js';
+
+// --- Helpers ---
+
+const validArgs = [
+  '--jid', '123@g.us',
+  '--name', 'Test Group',
+  '--trigger', '@Alef',
+  '--folder', 'test-group',
+];
+
+vi.spyOn(process, 'exit').mockImplementation(() => {
+  throw new Error('process.exit');
+});
+
+beforeEach(() => {
+  vi.clearAllMocks();
+  mockIsValidGroupFolder.mockReturnValue(true);
+  mockFs.existsSync.mockReturnValue(false);
+  mockFs.readdirSync.mockReturnValue([]);
+  mockFs.readFileSync.mockReturnValue('');
+});
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
+
+// --- Tests ---
+
+describe('register.run() — missing required args', () => {
+  it('exits with failure when --jid is missing', async () => {
+    await expect(
+      run(['--name', 'Group', '--trigger', '@Alef', '--folder', 'my-group']),
+    ).rejects.toThrow('process.exit');
+    expect(mockEmitStatus).toHaveBeenCalledWith(
+      'REGISTER_CHANNEL',
+      expect.objectContaining({ STATUS: 'failed', ERROR: 'missing_required_args' }),
+    );
   });
 
-  it('registers a group with parameterized query', () => {
-    db.prepare(
-      `INSERT OR REPLACE INTO registered_groups
-       (jid, name, folder, trigger_pattern, added_at, container_config, requires_trigger)
-       VALUES (?, ?, ?, ?, ?, NULL, ?)`,
-    ).run(
-      '123@g.us',
-      'Test Group',
-      'test-group',
-      '@Alef',
-      '2024-01-01T00:00:00.000Z',
-      1,
+  it('exits with failure when --name is missing', async () => {
+    await expect(
+      run(['--jid', '123@g.us', '--trigger', '@Alef', '--folder', 'my-group']),
+    ).rejects.toThrow('process.exit');
+    expect(mockEmitStatus).toHaveBeenCalledWith(
+      'REGISTER_CHANNEL',
+      expect.objectContaining({ STATUS: 'failed' }),
     );
-
-    const row = db
-      .prepare('SELECT * FROM registered_groups WHERE jid = ?')
-      .get('123@g.us') as {
-      jid: string;
-      name: string;
-      folder: string;
-      trigger_pattern: string;
-      requires_trigger: number;
-    };
-
-    expect(row.jid).toBe('123@g.us');
-    expect(row.name).toBe('Test Group');
-    expect(row.folder).toBe('test-group');
-    expect(row.trigger_pattern).toBe('@Alef');
-    expect(row.requires_trigger).toBe(1);
   });
 
-  it('handles apostrophes in group names safely', () => {
-    const name = "O'Brien's Group";
-
-    db.prepare(
-      `INSERT OR REPLACE INTO registered_groups
-       (jid, name, folder, trigger_pattern, added_at, container_config, requires_trigger)
-       VALUES (?, ?, ?, ?, ?, NULL, ?)`,
-    ).run(
-      '456@g.us',
-      name,
-      'obriens-group',
-      '@Alef',
-      '2024-01-01T00:00:00.000Z',
-      0,
+  it('exits with failure when --trigger is missing', async () => {
+    await expect(
+      run(['--jid', '123@g.us', '--name', 'Group', '--folder', 'my-group']),
+    ).rejects.toThrow('process.exit');
+    expect(mockEmitStatus).toHaveBeenCalledWith(
+      'REGISTER_CHANNEL',
+      expect.objectContaining({ STATUS: 'failed' }),
     );
-
-    const row = db
-      .prepare('SELECT name FROM registered_groups WHERE jid = ?')
-      .get('456@g.us') as {
-      name: string;
-    };
-
-    expect(row.name).toBe(name);
   });
 
-  it('prevents SQL injection in JID field', () => {
-    const maliciousJid = "'; DROP TABLE registered_groups; --";
-
-    db.prepare(
-      `INSERT OR REPLACE INTO registered_groups
-       (jid, name, folder, trigger_pattern, added_at, container_config, requires_trigger)
-       VALUES (?, ?, ?, ?, ?, NULL, ?)`,
-    ).run(maliciousJid, 'Evil', 'evil', '@Alef', '2024-01-01T00:00:00.000Z', 1);
-
-    // Table should still exist and have the row
-    const count = db
-      .prepare('SELECT COUNT(*) as count FROM registered_groups')
-      .get() as {
-      count: number;
-    };
-    expect(count.count).toBe(1);
-
-    const row = db.prepare('SELECT jid FROM registered_groups').get() as {
-      jid: string;
-    };
-    expect(row.jid).toBe(maliciousJid);
+  it('exits with failure when --folder is missing', async () => {
+    await expect(
+      run(['--jid', '123@g.us', '--name', 'Group', '--trigger', '@Alef']),
+    ).rejects.toThrow('process.exit');
+    expect(mockEmitStatus).toHaveBeenCalledWith(
+      'REGISTER_CHANNEL',
+      expect.objectContaining({ STATUS: 'failed' }),
+    );
   });
 
-  it('handles requiresTrigger=false', () => {
-    db.prepare(
-      `INSERT OR REPLACE INTO registered_groups
-       (jid, name, folder, trigger_pattern, added_at, container_config, requires_trigger)
-       VALUES (?, ?, ?, ?, ?, NULL, ?)`,
-    ).run(
-      '789@s.whatsapp.net',
-      'Personal',
-      'main',
-      '@Alef',
-      '2024-01-01T00:00:00.000Z',
-      0,
-    );
-
-    const row = db
-      .prepare('SELECT requires_trigger FROM registered_groups WHERE jid = ?')
-      .get('789@s.whatsapp.net') as { requires_trigger: number };
-
-    expect(row.requires_trigger).toBe(0);
-  });
-
-  it('stores is_main flag', () => {
-    db.prepare(
-      `INSERT OR REPLACE INTO registered_groups
-       (jid, name, folder, trigger_pattern, added_at, container_config, requires_trigger, is_main)
-       VALUES (?, ?, ?, ?, ?, NULL, ?, ?)`,
-    ).run(
-      '789@s.whatsapp.net',
-      'Personal',
-      'whatsapp_main',
-      '@Alef',
-      '2024-01-01T00:00:00.000Z',
-      0,
-      1,
-    );
-
-    const row = db
-      .prepare('SELECT is_main FROM registered_groups WHERE jid = ?')
-      .get('789@s.whatsapp.net') as { is_main: number };
-
-    expect(row.is_main).toBe(1);
-  });
-
-  it('defaults is_main to 0', () => {
-    db.prepare(
-      `INSERT OR REPLACE INTO registered_groups
-       (jid, name, folder, trigger_pattern, added_at, container_config, requires_trigger)
-       VALUES (?, ?, ?, ?, ?, NULL, ?)`,
-    ).run(
-      '123@g.us',
-      'Some Group',
-      'whatsapp_some-group',
-      '@Alef',
-      '2024-01-01T00:00:00.000Z',
-      1,
-    );
-
-    const row = db
-      .prepare('SELECT is_main FROM registered_groups WHERE jid = ?')
-      .get('123@g.us') as { is_main: number };
-
-    expect(row.is_main).toBe(0);
-  });
-
-  it('upserts on conflict', () => {
-    const stmt = db.prepare(
-      `INSERT OR REPLACE INTO registered_groups
-       (jid, name, folder, trigger_pattern, added_at, container_config, requires_trigger)
-       VALUES (?, ?, ?, ?, ?, NULL, ?)`,
-    );
-
-    stmt.run(
-      '123@g.us',
-      'Original',
-      'main',
-      '@Alef',
-      '2024-01-01T00:00:00.000Z',
-      1,
-    );
-    stmt.run(
-      '123@g.us',
-      'Updated',
-      'main',
-      '@Bot',
-      '2024-02-01T00:00:00.000Z',
-      0,
-    );
-
-    const rows = db.prepare('SELECT * FROM registered_groups').all();
-    expect(rows).toHaveLength(1);
-
-    const row = rows[0] as {
-      name: string;
-      trigger_pattern: string;
-      requires_trigger: number;
-    };
-    expect(row.name).toBe('Updated');
-    expect(row.trigger_pattern).toBe('@Bot');
-    expect(row.requires_trigger).toBe(0);
+  it('does not call setRegisteredGroup when args are missing', async () => {
+    await expect(run(['--jid', '123@g.us'])).rejects.toThrow();
+    expect(mockSetRegisteredGroup).not.toHaveBeenCalled();
   });
 });
 
-describe('file templating', () => {
-  it('replaces assistant name in CLAUDE.md content', () => {
-    let content = '# Alef\n\nYou are Alef, a personal assistant.';
-
-    content = content.replace(/^# Alef$/m, '# Nova');
-    content = content.replace(/You are Alef/g, 'You are Nova');
-
-    expect(content).toBe('# Nova\n\nYou are Nova, a personal assistant.');
-  });
-
-  it('handles names with special regex characters', () => {
-    let content = '# Alef\n\nYou are Alef.';
-
-    const newName = 'C.L.A.U.D.E';
-    content = content.replace(/^# Alef$/m, `# ${newName}`);
-    content = content.replace(/You are Alef/g, `You are ${newName}`);
-
-    expect(content).toContain('# C.L.A.U.D.E');
-    expect(content).toContain('You are C.L.A.U.D.E.');
-  });
-
-  it('updates .env ASSISTANT_NAME line', () => {
-    let envContent = 'SOME_KEY=value\nASSISTANT_NAME="Alef"\nOTHER=test';
-
-    envContent = envContent.replace(
-      /^ASSISTANT_NAME=.*$/m,
-      'ASSISTANT_NAME="Nova"',
+describe('register.run() — invalid folder name', () => {
+  it('exits with failure when folder name fails validation', async () => {
+    mockIsValidGroupFolder.mockReturnValue(false);
+    await expect(run(validArgs)).rejects.toThrow('process.exit');
+    expect(mockEmitStatus).toHaveBeenCalledWith(
+      'REGISTER_CHANNEL',
+      expect.objectContaining({ STATUS: 'failed', ERROR: 'invalid_folder' }),
     );
-
-    expect(envContent).toContain('ASSISTANT_NAME="Nova"');
-    expect(envContent).toContain('SOME_KEY=value');
   });
 
-  it('appends ASSISTANT_NAME to .env if not present', () => {
-    let envContent = 'SOME_KEY=value\n';
-
-    if (!envContent.includes('ASSISTANT_NAME=')) {
-      envContent += '\nASSISTANT_NAME="Nova"';
-    }
-
-    expect(envContent).toContain('ASSISTANT_NAME="Nova"');
+  it('does not call setRegisteredGroup when folder is invalid', async () => {
+    mockIsValidGroupFolder.mockReturnValue(false);
+    await expect(run(validArgs)).rejects.toThrow();
+    expect(mockSetRegisteredGroup).not.toHaveBeenCalled();
   });
 });
 
-describe('CLAUDE.md template copy', () => {
-  let tmpDir: string;
-  let groupsDir: string;
+describe('register.run() — valid args baseline', () => {
+  it('calls initDatabase on valid registration', async () => {
+    await run(validArgs);
+    expect(mockInitDatabase).toHaveBeenCalledOnce();
+  });
 
-  // Replicates register.ts template copy + name update logic
-  function simulateRegister(
-    folder: string,
-    isMain: boolean,
-    assistantName = 'Alef',
-  ): void {
-    const folderDir = path.join(groupsDir, folder);
-    fs.mkdirSync(path.join(folderDir, 'logs'), { recursive: true });
-
-    // Template copy — never overwrite existing (register.ts lines 119-135)
-    const dest = path.join(folderDir, 'CLAUDE.md');
-    if (!fs.existsSync(dest)) {
-      const templatePath = isMain
-        ? path.join(groupsDir, 'main', 'CLAUDE.md')
-        : path.join(groupsDir, 'global', 'CLAUDE.md');
-      if (fs.existsSync(templatePath)) {
-        fs.copyFileSync(templatePath, dest);
-      }
-    }
-
-    // Name update across all groups (register.ts lines 140-165)
-    if (assistantName !== 'Alef') {
-      const mdFiles = fs
-        .readdirSync(groupsDir)
-        .map((d) => path.join(groupsDir, d, 'CLAUDE.md'))
-        .filter((f) => fs.existsSync(f));
-
-      for (const mdFile of mdFiles) {
-        let content = fs.readFileSync(mdFile, 'utf-8');
-        content = content.replace(/^# Alef$/m, `# ${assistantName}`);
-        content = content.replace(
-          /You are Alef/g,
-          `You are ${assistantName}`,
-        );
-        fs.writeFileSync(mdFile, content);
-      }
-    }
-  }
-
-  function readGroupMd(folder: string): string {
-    return fs.readFileSync(
-      path.join(groupsDir, folder, 'CLAUDE.md'),
-      'utf-8',
-    );
-  }
-
-  beforeEach(() => {
-    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'opengolem-register-test-'));
-    groupsDir = path.join(tmpDir, 'groups');
-    fs.mkdirSync(path.join(groupsDir, 'main'), { recursive: true });
-    fs.mkdirSync(path.join(groupsDir, 'global'), { recursive: true });
-    fs.writeFileSync(
-      path.join(groupsDir, 'main', 'CLAUDE.md'),
-      '# Alef\n\nYou are Alef, a personal assistant.\n\n## Admin Context\n\nThis is the **main channel**.',
-    );
-    fs.writeFileSync(
-      path.join(groupsDir, 'global', 'CLAUDE.md'),
-      '# Alef\n\nYou are Alef, a personal assistant.',
+  it('calls setRegisteredGroup with correct jid and group data', async () => {
+    await run(validArgs);
+    expect(mockSetRegisteredGroup).toHaveBeenCalledWith(
+      '123@g.us',
+      expect.objectContaining({
+        name: 'Test Group',
+        folder: 'test-group',
+        trigger: '@Alef',
+      }),
     );
   });
 
-  afterEach(() => {
-    fs.rmSync(tmpDir, { recursive: true, force: true });
+  it('creates group logs directory', async () => {
+    await run(validArgs);
+    const mkdirCalls = mockFs.mkdirSync.mock.calls.map((c) => String(c[0]));
+    expect(mkdirCalls.some((p) => p.includes('test-group') && p.includes('logs'))).toBe(true);
   });
 
-  it('copies global template for non-main group', () => {
-    simulateRegister('telegram_dev-team', false);
-
-    const content = readGroupMd('telegram_dev-team');
-    expect(content).toContain('You are Alef');
-    expect(content).not.toContain('Admin Context');
-  });
-
-  it('copies main template for main group', () => {
-    simulateRegister('whatsapp_main', true);
-
-    expect(readGroupMd('whatsapp_main')).toContain('Admin Context');
-  });
-
-  it('each channel can have its own main with admin context', () => {
-    simulateRegister('whatsapp_main', true);
-    simulateRegister('telegram_main', true);
-    simulateRegister('slack_main', true);
-    simulateRegister('discord_main', true);
-
-    for (const folder of [
-      'whatsapp_main',
-      'telegram_main',
-      'slack_main',
-      'discord_main',
-    ]) {
-      const content = readGroupMd(folder);
-      expect(content).toContain('Admin Context');
-      expect(content).toContain('You are Alef');
-    }
-  });
-
-  it('non-main groups across channels get global template', () => {
-    simulateRegister('whatsapp_main', true);
-    simulateRegister('telegram_friends', false);
-    simulateRegister('slack_engineering', false);
-    simulateRegister('discord_general', false);
-
-    expect(readGroupMd('whatsapp_main')).toContain('Admin Context');
-    for (const folder of [
-      'telegram_friends',
-      'slack_engineering',
-      'discord_general',
-    ]) {
-      const content = readGroupMd(folder);
-      expect(content).toContain('You are Alef');
-      expect(content).not.toContain('Admin Context');
-    }
-  });
-
-  it('custom name propagates to all channels and groups', () => {
-    // Register multiple channels, last one sets custom name
-    simulateRegister('whatsapp_main', true);
-    simulateRegister('telegram_main', true);
-    simulateRegister('slack_devs', false);
-    // Final registration triggers name update across all
-    simulateRegister('discord_main', true, 'Luna');
-
-    for (const folder of [
-      'main',
-      'global',
-      'whatsapp_main',
-      'telegram_main',
-      'slack_devs',
-      'discord_main',
-    ]) {
-      const content = readGroupMd(folder);
-      expect(content).toContain('# Luna');
-      expect(content).toContain('You are Luna');
-      expect(content).not.toContain('Alef');
-    }
-  });
-
-  it('never overwrites existing CLAUDE.md on re-registration', () => {
-    simulateRegister('slack_main', true);
-    // User customizes the file extensively (persona, workspace, rules)
-    const mdPath = path.join(groupsDir, 'slack_main', 'CLAUDE.md');
-    fs.writeFileSync(
-      mdPath,
-      '# Gambi\n\nCustom persona with workspace rules and family context.',
+  it('emits success status on completion', async () => {
+    await run(validArgs);
+    expect(mockEmitStatus).toHaveBeenCalledWith(
+      'REGISTER_CHANNEL',
+      expect.objectContaining({ STATUS: 'success', JID: '123@g.us' }),
     );
-    // Re-registering same folder (e.g. re-running /add-slack)
-    simulateRegister('slack_main', true);
-
-    const content = readGroupMd('slack_main');
-    expect(content).toContain('Custom persona');
-    expect(content).not.toContain('Admin Context');
   });
 
-  it('never overwrites when non-main becomes main (isMain changes)', () => {
-    // User registers a family group as non-main
-    simulateRegister('whatsapp_casa', false);
-    // User extensively customizes it (PARA system, task management, etc.)
-    const mdPath = path.join(groupsDir, 'whatsapp_casa', 'CLAUDE.md');
-    fs.writeFileSync(
-      mdPath,
-      '# Casa\n\nFamily group with PARA system, task management, shopping lists.',
+  it('defaults requiresTrigger to true when flag is absent', async () => {
+    await run(validArgs);
+    expect(mockSetRegisteredGroup).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({ requiresTrigger: true }),
     );
-    // Later, user promotes to main (no trigger required) — CLAUDE.md must be preserved
-    simulateRegister('whatsapp_casa', true);
-
-    const content = readGroupMd('whatsapp_casa');
-    expect(content).toContain('PARA system');
-    expect(content).not.toContain('Admin Context');
   });
 
-  it('preserves custom CLAUDE.md across channels when changing main', () => {
-    // Real-world scenario: WhatsApp main + customized Discord research channel
-    simulateRegister('whatsapp_main', true);
-    simulateRegister('discord_main', false);
-    const discordPath = path.join(groupsDir, 'discord_main', 'CLAUDE.md');
-    fs.writeFileSync(
-      discordPath,
-      '# Gambi HQ — Research Assistant\n\nResearch workflows for Laura and Ethan.',
+  it('defaults isMain to false when flag is absent', async () => {
+    await run(validArgs);
+    expect(mockSetRegisteredGroup).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({ isMain: false }),
     );
+  });
+});
 
-    // Discord becomes main too — custom content must survive
-    simulateRegister('discord_main', true);
-    expect(readGroupMd('discord_main')).toContain('Research Assistant');
-    // WhatsApp main also untouched
-    expect(readGroupMd('whatsapp_main')).toContain('Admin Context');
+describe('register.run() — --no-trigger-required flag', () => {
+  it('sets requiresTrigger=false in DB call', async () => {
+    await run([...validArgs, '--no-trigger-required']);
+    expect(mockSetRegisteredGroup).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({ requiresTrigger: false }),
+    );
   });
 
-  it('handles missing templates gracefully', () => {
-    fs.unlinkSync(path.join(groupsDir, 'global', 'CLAUDE.md'));
-    fs.unlinkSync(path.join(groupsDir, 'main', 'CLAUDE.md'));
+  it('emits REQUIRES_TRIGGER: false in success status', async () => {
+    await run([...validArgs, '--no-trigger-required']);
+    expect(mockEmitStatus).toHaveBeenCalledWith(
+      'REGISTER_CHANNEL',
+      expect.objectContaining({ REQUIRES_TRIGGER: false }),
+    );
+  });
+});
 
-    simulateRegister('discord_general', false);
+describe('register.run() — --is-main flag', () => {
+  it('sets isMain=true in DB call', async () => {
+    await run([...validArgs, '--is-main']);
+    expect(mockSetRegisteredGroup).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({ isMain: true }),
+    );
+  });
 
-    expect(
-      fs.existsSync(path.join(groupsDir, 'discord_general', 'CLAUDE.md')),
-    ).toBe(false);
+  it('uses main template (not global) when copying CLAUDE.md for main group', async () => {
+    // CLAUDE.md doesn't exist yet (false), but main template exists
+    mockFs.existsSync.mockImplementation((p: unknown) => {
+      const s = String(p);
+      return s.includes('groups/main/CLAUDE.md');
+    });
+    await run([...validArgs, '--is-main']);
+    // Should attempt copyFileSync with main template
+    const copyCalls = mockFs.copyFileSync.mock.calls;
+    expect(copyCalls.some((c) => String(c[0]).includes('groups/main/CLAUDE.md'))).toBe(true);
+  });
+});
+
+describe('register.run() — --assistant-name flag', () => {
+  it('updates ASSISTANT_NAME in .env when custom name is given', async () => {
+    mockFs.existsSync.mockImplementation((p: unknown) => {
+      return String(p).endsWith('.env');
+    });
+    mockFs.readFileSync.mockImplementation((p: unknown) => {
+      if (String(p).endsWith('.env')) return 'ASSISTANT_NAME="Alef"\n';
+      return '';
+    });
+    mockFs.readdirSync.mockReturnValue([]);
+
+    await run([...validArgs, '--assistant-name', 'Nova']);
+
+    const writeCalls = mockFs.writeFileSync.mock.calls;
+    const envWrite = writeCalls.find((c) => String(c[0]).endsWith('.env'));
+    expect(envWrite).toBeDefined();
+    expect(String(envWrite![1])).toContain('ASSISTANT_NAME="Nova"');
+  });
+
+  it('creates .env with ASSISTANT_NAME when .env does not exist', async () => {
+    mockFs.existsSync.mockReturnValue(false);
+    mockFs.readdirSync.mockReturnValue([]);
+
+    await run([...validArgs, '--assistant-name', 'Luna']);
+
+    const writeCalls = mockFs.writeFileSync.mock.calls;
+    const envWrite = writeCalls.find((c) => String(c[0]).endsWith('.env'));
+    expect(envWrite).toBeDefined();
+    expect(String(envWrite![1])).toContain('ASSISTANT_NAME="Luna"');
+  });
+
+  it('emits NAME_UPDATED: true when assistant name differs from default', async () => {
+    mockFs.existsSync.mockReturnValue(false);
+    mockFs.readdirSync.mockReturnValue([]);
+
+    await run([...validArgs, '--assistant-name', 'Orion']);
+
+    expect(mockEmitStatus).toHaveBeenCalledWith(
+      'REGISTER_CHANNEL',
+      expect.objectContaining({ NAME_UPDATED: true }),
+    );
+  });
+
+  it('does not update .env when assistant name is the default Alef', async () => {
+    await run([...validArgs, '--assistant-name', 'Alef']);
+    const writeCalls = mockFs.writeFileSync.mock.calls;
+    const envWrite = writeCalls.find((c) => String(c[0]).endsWith('.env'));
+    expect(envWrite).toBeUndefined();
+  });
+});
+
+describe('register.run() — CLAUDE.md creation', () => {
+  it('copies template CLAUDE.md when it does not exist and template is present', async () => {
+    mockFs.existsSync.mockImplementation((p: unknown) => {
+      const s = String(p);
+      // Template exists, destination does not
+      return s.includes('groups/global/CLAUDE.md');
+    });
+
+    await run(validArgs);
+
+    expect(mockFs.copyFileSync).toHaveBeenCalled();
+  });
+
+  it('does not overwrite CLAUDE.md when it already exists', async () => {
+    mockFs.existsSync.mockImplementation((p: unknown) => {
+      const s = String(p);
+      // Both destination and template exist
+      return s.includes('CLAUDE.md');
+    });
+
+    await run(validArgs);
+
+    expect(mockFs.copyFileSync).not.toHaveBeenCalled();
   });
 });

@@ -1,25 +1,26 @@
 {
   "allowedRoots": [
     {
-      "path": "~/projects",
+      "path": "~/workspace",
       "allowReadWrite": true,
-      "description": "Development projects"
+      "description": "Primary workspace directory"
     },
     {
-      "path": "~/repos",
+      "path": "~/src",
       "allowReadWrite": true,
-      "description": "Git repositories"
+      "description": "Source code root"
     },
     {
-      "path": "~/Documents/work",
+      "path": "~/data/shared",
       "allowReadWrite": false,
-      "description": "Work documents (read-only)"
+      "description": "Shared data files (read-only)"
     }
   ],
   "blockedPatterns": [
-    "password",
-    "secret",
-    "token"
+    ".ssh",
+    ".gnupg",
+    "credentials",
+    ".env"
   ],
   "nonMainReadOnly": true
 }

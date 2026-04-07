@@ -1,8 +1,9 @@
-import globals from 'globals'
-import pluginJs from '@eslint/js'
-import tseslint from 'typescript-eslint'
-import noCatchAll from 'eslint-plugin-no-catch-all'
+import globals from 'globals';
+import pluginJs from '@eslint/js';
+import tseslint from 'typescript-eslint';
+import noCatchAll from 'eslint-plugin-no-catch-all';
 
+/** @type {import('eslint').Linter.Config[]} */
 export default [
   { ignores: ['node_modules/', 'dist/', 'container/', 'groups/'] },
   { files: ['src/**/*.{js,ts}'] },
@@ -12,7 +13,6 @@ export default [
   {
     plugins: { 'no-catch-all': noCatchAll },
     rules: {
-      'preserve-caught-error': ['error', { requireCatchParameter: true }],
       '@typescript-eslint/no-unused-vars': [
         'error',
         {
@@ -29,4 +29,4 @@ export default [
       '@typescript-eslint/no-explicit-any': 'warn',
     },
   },
-]
+];

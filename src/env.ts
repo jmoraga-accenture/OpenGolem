@@ -2,36 +2,36 @@ import fs from 'fs';
 import path from 'path';
 
 /**
- * Parse the .env file and return values for the requested keys.
- * Does NOT load anything into process.env — callers decide what to
- * do with the values. This keeps secrets out of the process environment
- * so they don't leak to child processes.
- *
- * Intentionally has no imports from this codebase so it can be used
- * by bootstrap.ts (which runs before logger is loaded) and by config.ts
- * without creating circular dependencies through logger.ts.
+ * Reads the `.env` file at `process.cwd()/.env` and returns values for the
+ * requested keys. Does NOT mutate `process.env` — safe to call at bootstrap
+ * without side-effects on the running process environment. Has no imports
+ * from this codebase to avoid circular dependencies at startup.
  */
 export function readEnvFile(keys: string[]): Record<string, string> {
-  const envFile = path.join(process.cwd(), '.env');
-  let content: string;
+  const envPath = path.join(process.cwd(), '.env');
+
+  let raw: string;
   try {
-    content = fs.readFileSync(envFile, 'utf-8');
+    raw = fs.readFileSync(envPath, 'utf8');
   } catch {
-    // .env absent — normal in CI, Docker, and fresh installs
     return {};
   }
 
+  const keySet = new Set(keys);
   const result: Record<string, string> = {};
-  const wanted = new Set(keys);
 
-  for (const line of content.split('\n')) {
+  for (const line of raw.split('\n')) {
     const trimmed = line.trim();
     if (!trimmed || trimmed.startsWith('#')) continue;
+
     const eqIdx = trimmed.indexOf('=');
     if (eqIdx === -1) continue;
+
     const key = trimmed.slice(0, eqIdx).trim();
-    if (!wanted.has(key)) continue;
+    if (!keySet.has(key)) continue;
+
     let value = trimmed.slice(eqIdx + 1).trim();
+
     if (
       value.length >= 2 &&
       ((value.startsWith('"') && value.endsWith('"')) ||
@@ -39,7 +39,10 @@ export function readEnvFile(keys: string[]): Record<string, string> {
     ) {
       value = value.slice(1, -1);
     }
-    if (value) result[key] = value;
+
+    if (!value) continue;
+
+    result[key] = value;
   }
 
   return result;

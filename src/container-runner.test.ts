@@ -67,6 +67,27 @@ vi.mock('./credential-proxy.js', () => ({
   detectAuthMode: () => 'oauth',
 }));
 
+// Mock broker/client
+vi.mock('./broker/client.js', () => ({
+  issueToken: vi.fn().mockResolvedValue('test-broker-token'),
+  revokeContainer: vi.fn().mockResolvedValue(undefined),
+}));
+
+// Mock group-folder
+vi.mock('./group-folder.js', () => ({
+  assertValidGroupFolder: vi.fn(),
+  resolveGroupFolderPath: vi.fn(
+    (folder: string) => `/tmp/opengolem-test-groups/${folder}`,
+  ),
+}));
+
+// Mock shared/audit
+vi.mock('./shared/audit/index.js', () => ({
+  openAuditLog: vi.fn(() => ({
+    writeEvent: vi.fn(),
+  })),
+}));
+
 // Create a controllable fake ChildProcess
 function createFakeProcess() {
   const proc = new EventEmitter() as EventEmitter & {
@@ -126,6 +147,379 @@ function emitOutputMarker(
   const json = JSON.stringify(output);
   proc.stdout.push(`${OUTPUT_START_MARKER}\n${json}\n${OUTPUT_END_MARKER}\n`);
 }
+
+// --- Base behavior tests (clean-room) ---
+
+describe('container-runner — normal exit with output', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    fakeProc = createFakeProcess();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('returns success with result when container exits 0 with sentinel output', async () => {
+    const onOutput = vi.fn(async () => {});
+    const resultPromise = runContainerAgent(
+      testGroup,
+      testInput,
+      () => {},
+      onOutput,
+    );
+
+    emitOutputMarker(fakeProc, {
+      status: 'success',
+      result: 'All done',
+      newSessionId: 'session-ok',
+    });
+
+    await vi.advanceTimersByTimeAsync(10);
+    fakeProc.emit('close', 0);
+    await vi.advanceTimersByTimeAsync(10);
+
+    const result = await resultPromise;
+    expect(result.status).toBe('success');
+  });
+
+  it('calls onOutput callback with the parsed sentinel payload', async () => {
+    const onOutput = vi.fn(async () => {});
+    const resultPromise = runContainerAgent(
+      testGroup,
+      testInput,
+      () => {},
+      onOutput,
+    );
+
+    emitOutputMarker(fakeProc, {
+      status: 'success',
+      result: 'Response text',
+      newSessionId: 'sess-cb',
+    });
+
+    await vi.advanceTimersByTimeAsync(10);
+    fakeProc.emit('close', 0);
+    await vi.advanceTimersByTimeAsync(10);
+
+    await resultPromise;
+    expect(onOutput).toHaveBeenCalledWith(
+      expect.objectContaining({
+        status: 'success',
+        result: 'Response text',
+        newSessionId: 'sess-cb',
+      }),
+    );
+  });
+
+  it('passes the child process and container name to onProcess callback', async () => {
+    const onProcess = vi.fn();
+    const resultPromise = runContainerAgent(testGroup, testInput, onProcess);
+
+    await vi.advanceTimersByTimeAsync(10);
+    fakeProc.emit('close', 0);
+    await vi.advanceTimersByTimeAsync(10);
+
+    await resultPromise;
+    expect(onProcess).toHaveBeenCalledWith(
+      fakeProc,
+      expect.stringContaining('opengolem-test-group'),
+    );
+  });
+});
+
+describe('container-runner — error exit', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    fakeProc = createFakeProcess();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('returns error status when container exits non-zero without output', async () => {
+    const resultPromise = runContainerAgent(testGroup, testInput, () => {});
+
+    await vi.advanceTimersByTimeAsync(10);
+    fakeProc.emit('close', 1);
+    await vi.advanceTimersByTimeAsync(10);
+
+    const result = await resultPromise;
+    expect(result.status).toBe('error');
+  });
+
+  it('includes exit code in error message', async () => {
+    const resultPromise = runContainerAgent(testGroup, testInput, () => {});
+
+    await vi.advanceTimersByTimeAsync(10);
+    fakeProc.emit('close', 127);
+    await vi.advanceTimersByTimeAsync(10);
+
+    const result = await resultPromise;
+    expect(result.status).toBe('error');
+    expect(result.error).toContain('127');
+  });
+
+  it('returns error when spawn emits an error event', async () => {
+    const resultPromise = runContainerAgent(testGroup, testInput, () => {});
+
+    await vi.advanceTimersByTimeAsync(10);
+    fakeProc.emit('error', new Error('spawn ENOENT'));
+    await vi.advanceTimersByTimeAsync(10);
+
+    const result = await resultPromise;
+    expect(result.status).toBe('error');
+    expect(result.error).toContain('spawn ENOENT');
+  });
+});
+
+describe('container-runner — timeout behavior', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    fakeProc = createFakeProcess();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('timeout after output resolves as success', async () => {
+    const onOutput = vi.fn(async () => {});
+    const resultPromise = runContainerAgent(
+      testGroup,
+      testInput,
+      () => {},
+      onOutput,
+    );
+
+    // Emit output with a result
+    emitOutputMarker(fakeProc, {
+      status: 'success',
+      result: 'Here is my response',
+      newSessionId: 'session-123',
+    });
+
+    // Let output processing settle
+    await vi.advanceTimersByTimeAsync(10);
+
+    // Fire the hard timeout (IDLE_TIMEOUT + 30s = 1830000ms)
+    await vi.advanceTimersByTimeAsync(1830000);
+
+    // Emit close event (as if container was stopped by the timeout)
+    fakeProc.emit('close', 137);
+
+    // Let the promise resolve
+    await vi.advanceTimersByTimeAsync(10);
+
+    const result = await resultPromise;
+    expect(result.status).toBe('success');
+    expect(result.newSessionId).toBe('session-123');
+    expect(onOutput).toHaveBeenCalledWith(
+      expect.objectContaining({ result: 'Here is my response' }),
+    );
+  });
+
+  it('timeout with no output resolves as error', async () => {
+    const onOutput = vi.fn(async () => {});
+    const resultPromise = runContainerAgent(
+      testGroup,
+      testInput,
+      () => {},
+      onOutput,
+    );
+
+    // No output emitted — fire the hard timeout
+    await vi.advanceTimersByTimeAsync(1830000);
+
+    // Emit close event
+    fakeProc.emit('close', 137);
+
+    await vi.advanceTimersByTimeAsync(10);
+
+    const result = await resultPromise;
+    expect(result.status).toBe('error');
+    expect(result.error).toContain('timed out');
+    expect(onOutput).not.toHaveBeenCalled();
+  });
+
+  it('normal exit after output resolves as success', async () => {
+    const onOutput = vi.fn(async () => {});
+    const resultPromise = runContainerAgent(
+      testGroup,
+      testInput,
+      () => {},
+      onOutput,
+    );
+
+    // Emit output
+    emitOutputMarker(fakeProc, {
+      status: 'success',
+      result: 'Done',
+      newSessionId: 'session-456',
+    });
+
+    await vi.advanceTimersByTimeAsync(10);
+
+    // Normal exit (no timeout)
+    fakeProc.emit('close', 0);
+
+    await vi.advanceTimersByTimeAsync(10);
+
+    const result = await resultPromise;
+    expect(result.status).toBe('success');
+    expect(result.newSessionId).toBe('session-456');
+  });
+});
+
+describe('container-runner — docker args assembly', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    fakeProc = createFakeProcess();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('spawns docker with run, --rm, and container image', async () => {
+    const { spawn } = await import('child_process');
+    const spawnMock = spawn as ReturnType<typeof vi.fn>;
+
+    const resultPromise = runContainerAgent(testGroup, testInput, () => {});
+
+    await vi.advanceTimersByTimeAsync(10);
+    fakeProc.emit('close', 0);
+    await vi.advanceTimersByTimeAsync(10);
+    await resultPromise;
+
+    expect(spawnMock).toHaveBeenCalled();
+    const [bin, args] = spawnMock.mock.calls[0] as [string, string[]];
+    expect(bin).toBe('docker');
+    expect(args).toContain('run');
+    expect(args).toContain('--rm');
+    expect(args).toContain('opengolem-agent:latest');
+  });
+
+  it('passes TZ environment variable to container', async () => {
+    const { spawn } = await import('child_process');
+    const spawnMock = spawn as ReturnType<typeof vi.fn>;
+
+    const resultPromise = runContainerAgent(testGroup, testInput, () => {});
+
+    await vi.advanceTimersByTimeAsync(10);
+    fakeProc.emit('close', 0);
+    await vi.advanceTimersByTimeAsync(10);
+    await resultPromise;
+
+    const [, args] = spawnMock.mock.calls[0] as [string, string[]];
+    const tzArgs = args
+      .map((a, i) => (args[i - 1] === '-e' ? a : null))
+      .filter(Boolean);
+    expect(tzArgs.some((a) => String(a).startsWith('TZ='))).toBe(true);
+  });
+
+  it('passes ANTHROPIC_BASE_URL to container pointing at proxy', async () => {
+    const { spawn } = await import('child_process');
+    const spawnMock = spawn as ReturnType<typeof vi.fn>;
+
+    const resultPromise = runContainerAgent(testGroup, testInput, () => {});
+
+    await vi.advanceTimersByTimeAsync(10);
+    fakeProc.emit('close', 0);
+    await vi.advanceTimersByTimeAsync(10);
+    await resultPromise;
+
+    const [, args] = spawnMock.mock.calls[0] as [string, string[]];
+    const envValues = args
+      .map((a, i) => (args[i - 1] === '-e' ? a : null))
+      .filter(Boolean) as string[];
+    expect(envValues.some((a) => a.startsWith('ANTHROPIC_BASE_URL='))).toBe(
+      true,
+    );
+  });
+
+  it('names the container with the group folder prefix', async () => {
+    const { spawn } = await import('child_process');
+    const spawnMock = spawn as ReturnType<typeof vi.fn>;
+
+    const resultPromise = runContainerAgent(testGroup, testInput, () => {});
+
+    await vi.advanceTimersByTimeAsync(10);
+    fakeProc.emit('close', 0);
+    await vi.advanceTimersByTimeAsync(10);
+    await resultPromise;
+
+    const [, args] = spawnMock.mock.calls[0] as [string, string[]];
+    const nameIndex = args.indexOf('--name');
+    expect(nameIndex).toBeGreaterThan(-1);
+    expect(args[nameIndex + 1]).toMatch(/^opengolem-test-group-/);
+  });
+});
+
+describe('container-runner — mount security validation', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    fakeProc = createFakeProcess();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('calls validateAdditionalMounts when containerConfig.additionalMounts is present', async () => {
+    const { validateAdditionalMounts } = await import('./mount-security.js');
+    const validateMock = validateAdditionalMounts as ReturnType<typeof vi.fn>;
+    validateMock.mockReturnValue([]);
+
+    const groupWithMounts: RegisteredGroup = {
+      ...testGroup,
+      containerConfig: {
+        additionalMounts: [
+          {
+            hostPath: '/data/docs',
+            containerPath: '/workspace/docs',
+            readonly: true,
+          },
+        ],
+      },
+    };
+
+    const resultPromise = runContainerAgent(
+      groupWithMounts,
+      testInput,
+      () => {},
+    );
+
+    await vi.advanceTimersByTimeAsync(10);
+    fakeProc.emit('close', 0);
+    await vi.advanceTimersByTimeAsync(10);
+    await resultPromise;
+
+    expect(validateMock).toHaveBeenCalledWith(
+      groupWithMounts.containerConfig!.additionalMounts,
+      groupWithMounts.name,
+      testInput.isMain,
+    );
+  });
+
+  it('does not call validateAdditionalMounts when no extra mounts are configured', async () => {
+    const { validateAdditionalMounts } = await import('./mount-security.js');
+    const validateMock = validateAdditionalMounts as ReturnType<typeof vi.fn>;
+    validateMock.mockClear();
+
+    const resultPromise = runContainerAgent(testGroup, testInput, () => {});
+
+    await vi.advanceTimersByTimeAsync(10);
+    fakeProc.emit('close', 0);
+    await vi.advanceTimersByTimeAsync(10);
+    await resultPromise;
+
+    expect(validateMock).not.toHaveBeenCalled();
+  });
+});
+
+// --- M35 Sentinel protocol validation tests (preserved verbatim) ---
 
 describe('Sentinel protocol validation — M35', () => {
   beforeEach(() => {
@@ -188,7 +582,6 @@ describe('Sentinel protocol validation — M35', () => {
     const result = await resultPromise;
     // legacyResolve: last non-empty line is not valid JSON → success with raw text
     // OR no output at all → error. Either way the process must not crash.
-    // The exact status depends on whether legacyResolve treats plain text as success.
     // Confirm: legacyResolve returns { status: 'success', result: lastLine } for plain text.
     expect(result.status).toBe('success');
     expect(result.result).toBe('some agent log line without any markers');
@@ -359,103 +752,5 @@ describe('Sentinel protocol validation — M35', () => {
     const result = await resultPromise;
     expect(result.status).toBe('success');
     expect(result.newSessionId).toBe('sess-abc');
-  });
-});
-
-describe('container-runner timeout behavior', () => {
-  beforeEach(() => {
-    vi.useFakeTimers();
-    fakeProc = createFakeProcess();
-  });
-
-  afterEach(() => {
-    vi.useRealTimers();
-  });
-
-  it('timeout after output resolves as success', async () => {
-    const onOutput = vi.fn(async () => {});
-    const resultPromise = runContainerAgent(
-      testGroup,
-      testInput,
-      () => {},
-      onOutput,
-    );
-
-    // Emit output with a result
-    emitOutputMarker(fakeProc, {
-      status: 'success',
-      result: 'Here is my response',
-      newSessionId: 'session-123',
-    });
-
-    // Let output processing settle
-    await vi.advanceTimersByTimeAsync(10);
-
-    // Fire the hard timeout (IDLE_TIMEOUT + 30s = 1830000ms)
-    await vi.advanceTimersByTimeAsync(1830000);
-
-    // Emit close event (as if container was stopped by the timeout)
-    fakeProc.emit('close', 137);
-
-    // Let the promise resolve
-    await vi.advanceTimersByTimeAsync(10);
-
-    const result = await resultPromise;
-    expect(result.status).toBe('success');
-    expect(result.newSessionId).toBe('session-123');
-    expect(onOutput).toHaveBeenCalledWith(
-      expect.objectContaining({ result: 'Here is my response' }),
-    );
-  });
-
-  it('timeout with no output resolves as error', async () => {
-    const onOutput = vi.fn(async () => {});
-    const resultPromise = runContainerAgent(
-      testGroup,
-      testInput,
-      () => {},
-      onOutput,
-    );
-
-    // No output emitted — fire the hard timeout
-    await vi.advanceTimersByTimeAsync(1830000);
-
-    // Emit close event
-    fakeProc.emit('close', 137);
-
-    await vi.advanceTimersByTimeAsync(10);
-
-    const result = await resultPromise;
-    expect(result.status).toBe('error');
-    expect(result.error).toContain('timed out');
-    expect(onOutput).not.toHaveBeenCalled();
-  });
-
-  it('normal exit after output resolves as success', async () => {
-    const onOutput = vi.fn(async () => {});
-    const resultPromise = runContainerAgent(
-      testGroup,
-      testInput,
-      () => {},
-      onOutput,
-    );
-
-    // Emit output
-    emitOutputMarker(fakeProc, {
-      status: 'success',
-      result: 'Done',
-      newSessionId: 'session-456',
-    });
-
-    await vi.advanceTimersByTimeAsync(10);
-
-    // Normal exit (no timeout)
-    fakeProc.emit('close', 0);
-
-    await vi.advanceTimersByTimeAsync(10);
-
-    const result = await resultPromise;
-    expect(result.status).toBe('success');
-    expect(result.newSessionId).toBe('session-456');
   });
 });

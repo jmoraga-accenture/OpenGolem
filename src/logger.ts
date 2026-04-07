@@ -79,7 +79,11 @@ function formatError(e: unknown): string {
 // ---------------------------------------------------------------------------
 // Core emit
 // ---------------------------------------------------------------------------
-function emit(level: LevelName, dataOrMsg: Record<string, unknown> | string, msg?: string): void {
+function emit(
+  level: LevelName,
+  dataOrMsg: Record<string, unknown> | string,
+  msg?: string,
+): void {
   const threshold = resolveThreshold();
   if (LEVELS[level] < threshold) return;
 

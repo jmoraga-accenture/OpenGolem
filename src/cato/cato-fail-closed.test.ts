@@ -81,8 +81,16 @@ function cleanSocket(): void {
   }
 }
 
-function makeReq(prompt = 'hello world'): CatoCheckRequest {
-  return { type: 'check_action', groupFolder: 'test-group', prompt };
+function makeReq(contentExcerpt = 'hello world'): CatoCheckRequest {
+  return {
+    checkId: 'test-check-id',
+    action: 'AGENT_PROMPT',
+    contextId: 'test-group',
+    tokenId: 'test-token',
+    payloadHash: 'abc123',
+    payloadSize: contentExcerpt.length,
+    contentExcerpt,
+  };
 }
 
 async function httpGet(
@@ -91,16 +99,13 @@ async function httpGet(
 ): Promise<{ status: number; body: string }> {
   const port = (server.address() as { port: number }).port;
   return new Promise((resolve, reject) => {
-    const req = http.get(
-      { host: '127.0.0.1', port, path: urlPath },
-      (res) => {
-        let body = '';
-        res.on('data', (chunk: Buffer) => {
-          body += chunk.toString();
-        });
-        res.on('end', () => resolve({ status: res.statusCode ?? 0, body }));
-      },
-    );
+    const req = http.get({ host: '127.0.0.1', port, path: urlPath }, (res) => {
+      let body = '';
+      res.on('data', (chunk: Buffer) => {
+        body += chunk.toString();
+      });
+      res.on('end', () => resolve({ status: res.statusCode ?? 0, body }));
+    });
     req.on('error', reject);
   });
 }
@@ -145,22 +150,19 @@ describe('M36 DoD-2 — container dispatch gated on catoCheck result', () => {
   beforeEach(() => cleanSocket());
   afterEach(() => cleanSocket());
 
-  it(
-    'catoCheck returns allow: false — the dispatch gate condition is met',
-    async () => {
-      const result = await catoCheck(makeReq('run something'));
+  it('catoCheck returns allow: false — the dispatch gate condition is met', async () => {
+    const result = await catoCheck(makeReq('run something'));
 
-      // Simulates the gate in processGroupMessages:
-      //   if (!cato.allow) { /* block — runAgent not called */ return; }
-      let containerWouldBeLaunched = false;
-      if (result.allow) {
-        containerWouldBeLaunched = true;
-      }
+    // Simulates the gate in processGroupMessages:
+    //   if (!cato.allow) { /* block — runAgent not called */ return; }
+    let containerWouldBeLaunched = false;
+    if (result.allow) {
+      containerWouldBeLaunched = true;
+    }
 
-      expect(result.allow).toBe(false);
-      expect(containerWouldBeLaunched).toBe(false);
-    },
-  );
+    expect(result.allow).toBe(false);
+    expect(containerWouldBeLaunched).toBe(false);
+  });
 });
 
 // ─── DoD 3: Messages queued (cursor not advanced) when Cato blocks ───────────
@@ -194,32 +196,27 @@ describe('M36 DoD-3 — fail-closed result is deterministic (queue precondition)
 // ─── DoD 4: When Cato restored, messages process normally ────────────────────
 
 describe('M36 DoD-4 — catoCheck passes when socket is restored', () => {
-  it(
-    'allows messages after the Cato socket becomes available again',
-    async () => {
-      // Phase 1: socket absent — must block
-      cleanSocket();
-      const blockedResult = await catoCheck(makeReq('hello'));
-      expect(blockedResult.allow).toBe(false);
+  it('allows messages after the Cato socket becomes available again', async () => {
+    // Phase 1: socket absent — must block
+    cleanSocket();
+    const blockedResult = await catoCheck(makeReq('hello'));
+    expect(blockedResult.allow).toBe(false);
 
-      // Phase 2: bring Cato inline hook online
-      const { startCatoInlineHook, stopCatoInlineHook } = await import(
-        './inline.js'
-      );
-      cleanSocket();
-      startCatoInlineHook();
-      await new Promise((r) => setTimeout(r, 50)); // wait for bind
+    // Phase 2: bring Cato inline hook online
+    const { startCatoInlineHook, stopCatoInlineHook } =
+      await import('./inline.js');
+    cleanSocket();
+    startCatoInlineHook();
+    await new Promise((r) => setTimeout(r, 50)); // wait for bind
 
-      try {
-        const restoredResult = await catoCheck(makeReq('hello'));
-        expect(restoredResult.allow).toBe(true);
-      } finally {
-        stopCatoInlineHook();
-        cleanSocket();
-      }
-    },
-    5000,
-  );
+    try {
+      const restoredResult = await catoCheck(makeReq('hello'));
+      expect(restoredResult.allow).toBe(true);
+    } finally {
+      stopCatoInlineHook();
+      cleanSocket();
+    }
+  }, 5000);
 });
 
 // ─── DoD 5: Audit trail logged on socket unavailability ──────────────────────
@@ -295,16 +292,13 @@ describe('M36 DoD-6 — health endpoint reports cato_socket absent', () => {
     expect(snapshot.cato_socket).toBe('absent');
   });
 
-  it(
-    'health response is valid JSON with all required fields',
-    async () => {
-      const { body } = await httpGet(server, '/health');
-      const snapshot = JSON.parse(body) as HealthSnapshot;
+  it('health response is valid JSON with all required fields', async () => {
+    const { body } = await httpGet(server, '/health');
+    const snapshot = JSON.parse(body) as HealthSnapshot;
 
-      expect(typeof snapshot.uptime_seconds).toBe('number');
-      expect(typeof snapshot.active_containers).toBe('number');
-      expect(['present', 'absent']).toContain(snapshot.broker_socket);
-      expect(['present', 'absent']).toContain(snapshot.cato_socket);
-    },
-  );
+    expect(typeof snapshot.uptime_seconds).toBe('number');
+    expect(typeof snapshot.active_containers).toBe('number');
+    expect(['present', 'absent']).toContain(snapshot.broker_socket);
+    expect(['present', 'absent']).toContain(snapshot.cato_socket);
+  });
 });
