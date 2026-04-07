@@ -30,7 +30,7 @@ export interface HealthDeps {
 }
 
 export interface HealthSnapshot {
-  status: 'ok';
+  status: 'ok' | 'degraded';
   uptime_seconds: number;
   active_containers: number;
   broker_socket: 'present' | 'absent';
@@ -66,10 +66,10 @@ function socketPresence(socketPath: string): 'present' | 'absent' {
 }
 
 type BlockRow = {
-  ts: number;
-  container: string;
+  occurred_at: number;
+  container_id: string | null;
   outcome: string;
-  block_rule: string | null;
+  risk_code: string | null;
 };
 
 function getRecentBlocks(limit = 10): BlockRow[] {
@@ -78,7 +78,7 @@ function getRecentBlocks(limit = 10): BlockRow[] {
     const db = new Database(AUDIT_DB_PATH, { readonly: true });
     return db
       .prepare(
-        "SELECT ts, container, outcome, block_rule FROM calls WHERE outcome != 'pass' ORDER BY ts DESC LIMIT ?",
+        "SELECT occurred_at, container_id, outcome, risk_code FROM events WHERE outcome IN ('block','soft_block') ORDER BY occurred_at DESC LIMIT ?",
       )
       .all(limit) as BlockRow[];
   } catch {
@@ -96,12 +96,17 @@ function buildSnapshot(deps: HealthDeps): HealthSnapshot {
   const daoScore = getLatestDaoScore();
   const blocks = getRecentBlocks(10);
 
+  const broker_socket = socketPresence(BROKER_SOCKET_PATH);
+  const cato_socket = socketPresence(CATO_SOCKET_PATH);
+  const status: 'ok' | 'degraded' =
+    broker_socket === 'absent' || cato_socket === 'absent' ? 'degraded' : 'ok';
+
   return {
-    status: 'ok',
+    status,
     uptime_seconds: Math.floor((Date.now() - serverStart) / 1000),
     active_containers: deps.getActiveContainerCount(),
-    broker_socket: socketPresence(BROKER_SOCKET_PATH),
-    cato_socket: socketPresence(CATO_SOCKET_PATH),
+    broker_socket,
+    cato_socket,
     dao_score: daoScore
       ? {
           security_failures_per_call: daoScore.security_failures_per_call,
@@ -110,10 +115,10 @@ function buildSnapshot(deps: HealthDeps): HealthSnapshot {
         }
       : null,
     recent_blocks: blocks.map((b) => ({
-      ts: new Date(b.ts).toISOString(),
-      container: b.container,
+      ts: new Date(b.occurred_at * 1000).toISOString(),
+      container: b.container_id ?? '',
       outcome: b.outcome,
-      block_rule: b.block_rule,
+      block_rule: b.risk_code,
     })),
   };
 }

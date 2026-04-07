@@ -94,6 +94,7 @@ import {
   stopRemoteControl,
 } from './remote-control.js';
 import { startSchedulerLoop } from './task-scheduler.js';
+import { openAuditLog, type AuditLog } from './shared/audit/index.js';
 
 export { escapeXml, formatMessages } from './router.js';
 
@@ -117,6 +118,11 @@ let registeredGroups: Record<string, RegisteredGroup> = {};
 const channels: Channel[] = [];
 const queue = new GroupQueue();
 let broker: BrokerHandle | null = null;
+let orchestratorAuditLog: AuditLog | null = null;
+
+function getOrchestratorAuditLog(): AuditLog | null {
+  return orchestratorAuditLog;
+}
 
 let messageLoopStarted = false;
 
@@ -431,6 +437,12 @@ function buildChannelOpts() {
       }
 
       storeMessage(msg);
+      getOrchestratorAuditLog()?.writeEvent({
+        event_type: 'message_received',
+        context_id: chatJid,
+        token_id: msg.sender ?? null,
+        outcome: 'info',
+      });
     },
     onChatMetadata: (
       chatJid: string,
@@ -642,6 +654,14 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
 
   await channel.setTyping?.(chatJid, false);
 
+  if (status === 'success') {
+    getOrchestratorAuditLog()?.writeEvent({
+      event_type: 'task_complete',
+      context_id: chatJid,
+      outcome: 'completed',
+    });
+  }
+
   if (status === 'error') {
     if (outputSentToUser) {
       logger.warn({ chatJid }, 'Agent error after output was sent');
@@ -785,17 +805,18 @@ async function schedulerSendMessage(jid: string, raw: string): Promise<void> {
 async function main(): Promise<void> {
   ensureContainerSystemRunning();
   initDatabase();
+  orchestratorAuditLog = openAuditLog(path.join(DATA_DIR, 'audit.db'), 'orchestrator');
   loadState();
   seedTuiGroupIfNeeded();
   seedTelegramDmGroupsIfNeeded();
 
+  broker = startBroker();
+  startCredentialProxy();
   startCatoInlineHook();
   ensureCatoGroupFolder();
   startCatoScheduledAudit();
 
   startHealthServer({ getActiveContainerCount: () => queue.getActiveCount() });
-  broker = startBroker();
-  startCredentialProxy();
   restoreRemoteControl();
 
   const shutdown = async () => {
@@ -809,6 +830,8 @@ async function main(): Promise<void> {
     broker?.close();
     broker = null;
     stopCredentialProxy();
+    orchestratorAuditLog?.close();
+    orchestratorAuditLog = null;
     process.exit(0);
   };
 

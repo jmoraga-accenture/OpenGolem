@@ -30,6 +30,7 @@ import {
 import { logger } from './logger.js';
 import { validateAdditionalMounts } from './mount-security.js';
 import type { RegisteredGroup } from './types.js';
+import { openAuditLog, type AuditLog } from './shared/audit/index.js';
 
 /** Verbatim — must match `container/agent-runner/src/index.ts` (see SENTINEL.md). */
 export const OUTPUT_START_MARKER = '---OPENGOLEM_OUTPUT_START---';
@@ -37,6 +38,17 @@ export const OUTPUT_END_MARKER = '---OPENGOLEM_OUTPUT_END---';
 
 const STALE_SESSION_RE =
   /no conversation found|ENOENT.*\.jsonl|session.*not found/i;
+
+let containerAuditLog: AuditLog | null = null;
+function getContainerAuditLog(): AuditLog | null {
+  if (!containerAuditLog) {
+    containerAuditLog = openAuditLog(
+      path.join(DATA_DIR, 'audit.db'),
+      'orchestrator',
+    );
+  }
+  return containerAuditLog;
+}
 
 const SETTINGS_JSON = `{
   "env": {
@@ -529,6 +541,12 @@ export async function runContainerAgent(
   }
 
   onProcess(proc, containerName);
+  getContainerAuditLog()?.writeEvent({
+    event_type: 'container_spawned',
+    context_id: group.name,
+    container_id: containerName,
+    outcome: 'started',
+  });
 
   const stdoutAcc = { buf: '', truncated: false };
   const stderrAcc = { buf: '', truncated: false };
