@@ -2,29 +2,35 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import fs from 'fs';
 
 // Everything that vi.mock factories reference must be hoisted
-const { TEST_DATA_DIR, TEST_STATE_FILE, TEST_STDOUT_FILE, TEST_STDERR_FILE, mockSpawn, mockChild } =
-  vi.hoisted(() => {
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const _os = require('os') as typeof import('os');
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const _path = require('path') as typeof import('path');
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const _fs = require('fs') as typeof import('fs');
+const {
+  TEST_DATA_DIR,
+  TEST_STATE_FILE,
+  TEST_STDOUT_FILE,
+  TEST_STDERR_FILE,
+  mockSpawn,
+  mockChild,
+} = vi.hoisted(() => {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const _os = require('os') as typeof import('os');
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const _path = require('path') as typeof import('path');
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const _fs = require('fs') as typeof import('fs');
 
-    const dir = _fs.mkdtempSync(_path.join(_os.tmpdir(), 'og-rc-test-'));
-    const mockStdin = { write: vi.fn(), end: vi.fn() };
-    const mockChild = { pid: 99999, stdin: mockStdin, unref: vi.fn() };
-    const mockSpawn = vi.fn(() => mockChild);
+  const dir = _fs.mkdtempSync(_path.join(_os.tmpdir(), 'og-rc-test-'));
+  const mockStdin = { write: vi.fn(), end: vi.fn() };
+  const mockChild = { pid: 99999, stdin: mockStdin, unref: vi.fn() };
+  const mockSpawn = vi.fn(() => mockChild);
 
-    return {
-      TEST_DATA_DIR: dir,
-      TEST_STATE_FILE: _path.join(dir, 'remote-control.json'),
-      TEST_STDOUT_FILE: _path.join(dir, 'remote-control.stdout'),
-      TEST_STDERR_FILE: _path.join(dir, 'remote-control.stderr'),
-      mockSpawn,
-      mockChild,
-    };
-  });
+  return {
+    TEST_DATA_DIR: dir,
+    TEST_STATE_FILE: _path.join(dir, 'remote-control.json'),
+    TEST_STDOUT_FILE: _path.join(dir, 'remote-control.stdout'),
+    TEST_STDERR_FILE: _path.join(dir, 'remote-control.stderr'),
+    mockSpawn,
+    mockChild,
+  };
+});
 
 vi.mock('./config.js', () => ({
   DATA_DIR: TEST_DATA_DIR,
@@ -166,7 +172,10 @@ describe('startRemoteControl', () => {
     restoreRemoteControl();
 
     const result = await startRemoteControl('user1', 'chat@test', '/tmp');
-    expect(result).toEqual({ ok: true, url: 'https://claude.ai/code/existing-session' });
+    expect(result).toEqual({
+      ok: true,
+      url: 'https://claude.ai/code/existing-session',
+    });
     // Should not have spawned a new process
     expect(mockSpawn).not.toHaveBeenCalled();
   });
@@ -190,7 +199,10 @@ describe('startRemoteControl', () => {
       ['remote-control', '--name', 'OpenGolem Remote'],
       expect.objectContaining({ detached: true }),
     );
-    expect(result).toEqual({ ok: true, url: 'https://claude.ai/code/new-session-url' });
+    expect(result).toEqual({
+      ok: true,
+      url: 'https://claude.ai/code/new-session-url',
+    });
 
     const active = getActiveSession();
     expect(active?.url).toBe('https://claude.ai/code/new-session-url');
@@ -252,7 +264,10 @@ describe('startRemoteControl', () => {
 describe('stopRemoteControl', () => {
   it('returns error when no session is active', () => {
     const result = stopRemoteControl();
-    expect(result).toEqual({ ok: false, error: 'No active Remote Control session' });
+    expect(result).toEqual({
+      ok: false,
+      error: 'No active Remote Control session',
+    });
   });
 
   it('sends SIGTERM and clears state when session is active', () => {

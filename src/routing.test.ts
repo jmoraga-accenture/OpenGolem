@@ -83,12 +83,18 @@ describe('formatMessages', () => {
   });
 
   it('escapes special chars in sender_name', () => {
-    const result = formatMessages([makeMessage({ sender_name: 'A & B' })], 'UTC');
+    const result = formatMessages(
+      [makeMessage({ sender_name: 'A & B' })],
+      'UTC',
+    );
     expect(result).toContain('sender="A &amp; B"');
   });
 
   it('escapes message content', () => {
-    const result = formatMessages([makeMessage({ content: '<script>' })], 'UTC');
+    const result = formatMessages(
+      [makeMessage({ content: '<script>' })],
+      'UTC',
+    );
     expect(result).toContain('&lt;script&gt;');
   });
 

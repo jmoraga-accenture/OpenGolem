@@ -36,7 +36,6 @@ vi.mock('fs', () => ({
 
 import { GroupQueue } from './group-queue.js';
 
-
 describe('GroupQueue', () => {
   let queue: GroupQueue;
 

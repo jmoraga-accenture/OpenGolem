@@ -156,7 +156,11 @@ describe('storeMessage', () => {
     storeMessage(msg);
     storeMessage({ ...msg, content: 'updated' });
     // Should not throw on duplicate
-    const msgs = getMessagesSince('chat@test', '1970-01-01T00:00:00.000Z', 'Alef');
+    const msgs = getMessagesSince(
+      'chat@test',
+      '1970-01-01T00:00:00.000Z',
+      'Alef',
+    );
     expect(msgs).toHaveLength(1);
     expect(msgs[0].content).toBe('updated');
   });
@@ -170,7 +174,11 @@ describe('storeMessage', () => {
       reply_to_sender_name: 'Bob',
     });
     storeMessage(msg);
-    const msgs = getMessagesSince('chat@test', '1970-01-01T00:00:00.000Z', 'Alef');
+    const msgs = getMessagesSince(
+      'chat@test',
+      '1970-01-01T00:00:00.000Z',
+      'Alef',
+    );
     expect(msgs[0].reply_to_message_id).toBe('orig-id');
     expect(msgs[0].reply_to_sender_name).toBe('Bob');
   });
@@ -188,8 +196,12 @@ describe('getMessagesSince', () => {
   it('returns messages after the given timestamp', () => {
     const early = '2025-01-01T00:00:00.000Z';
     const late = '2025-06-01T00:00:00.000Z';
-    storeMessage(makeMessage({ id: 'm1', timestamp: '2025-03-01T00:00:00.000Z' }));
-    storeMessage(makeMessage({ id: 'm2', timestamp: '2025-07-01T00:00:00.000Z' }));
+    storeMessage(
+      makeMessage({ id: 'm1', timestamp: '2025-03-01T00:00:00.000Z' }),
+    );
+    storeMessage(
+      makeMessage({ id: 'm2', timestamp: '2025-07-01T00:00:00.000Z' }),
+    );
 
     const results = getMessagesSince('chat@test', early, 'Alef');
     expect(results.length).toBe(2);
@@ -200,28 +212,60 @@ describe('getMessagesSince', () => {
   });
 
   it('excludes bot messages', () => {
-    storeMessage(makeMessage({ id: 'human', timestamp: '2025-03-01T00:00:00.000Z', is_bot_message: false }));
-    storeMessage(makeMessage({ id: 'bot', timestamp: '2025-03-02T00:00:00.000Z', is_bot_message: true }));
+    storeMessage(
+      makeMessage({
+        id: 'human',
+        timestamp: '2025-03-01T00:00:00.000Z',
+        is_bot_message: false,
+      }),
+    );
+    storeMessage(
+      makeMessage({
+        id: 'bot',
+        timestamp: '2025-03-02T00:00:00.000Z',
+        is_bot_message: true,
+      }),
+    );
 
-    const results = getMessagesSince('chat@test', '1970-01-01T00:00:00.000Z', 'Alef');
+    const results = getMessagesSince(
+      'chat@test',
+      '1970-01-01T00:00:00.000Z',
+      'Alef',
+    );
     expect(results.map((m) => m.id)).not.toContain('bot');
     expect(results.map((m) => m.id)).toContain('human');
   });
 
   it('excludes messages matching botPrefix pattern', () => {
     storeMessage(
-      makeMessage({ id: 'prefixed', timestamp: '2025-03-01T00:00:00.000Z', content: 'Alef: some reply' }),
+      makeMessage({
+        id: 'prefixed',
+        timestamp: '2025-03-01T00:00:00.000Z',
+        content: 'Alef: some reply',
+      }),
     );
     storeMessage(
-      makeMessage({ id: 'normal', timestamp: '2025-03-02T00:00:00.000Z', content: 'regular text' }),
+      makeMessage({
+        id: 'normal',
+        timestamp: '2025-03-02T00:00:00.000Z',
+        content: 'regular text',
+      }),
     );
 
-    const results = getMessagesSince('chat@test', '1970-01-01T00:00:00.000Z', 'Alef');
+    const results = getMessagesSince(
+      'chat@test',
+      '1970-01-01T00:00:00.000Z',
+      'Alef',
+    );
     expect(results.map((m) => m.id)).not.toContain('prefixed');
   });
 
   it('returns empty array when no messages exist for chat', () => {
-    const results = getMessagesSince('empty-chat@test', '1970-01-01T00:00:00.000Z', 'Alef');
+    const results = getMessagesSince(
+      'empty-chat@test',
+      '1970-01-01T00:00:00.000Z',
+      'Alef',
+    );
     expect(results).toEqual([]);
   });
 });
@@ -242,8 +286,20 @@ describe('getNewMessages', () => {
   });
 
   it('returns messages across multiple chats after lastTimestamp', () => {
-    storeMessage(makeMessage({ id: 'a1', chat_jid: 'chat1@test', timestamp: '2025-03-01T00:00:00.000Z' }));
-    storeMessage(makeMessage({ id: 'a2', chat_jid: 'chat2@test', timestamp: '2025-04-01T00:00:00.000Z' }));
+    storeMessage(
+      makeMessage({
+        id: 'a1',
+        chat_jid: 'chat1@test',
+        timestamp: '2025-03-01T00:00:00.000Z',
+      }),
+    );
+    storeMessage(
+      makeMessage({
+        id: 'a2',
+        chat_jid: 'chat2@test',
+        timestamp: '2025-04-01T00:00:00.000Z',
+      }),
+    );
 
     const result = getNewMessages(
       ['chat1@test', 'chat2@test'],
@@ -303,7 +359,10 @@ describe('setRegisteredGroup / getAllRegisteredGroups', () => {
   });
 
   it('stores requiresTrigger=false correctly', () => {
-    setRegisteredGroup('jid-no-trigger@test', makeGroup({ requiresTrigger: false }));
+    setRegisteredGroup(
+      'jid-no-trigger@test',
+      makeGroup({ requiresTrigger: false }),
+    );
     const all = getAllRegisteredGroups();
     expect(all['jid-no-trigger@test'].requiresTrigger).toBe(false);
   });

@@ -199,7 +199,9 @@ describe('schedule_task schedule types', () => {
     expect(tasks).toHaveLength(1);
     expect(tasks[0].schedule_type).toBe('cron');
     expect(tasks[0].next_run).toBeTruthy();
-    expect(new Date(tasks[0].next_run!).getTime()).toBeGreaterThan(Date.now() - 60_000);
+    expect(new Date(tasks[0].next_run!).getTime()).toBeGreaterThan(
+      Date.now() - 60_000,
+    );
   });
 
   it('rejects an invalid cron expression', async () => {
@@ -447,7 +449,7 @@ describe('pause_task authorization', () => {
     expect(getTaskById('a-task')!.status).toBe('paused');
   });
 
-  it('non-main group cannot pause another group\'s task', async () => {
+  it("non-main group cannot pause another group's task", async () => {
     await processTaskIpc(
       { type: 'pause_task', taskId: 'main-task' },
       'group-a',
@@ -506,7 +508,7 @@ describe('resume_task authorization', () => {
     expect(getTaskById('paused-task')!.status).toBe('active');
   });
 
-  it('non-main group cannot resume another group\'s task', async () => {
+  it("non-main group cannot resume another group's task", async () => {
     await processTaskIpc(
       { type: 'resume_task', taskId: 'other-paused' },
       'group-a',
@@ -564,7 +566,7 @@ describe('cancel_task authorization', () => {
     expect(getTaskById('own-cancel')).toBeUndefined();
   });
 
-  it('non-main group cannot cancel another group\'s task', async () => {
+  it("non-main group cannot cancel another group's task", async () => {
     createTask({
       id: 'foreign-task',
       group_folder: 'main-group',
@@ -671,23 +673,13 @@ describe('register_group authorization', () => {
 describe('refresh_groups authorization', () => {
   it('non-main group is silently blocked', async () => {
     // Should not throw, syncGroups should not be called
-    await processTaskIpc(
-      { type: 'refresh_groups' },
-      'group-a',
-      false,
-      deps,
-    );
+    await processTaskIpc({ type: 'refresh_groups' }, 'group-a', false, deps);
 
     expect(deps.syncGroups).not.toHaveBeenCalled();
   });
 
   it('main group triggers syncGroups', async () => {
-    await processTaskIpc(
-      { type: 'refresh_groups' },
-      'main-group',
-      true,
-      deps,
-    );
+    await processTaskIpc({ type: 'refresh_groups' }, 'main-group', true, deps);
 
     expect(deps.syncGroups).toHaveBeenCalledWith(true);
   });
@@ -718,7 +710,7 @@ describe('IPC message authorization rule', () => {
     expect(isAuthorized('group-a', false, 'a@g.us', groups)).toBe(true);
   });
 
-  it('non-main group is rejected for another group\'s JID', () => {
+  it("non-main group is rejected for another group's JID", () => {
     expect(isAuthorized('group-a', false, 'b@g.us', groups)).toBe(false);
     expect(isAuthorized('group-a', false, 'main@g.us', groups)).toBe(false);
   });
